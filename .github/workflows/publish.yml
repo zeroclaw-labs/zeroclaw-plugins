@@ -10,7 +10,7 @@ on:
     paths:
       - "plugins/**"
       - "wit/**"
-      - "tools/build-registry.py"
+      - "tools/build-registry.sh"
 
 permissions:
   contents: write
@@ -51,7 +51,7 @@ jobs:
 
       - name: Package + generate registry.json
         run: |
-          python3 tools/build-registry.py \
+          bash tools/build-registry.sh \
             --staged staged \
             --release-base "$RELEASE_BASE" \
             --out dist

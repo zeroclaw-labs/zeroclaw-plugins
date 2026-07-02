@@ -23,7 +23,7 @@ plugins/<name>/        # published plugins — one wit-bindgen component per dir
   README.md
 wit/v0/                # vendored ZeroClaw plugin WIT contract (the ABI plugins build against)
 registry.json          # GENERATED index — published by CI, do not hand-edit
-tools/build-registry.py
+tools/build-registry.sh
 .github/workflows/publish.yml
 ```
 
