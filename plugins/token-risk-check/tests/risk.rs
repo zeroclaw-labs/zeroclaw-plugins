@@ -1,6 +1,7 @@
 use token_risk_check::risk::{
-    assess, parse_execute_args, serialize_report, unknown_report, validate_mint, validate_rpc_url,
-    Evidence, Reason, RiskError, RiskReport, Slots, Verdict,
+    assess, owner_accounts_request_body, parse_execute_args, serialize_report, unknown_report,
+    validate_mint, validate_rpc_url, Evidence, Reason, RiskError, RiskReport, Slots, Verdict,
+    OWNER_ACCOUNTS_REQUEST_ID,
 };
 use token_risk_check::{
     bounded_response_body, parameters_schema, rpc_request_bodies, Deadline, HttpTimeouts,
@@ -48,7 +49,7 @@ fn validates_mint_and_rpc_endpoint() {
 #[test]
 fn bounded_forward_slot_skew_never_reports_green() {
     let largest = include_str!("fixtures/dispersed-largest.json")
-        .replace("\"slot\": 347119291", "\"slot\": 347119293");
+        .replace("\"slot\": 250000000", "\"slot\": 250000002");
     let report = assess(
         SAFE_MINT,
         include_str!("fixtures/legacy-safe-account.json"),
@@ -62,15 +63,15 @@ fn bounded_forward_slot_skew_never_reports_green() {
         .limitations
         .iter()
         .any(|limitation| limitation == "EVIDENCE_SLOT_SKEW"));
-    assert_eq!(report.slots.account, 347119291);
-    assert_eq!(report.slots.largest_accounts, 347119293);
+    assert_eq!(report.slots.account, 250000000);
+    assert_eq!(report.slots.largest_accounts, 250000002);
 }
 
 #[test]
 fn rejects_backward_or_excessive_slot_skew() {
-    for slot in [347119290_u64, 347119324_u64] {
+    for slot in [249999999_u64, 250000033_u64] {
         let largest = include_str!("fixtures/dispersed-largest.json")
-            .replace("\"slot\": 347119291", &format!("\"slot\": {slot}"));
+            .replace("\"slot\": 250000000", &format!("\"slot\": {slot}"));
         assert!(matches!(
             assess(
                 SAFE_MINT,
@@ -122,6 +123,79 @@ fn rpc_request_bodies_use_only_validated_mint_and_fixed_methods() {
         })
     );
     assert!(rpc_request_bodies("not-a-mint").is_err());
+}
+
+#[test]
+fn owner_request_binds_addresses_and_slot() {
+    let body = owner_accounts_request_body(include_str!("fixtures/dispersed-largest.json"))
+        .expect("owner request");
+    let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+
+    assert_eq!(json["id"], OWNER_ACCOUNTS_REQUEST_ID);
+    assert_eq!(json["method"], "getMultipleAccounts");
+    assert_eq!(
+        json["params"][0],
+        serde_json::json!([
+            "11111111111111111111111111111111",
+            "So11111111111111111111111111111111111111112",
+            "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
+            "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
+            "Stake11111111111111111111111111111111111111",
+        ])
+    );
+    assert_eq!(json["params"][1]["encoding"], "jsonParsed");
+    assert_eq!(json["params"][1]["minContextSlot"], 250000000);
+}
+
+#[test]
+fn owner_request_rejects_duplicate_addresses() {
+    let largest = include_str!("fixtures/dispersed-largest.json").replace(
+        "So11111111111111111111111111111111111111112",
+        "11111111111111111111111111111111",
+    );
+
+    assert_eq!(
+        owner_accounts_request_body(&largest),
+        Err(RiskError::InvalidLargestAccount)
+    );
+}
+
+#[test]
+fn owner_request_rejects_invalid_addresses() {
+    let largest = include_str!("fixtures/dispersed-largest.json")
+        .replace("11111111111111111111111111111111", "not-a-public-key");
+
+    assert_eq!(
+        owner_accounts_request_body(&largest),
+        Err(RiskError::InvalidMint)
+    );
+}
+
+#[test]
+fn owner_request_rejects_more_than_twenty_addresses() {
+    let mut largest: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/dispersed-largest.json")).unwrap();
+    let values = largest["result"]["value"].as_array_mut().unwrap();
+    let mut account = values[0].clone();
+    for value in 1_u8..=16 {
+        account["address"] = serde_json::Value::String(bs58::encode([value; 32]).into_string());
+        values.push(account.clone());
+    }
+
+    assert_eq!(
+        owner_accounts_request_body(&largest.to_string()),
+        Err(RiskError::InvalidLargestAccount)
+    );
+}
+
+#[test]
+fn owner_request_rejects_response_id_mismatch() {
+    let largest = include_str!("fixtures/dispersed-largest.json").replace("\"id\": 2", "\"id\": 1");
+
+    assert_eq!(
+        owner_accounts_request_body(&largest),
+        Err(RiskError::ResponseIdMismatch)
+    );
 }
 
 #[test]
@@ -431,7 +505,7 @@ fn rejects_positive_supply_with_zero_largest_account_amount() {
     let zero_largest = r#"{
   "jsonrpc": "2.0",
   "result": {
-    "context": { "slot": 347119291 },
+    "context": { "slot": 250000000 },
     "value": [{ "amount": "0" }]
   },
   "id": 2
@@ -658,11 +732,11 @@ fn never_reports_green_when_required_evidence_is_invalid_or_missing() {
         "11111111111111111111111111111111",
     );
     let missing_slot = include_str!("fixtures/legacy-safe-account.json")
-        .replace("\"context\": { \"slot\": 347119291 },\n    ", "");
+        .replace("\"context\": { \"slot\": 250000000 },\n    ", "");
     let null_account = r#"{
   "jsonrpc": "2.0",
   "result": {
-    "context": { "slot": 347119291 },
+    "context": { "slot": 250000000 },
     "value": null
   },
   "id": 1

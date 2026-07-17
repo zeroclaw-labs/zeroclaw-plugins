@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::fmt;
 
 use serde::de::{DeserializeOwned, IgnoredAny};
@@ -15,6 +16,7 @@ const MAX_SERIALIZED_REPORT_BYTES: usize = 8 * 1024;
 
 pub const ACCOUNT_REQUEST_ID: u64 = 1;
 pub const LARGEST_ACCOUNTS_REQUEST_ID: u64 = 2;
+pub const OWNER_ACCOUNTS_REQUEST_ID: u64 = 3;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RiskError {
@@ -91,6 +93,34 @@ pub fn validate_mint(mint: &str) -> Result<(), RiskError> {
         return Err(RiskError::InvalidMint);
     }
     Ok(())
+}
+
+pub fn owner_accounts_request_body(largest_json: &str) -> Result<String, RiskError> {
+    let largest: LargestResult = decode_rpc(largest_json, LARGEST_ACCOUNTS_REQUEST_ID)?;
+    if !(1..=20).contains(&largest.value.len()) {
+        return Err(RiskError::InvalidLargestAccount);
+    }
+
+    let mut seen = HashSet::with_capacity(largest.value.len());
+    let mut addresses = Vec::with_capacity(largest.value.len());
+    for account in largest.value {
+        validate_mint(&account.address)?;
+        if !seen.insert(account.address.clone()) {
+            return Err(RiskError::InvalidLargestAccount);
+        }
+        addresses.push(account.address);
+    }
+
+    serde_json::to_string(&serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": OWNER_ACCOUNTS_REQUEST_ID,
+        "method": "getMultipleAccounts",
+        "params": [addresses, {
+            "encoding": "jsonParsed",
+            "minContextSlot": largest.context.slot,
+        }],
+    }))
+    .map_err(|_| RiskError::MalformedRpcResponse)
 }
 
 pub fn validate_rpc_url(raw: &str) -> Result<String, RiskError> {
@@ -604,6 +634,7 @@ impl TokenExtension {
 
 #[derive(Deserialize)]
 struct LargestAccount {
+    address: String,
     amount: String,
 }
 

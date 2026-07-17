@@ -1,5 +1,7 @@
 pub mod risk;
 
+pub use risk::{owner_accounts_request_body, OWNER_ACCOUNTS_REQUEST_ID};
+
 use risk::{validate_mint, ACCOUNT_REQUEST_ID, LARGEST_ACCOUNTS_REQUEST_ID};
 
 const MAX_RESPONSE_BODY_BYTES: usize = 1024 * 1024;

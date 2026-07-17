@@ -1,12 +1,12 @@
 {
   "jsonrpc": "2.0",
   "result": {
-    "context": { "slot": 347119291 },
+    "context": { "slot": 250000000 },
     "value": [
-      { "amount": "500000" },
-      { "amount": "250000" },
-      { "amount": "150000" },
-      { "amount": "100000" }
+      { "address": "11111111111111111111111111111111", "amount": "500000" },
+      { "address": "So11111111111111111111111111111111111111112", "amount": "250000" },
+      { "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA", "amount": "150000" },
+      { "address": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb", "amount": "100000" }
     ]
   },
   "id": 2
