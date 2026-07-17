@@ -44,91 +44,90 @@ fn price_v3_empty() {
     assert_eq!(shape_price_response(&raw), "No prices found.");
 }
 
-// ── Order V2 tests ──
+// ── Quote V1 tests ──
 
 #[test]
-fn order_v2_shaping_with_tx() {
+fn quote_v1_shaping() {
     let raw = serde_json::json!({
-        "requestId": "req_abc123",
+        "inAmount": "100000000",
         "outAmount": "14285714300",
-        "router": "jupiterz",
-        "mode": "ultra",
-        "feeBps": 30,
-        "feeMint": "So11111111111111111111111111111111111111112",
-        "transaction": "base64txdatahere"
+        "priceImpactPct": 0.001,
+        "swapMode": "ExactIn"
     });
-    let out = shape_order_response(&raw);
-    assert!(out.contains("14285714300"));
-    assert!(out.contains("jupiterz"));
-    assert!(out.contains("ready to sign"));
-}
-
-#[test]
-fn order_v2_shaping_quote_only() {
-    let raw = serde_json::json!({
-        "requestId": "req_xyz",
-        "outAmount": "50000",
-        "router": "metis",
-        "mode": "manual",
-        "feeBps": 0,
-        "transaction": ""
-    });
-    let out = shape_order_response(&raw);
-    assert!(out.contains("quote-only"));
-    assert!(out.contains("metis"));
-}
-
-#[test]
-fn order_v2_extract_transaction() {
-    let raw = serde_json::json!({
-        "transaction": "aGVsbG8gd29ybGQ=",
-        "requestId": "req_1"
-    });
-    assert_eq!(extract_order_transaction(&raw).unwrap(), "aGVsbG8gd29ybGQ=");
-}
-
-#[test]
-fn order_v2_extract_transaction_error_code() {
-    let raw = serde_json::json!({
-        "transaction": null,
-        "errorCode": 42,
-        "errorMessage": "Insufficient liquidity"
-    });
-    let err = extract_order_transaction(&raw).unwrap_err();
-    assert!(err.contains("42"));
-    assert!(err.contains("Insufficient liquidity"));
-}
-
-#[test]
-fn order_v2_extract_request_id() {
-    let raw = serde_json::json!({ "requestId": "req_abc" });
-    assert_eq!(extract_request_id(&raw).unwrap(), "req_abc");
-}
-
-// ── Execute V2 tests ──
-
-#[test]
-fn execute_v2_success_shaping() {
-    let raw = serde_json::json!({
-        "status": "Success",
-        "signature": "5Kt8...abc",
-        "totalInputAmount": "100000000",
-        "totalOutputAmount": "14285714300"
-    });
-    let out = shape_execute_response(&raw);
-    assert!(out.contains("Swap executed"));
+    let out = shape_quote_response(&raw);
     assert!(out.contains("100000000"));
+    assert!(out.contains("14285714300"));
+    assert!(out.contains("0.001"));
+    assert!(out.contains("ExactIn"));
+}
+
+// ── Swap V1 tests ──
+
+#[test]
+fn swap_body_structure() {
+    let quote = serde_json::json!({ "inAmount": "100000", "outAmount": "50000" });
+    let cfg = SwapConfig::from_section(&default_config());
+    let body = build_swap_body(&cfg, &quote, "my_wallet");
+    assert_eq!(body["quoteResponse"]["inAmount"], "100000");
+    assert_eq!(body["userPublicKey"], "my_wallet");
+    assert_eq!(body["wrapAndUnwrapSol"], true);
+    assert_eq!(body["asLegacyTransaction"], true);
 }
 
 #[test]
-fn execute_v2_failed_shaping() {
+fn extract_swap_transaction_success() {
     let raw = serde_json::json!({
-        "status": "Failed",
-        "signature": "",
-        "error": "Slippage exceeded"
+        "swapTransaction": "aGVsbG8gd29ybGQ="
     });
-    let out = shape_execute_response(&raw);
-    assert!(out.contains("failed"));
+    assert_eq!(extract_swap_transaction(&raw).unwrap(), "aGVsbG8gd29ybGQ=");
+}
+
+#[test]
+fn extract_swap_transaction_null_fails() {
+    let raw = serde_json::json!({
+        "swapTransaction": null,
+        "error": "insufficient liquidity"
+    });
+    assert!(extract_swap_transaction(&raw).is_err());
+}
+
+// ── Wire format tests ──
+
+#[test]
+fn extract_message_from_legacy_tx() {
+    // Legacy tx: [0x00 prefix][0x01 num_sigs][64 zero bytes][message bytes...]
+    let mut tx = vec![0x00, 0x01]; // prefix + compact_u32(1)
+    tx.extend_from_slice(&[0u8; 64]); // zero signature
+    tx.extend_from_slice(b"HELLO_MESSAGE"); // message
+    let msg = extract_message_from_tx(&tx).unwrap();
+    assert_eq!(msg, b"HELLO_MESSAGE");
+}
+
+#[test]
+fn extract_message_rejects_v0_tx() {
+    let tx = vec![0x01, 0x01, 0x00]; // V0 prefix
+    let err = extract_message_from_tx(&tx).unwrap_err();
+    assert!(err.contains("address lookup tables"));
+}
+
+#[test]
+fn assemble_signed_tx_inserts_sig() {
+    let mut tx = vec![0x00, 0x01]; // legacy prefix + num_sigs
+    tx.extend_from_slice(&[0u8; 64]); // zero sig
+    tx.extend_from_slice(b"MSG");
+    // Use a valid 64-byte base58 signature (just 64 'a' bytes in base58)
+    let sig_bytes = [0xAAu8; 64];
+    let sig_b58 = bs58::encode(sig_bytes).into_string();
+    let signed = assemble_signed_tx(&tx, &sig_b58).unwrap();
+    assert_eq!(&signed[2..66], &sig_bytes[..]);
+    assert_eq!(&signed[66..], b"MSG");
+}
+
+#[test]
+fn base64_roundtrip() {
+    let data = b"hello world";
+    let encoded = encode_base64(data);
+    assert_eq!(decode_base64(&encoded).unwrap(), data);
 }
 
 // ── URL builder tests ──
@@ -141,38 +140,22 @@ fn price_url_uses_v3() {
 }
 
 #[test]
-fn order_url_uses_v2() {
+fn quote_url_uses_v1() {
     let cfg = SwapConfig::from_section(&default_config());
-    let url = build_order_url(&cfg, SOL_MINT, USDC_MINT, 100000000, 50, "wallet123");
-    assert!(url.contains("swap/v2/order"));
+    let url = build_quote_url(&cfg, SOL_MINT, USDC_MINT, 100000000, 50);
+    assert!(url.contains("/quote"));
     assert!(url.contains("inputMint=So1111"));
     assert!(url.contains("outputMint=EPjFWdd"));
     assert!(url.contains("amount=100000000"));
     assert!(url.contains("slippageBps=50"));
-    assert!(url.contains("taker=wallet123"));
+    assert!(url.contains("asLegacyTransaction=true"));
 }
 
 #[test]
-fn order_url_clamps_slippage_to_config_max() {
+fn quote_url_clamps_slippage_to_config_max() {
     let cfg = SwapConfig::from_section(&config_with(&[("max_slippage_bps", "30")]));
-    let url = build_order_url(&cfg, SOL_MINT, USDC_MINT, 1000000, 500, "");
+    let url = build_quote_url(&cfg, SOL_MINT, USDC_MINT, 1000000, 500);
     assert!(url.contains("slippageBps=30"));
-}
-
-#[test]
-fn order_url_no_taker_when_empty() {
-    let cfg = SwapConfig::from_section(&default_config());
-    let url = build_order_url(&cfg, SOL_MINT, USDC_MINT, 100000000, 50, "");
-    assert!(!url.contains("taker="));
-}
-
-// ── Execute body tests ──
-
-#[test]
-fn execute_body_structure() {
-    let body = build_execute_body("signed_tx", "req_123");
-    assert_eq!(body["signedTransaction"], "signed_tx");
-    assert_eq!(body["requestId"], "req_123");
 }
 
 // ── Mint allowlist tests ──
@@ -201,14 +184,24 @@ fn allowlist_allows_both_mints() {
 // ── Config defaults ──
 
 #[test]
-fn config_defaults_to_v2_apis() {
+fn config_defaults_to_v1_apis() {
     let cfg = SwapConfig::from_section(&default_config());
-    assert_eq!(cfg.swap_api, "https://api.jup.ag/swap/v2");
+    assert_eq!(cfg.swap_api, "https://public.jupiterapi.com");
     assert_eq!(cfg.price_api, "https://api.jup.ag/price/v3");
+    assert_eq!(cfg.outlayer_api, "https://api.outlayer.fastnear.com");
 }
 
 #[test]
 fn config_custom_swap_api() {
     let cfg = SwapConfig::from_section(&config_with(&[("swap_api", "https://my-proxy.com")]));
     assert_eq!(cfg.swap_api, "https://my-proxy.com");
+}
+
+#[test]
+fn config_custom_solana_rpc() {
+    let cfg = SwapConfig::from_section(&config_with(&[(
+        "solana_rpc",
+        "https://my-rpc.com",
+    )]));
+    assert_eq!(cfg.solana_rpc, "https://my-rpc.com");
 }

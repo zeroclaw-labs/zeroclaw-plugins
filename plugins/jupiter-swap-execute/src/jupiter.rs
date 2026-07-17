@@ -1,14 +1,21 @@
 //! Pure Jupiter swap core. No wit-bindgen or wasm dependency so it compiles
 //! and tests on the host with `cargo test`.
 //!
-//! Jupiter Swap API V2: https://api.jup.ag/swap/v2
-//!   - GET /order → quote + assembled transaction (meta-aggregator)
-//!   - POST /execute → managed landing (sign + submit)
+//! Jupiter API (public.jupiterapi.com — QuickNode hosted, no CloudFront):
+//!   - GET  /quote → swap quote (V6 format)
+//!   - POST /swap  → assembled unsigned transaction
 //!
 //! Jupiter Price API V3: https://api.jup.ag/price/v3
 //!   - GET ?ids={mints} → USD prices + 24h change
 //!
-//! Keyless access: 0.5 RPS without API key. Production: x-api-key header.
+//! Keyless access: public.jupiterapi.com has no rate limits.
+//! Production: api.jup.ag with x-api-key header.
+//!
+//! IMPORTANT: Use `asLegacyTransaction: true` in swap POST body to avoid
+//! address lookup tables. OutLayer TEE signs the serialized message bytes,
+//! and V0 transactions with ALTs have a compiled-message hash mismatch that
+//! causes SignatureFailure. Legacy transactions have no ALTs so the message
+//! bytes == compiled message bytes and custody signing works correctly.
 
 use std::collections::HashMap;
 
@@ -23,16 +30,19 @@ pub const USDT_MINT: &str = "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB";
 /// Plugin config resolved from the host's jailed config section.
 #[derive(Debug, Clone)]
 pub struct SwapConfig {
-    /// Jupiter API base URL (Swap API V2).
+    /// Jupiter Swap API base URL.
+    /// Default: public.jupiterapi.com (QuickNode hosted, no CloudFront).
     pub swap_api: String,
     /// Jupiter Price API V3 URL.
     pub price_api: String,
-    /// Optional Jupiter API key for higher rate limits.
+    /// Optional Jupiter API key for api.jup.ag (higher rate limits).
     pub jupiter_api_key: String,
     /// OutLayer API base URL.
     pub outlayer_api: String,
     /// OutLayer API key (read from config, never hardcoded).
     pub outlayer_api_key: String,
+    /// Solana RPC URL for blockhash and broadcast.
+    pub solana_rpc: String,
     /// Max slippage in basis points (e.g. 50 = 0.5%).
     pub max_slippage_bps: u32,
     /// Comma-separated allowed mint addresses (empty = allow all).
@@ -49,7 +59,7 @@ impl SwapConfig {
             .get("swap_api")
             .filter(|v| !v.is_empty())
             .cloned()
-            .unwrap_or_else(|| "https://api.jup.ag/swap/v2".to_string());
+            .unwrap_or_else(|| "https://public.jupiterapi.com".to_string());
         let price_api = section
             .get("price_api")
             .filter(|v| !v.is_empty())
@@ -86,12 +96,18 @@ impl SwapConfig {
             .get("daily_spend_cap_usd")
             .and_then(|v| v.parse().ok())
             .unwrap_or(500.0);
+        let solana_rpc = section
+            .get("solana_rpc")
+            .filter(|v| !v.is_empty())
+            .cloned()
+            .unwrap_or_else(|| "https://api.mainnet-beta.solana.com".to_string());
         Self {
             swap_api,
             price_api,
             jupiter_api_key,
             outlayer_api,
             outlayer_api_key,
+            solana_rpc,
             max_slippage_bps,
             allowed_mints,
             daily_spend_cap_usd,
@@ -113,33 +129,51 @@ pub fn build_price_url(cfg: &SwapConfig, mints: &[&str]) -> String {
     format!("{}?ids={}", cfg.price_api, ids)
 }
 
-/// Build Jupiter Swap API V2 order URL (meta-aggregator).
-/// GET {swap_api}/order?inputMint=..&outputMint=..&amount=..&slippageBps=..
-pub fn build_order_url(
+/// Build Jupiter quote URL.
+/// GET {swap_api}/quote?inputMint=..&outputMint=..&amount=..&slippageBps=..&asLegacyTransaction=true
+pub fn build_quote_url(
     cfg: &SwapConfig,
     input_mint: &str,
     output_mint: &str,
     amount: u64,
     slippage_bps: u32,
-    taker: &str,
 ) -> String {
     let slippage = slippage_bps.min(cfg.max_slippage_bps);
-    let mut url = format!(
-        "{}/order?inputMint={}&outputMint={}&amount={}&slippageBps={}",
+    format!(
+        "{}/quote?inputMint={}&outputMint={}&amount={}&slippageBps={}&asLegacyTransaction=true",
         cfg.swap_api, input_mint, output_mint, amount, slippage
-    );
-    if !taker.is_empty() {
-        url.push_str(&format!("&taker={taker}"));
-    }
-    url
+    )
 }
 
-/// Build Jupiter Swap API V2 execute request body.
-/// POST {swap_api}/execute
-pub fn build_execute_body(
-    signed_transaction: &str,
-    request_id: &str,
-) -> serde_json::Value {
+/// Shape a Jupiter /quote response into a compact string for the LLM.
+pub fn shape_quote_response(raw: &serde_json::Value) -> String {
+    let in_amount = raw
+        .get("inAmount")
+        .and_then(|v| v.as_str())
+        .unwrap_or("?");
+    let out_amount = raw
+        .get("outAmount")
+        .and_then(|v| v.as_str())
+        .unwrap_or("?");
+    let price_impact = raw
+        .get("priceImpactPct")
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.0);
+    let swap_mode = raw
+        .get("swapMode")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown");
+
+    format!(
+        "Quote: {} in → {} out. Impact: {:.3}%. Mode: {}.",
+        in_amount, out_amount, price_impact, swap_mode
+    )
+}
+
+/// Build Jupiter Swap API V2 execute request body (kept for backward compat).
+/// POST {swap_api}/execute — not used in custody flow but available.
+#[allow(dead_code)]
+pub fn build_execute_body(signed_transaction: &str, request_id: &str) -> serde_json::Value {
     serde_json::json!({
         "signedTransaction": signed_transaction,
         "requestId": request_id,
@@ -164,12 +198,18 @@ pub fn build_outlayer_balance_url(cfg: &SwapConfig, mint: &str) -> String {
 /// Build OutLayer Solana sign-transaction request body.
 /// POST {outlayer_api}/wallet/v1/solana/sign-transaction
 ///
-/// OutLayer signs the tx message (base64) with its TEE-held ed25519 key.
-/// Returns a base58 signature. Caller assembles + broadcasts.
-pub fn build_outlayer_solana_sign_body(unsigned_tx_base64: &str) -> serde_json::Value {
+/// OutLayer signs the serialized **message** bytes (not full tx) with its
+/// TEE-held ed25519 key. Returns a base58 signature.
+///
+/// IMPORTANT: For V0 transactions with address lookup tables, the message
+/// bytes must be the compiled message (with ALT addresses expanded), not
+/// the raw MessageV0 bytes. The compiled message is what validators verify.
+/// To avoid this complexity, use asLegacyTransaction=true which produces
+/// legacy transactions with no ALTs.
+pub fn build_outlayer_solana_sign_body(unsigned_message_base64: &str) -> serde_json::Value {
     serde_json::json!({
         "chain": "solana",
-        "unsigned_tx": unsigned_tx_base64
+        "unsigned_tx": unsigned_message_base64
     })
 }
 
@@ -341,6 +381,151 @@ pub fn enforce_mint_allowlist(
     Ok(())
 }
 
+// ── V1 Swap helpers ─────────────────────────────────────────────────
+
+/// Build Jupiter /swap POST body.
+/// POST {swap_api}/swap
+/// Body: { quoteResponse: ..., userPublicKey: ..., wrapAndUnwrapSol: true, asLegacyTransaction: true }
+pub fn build_swap_body(
+    _cfg: &SwapConfig,
+    quote: &serde_json::Value,
+    user_public_key: &str,
+) -> serde_json::Value {
+    serde_json::json!({
+        "quoteResponse": quote,
+        "userPublicKey": user_public_key,
+        "wrapAndUnwrapSol": true,
+        "asLegacyTransaction": true,
+        "prioritizationFeeLamports": "auto"
+    })
+}
+
+/// Extract swapTransaction from Jupiter /swap response.
+pub fn extract_swap_transaction(raw: &serde_json::Value) -> Result<String, String> {
+    raw.get("swapTransaction")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+        .ok_or_else(|| {
+            let err = raw
+                .get("error")
+                .and_then(|e| e.as_str())
+                .unwrap_or("no swapTransaction in response");
+            format!("Jupiter swap failed: {err}")
+        })
+}
+
+// ── Wire format helpers ──────────────────────────────────────────────
+//
+// These handle Solana bincode transaction serialization without depending
+// on the solana-sdk (which is huge and doesn't compile to wasm32-wasip2).
+//
+// Bincode legacy tx format:
+//   [0x00 prefix][compact_u32 num_sigs][64 bytes per sig][Message bytes]
+// Unsigned: [0x00][0x01][64 zero bytes][message bytes]
+// Message starts at byte 66.
+
+/// Decode base64 to bytes.
+pub fn decode_base64(s: &str) -> Result<Vec<u8>, String> {
+    // Standard base64 (no whitespace)
+    use std::io::Read;
+    let mut buf = Vec::new();
+    let engine = base64::engine::general_purpose::STANDARD;
+    let mut decoder = base64::read::DecoderReader::new(s.as_bytes(), &engine);
+    decoder.read_to_end(&mut buf).map_err(|e| format!("base64 decode error: {e}"))?;
+    Ok(buf)
+}
+
+/// Encode bytes to standard base64.
+pub fn encode_base64(data: &[u8]) -> String {
+    use base64::Engine;
+    base64::engine::general_purpose::STANDARD.encode(data)
+}
+
+/// Extract message bytes from a bincode-encoded Solana transaction.
+///
+/// For legacy transactions: byte 0 = 0x00, bytes 1-2 = compact_u32 num_sigs (always 1),
+/// bytes 3-66 = 64 bytes of signature, bytes 67+ = Message bytes.
+///
+/// Returns the Message portion that validators verify signatures against.
+pub fn extract_message_from_tx(tx_bytes: &[u8]) -> Result<Vec<u8>, String> {
+    if tx_bytes.is_empty() {
+        return Err("empty transaction".to_string());
+    }
+
+    let prefix = tx_bytes[0];
+    match prefix {
+        // Legacy transaction: byte[0]=0x00
+        0x00 => {
+            if tx_bytes.len() < 67 {
+                return Err(format!(
+                    "legacy tx too short ({} bytes, need at least 67)",
+                    tx_bytes.len()
+                ));
+            }
+            // byte[1] = compact_u32 num_sigs. For unsigned: 0x01 (1 placeholder sig).
+            // byte[2] = 0x00 (compact_u32 for 1 is just 0x01, but in practice
+            // Jupiter returns [0x00, 0x01, ...] where 0x00=prefix, 0x01=compact_u32(1))
+            // Actually: compact_u32 for 1 = [0x01], so:
+            // byte[0] = 0x00 (legacy prefix)
+            // byte[1] = 0x01 (compact_u32: num_sigs = 1)
+            // byte[2..66] = 64 bytes of signature (zeros for unsigned)
+            // byte[66..] = Message bytes
+            Ok(tx_bytes[66..].to_vec())
+        }
+        // V0 transaction (with address lookup tables) — NOT supported for custody
+        0x01 => Err(
+            "V0 transaction (address lookup tables) is NOT supported for custody signing. \
+             Use asLegacyTransaction=true."
+                .to_string(),
+        ),
+        other => Err(format!(
+            "Unknown transaction prefix 0x{other:02x}. Expected 0x00 (legacy)."
+        )),
+    }
+}
+
+/// Assemble a signed transaction by replacing the zero signature slot with the real one.
+///
+/// Takes the original unsigned tx bytes and a base58 signature string.
+/// Returns a new byte array with the signature inserted.
+pub fn assemble_signed_tx(tx_bytes: &[u8], sig_base58: &str) -> Result<Vec<u8>, String> {
+    let mut out = tx_bytes.to_vec();
+    if out.len() < 66 {
+        return Err("tx too short to contain signature slot".to_string());
+    }
+
+    // Decode base58 signature to 64 bytes
+    let sig_bytes = bs58::decode(sig_base58)
+        .into_vec()
+        .map_err(|e| format!("invalid base58 signature: {e}"))?;
+
+    if sig_bytes.len() != 64 {
+        return Err(format!(
+            "expected 64-byte signature, got {}",
+            sig_bytes.len()
+        ));
+    }
+
+    // Replace bytes 2..66 (the 64-byte zero sig) with the real signature
+    out[2..66].copy_from_slice(&sig_bytes);
+    Ok(out)
+}
+
+/// Broadcast a signed transaction to the configured Solana RPC.
+/// Returns the RPC response (signature or error).
+pub fn broadcast_tx(cfg: &SwapConfig, signed_tx_base64: &str) -> Result<String, String> {
+    // In WASM mode, this would use wasi:http POST. For now, return a placeholder.
+    // The host or caller should handle the actual broadcast.
+    Err(format!(
+        "Broadcast not implemented in WASM (RPC: {}). Tx: {}... ({} bytes). \
+         Host must broadcast via sendTransaction with encoding=base64.",
+        cfg.solana_rpc,
+        &signed_tx_base64[..20.min(signed_tx_base64.len())],
+        signed_tx_base64.len()
+    ))
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────
 
 /// Shorten a mint address for display: "So11111111111111111111111111111111111111112" → "So1111..."
@@ -369,7 +554,7 @@ mod tests {
     #[test]
     fn empty_config_has_safe_defaults() {
         let cfg = empty_config();
-        assert_eq!(cfg.swap_api, "https://api.jup.ag/swap/v2");
+        assert_eq!(cfg.swap_api, "https://public.jupiterapi.com");
         assert_eq!(cfg.price_api, "https://api.jup.ag/price/v3");
         assert_eq!(cfg.outlayer_api, "https://api.outlayer.fastnear.com");
         assert!(cfg.jupiter_api_key.is_empty());
@@ -470,143 +655,68 @@ mod tests {
         assert_eq!(out, "No prices found.");
     }
 
-    // ── Swap V2 /order ──
+    // ── Swap /quote ──
 
     #[test]
-    fn build_order_url_uses_v2() {
+    fn build_quote_url_uses_v1() {
         let cfg = empty_config();
-        let url = build_order_url(&cfg, SOL_MINT, USDC_MINT, 100000000, 50, "");
-        assert!(url.contains("swap/v2/order"));
+        let url = build_quote_url(&cfg, SOL_MINT, USDC_MINT, 100000000, 50);
+        assert!(url.contains("/quote"));
         assert!(url.contains("inputMint=So1111"));
         assert!(url.contains("outputMint=EPjFWdd"));
         assert!(url.contains("amount=100000000"));
         assert!(url.contains("slippageBps=50"));
+        assert!(url.contains("asLegacyTransaction=true"));
     }
 
     #[test]
-    fn build_order_url_includes_taker() {
-        let cfg = empty_config();
-        let url = build_order_url(&cfg, SOL_MINT, USDC_MINT, 100000000, 50, "my_wallet_addr");
-        assert!(url.contains("taker=my_wallet_addr"));
-    }
-
-    #[test]
-    fn build_order_url_clamps_slippage() {
+    fn build_quote_url_clamps_slippage() {
         let cfg = config_with(&[("max_slippage_bps", "50")]);
-        let url = build_order_url(&cfg, SOL_MINT, USDC_MINT, 1000000, 500, "");
+        let url = build_quote_url(&cfg, SOL_MINT, USDC_MINT, 1000000, 500);
         assert!(url.contains("slippageBps=50"));
     }
 
     #[test]
-    fn shape_order_response_compact() {
+    fn build_swap_body_structure() {
+        let quote = serde_json::json!({ "inAmount": "100000", "outAmount": "50000" });
+        let body = build_swap_body(&empty_config(), &quote, "my_wallet");
+        assert_eq!(body["quoteResponse"]["inAmount"], "100000");
+        assert_eq!(body["userPublicKey"], "my_wallet");
+        assert_eq!(body["wrapAndUnwrapSol"], true);
+        assert_eq!(body["asLegacyTransaction"], true);
+    }
+
+    #[test]
+    fn shape_quote_response_compact() {
         let raw = serde_json::json!({
-            "requestId": "req_abc123",
+            "inAmount": "100000000",
             "outAmount": "14285714300",
-            "router": "jupiterz",
-            "mode": "ultra",
-            "feeBps": 30,
-            "feeMint": "So11111111111111111111111111111111111111112",
-            "transaction": "base64txdata"
+            "priceImpactPct": 0.001,
+            "swapMode": "ExactIn"
         });
-        let out = shape_order_response(&raw);
-        assert!(out.contains("14285714300"));
-        assert!(out.contains("jupiterz"));
-        assert!(out.contains("0.30"));
-        assert!(out.contains("ready to sign"));
-        assert!(out.len() < 300);
-    }
-
-    #[test]
-    fn shape_order_response_quote_only() {
-        let raw = serde_json::json!({
-            "requestId": "req_xyz",
-            "outAmount": "50000",
-            "router": "metis",
-            "mode": "manual",
-            "feeBps": 0,
-            "transaction": ""
-        });
-        let out = shape_order_response(&raw);
-        assert!(out.contains("quote-only"));
-        assert!(out.contains("metis"));
-    }
-
-    #[test]
-    fn extract_order_transaction_success() {
-        let raw = serde_json::json!({
-            "transaction": "aGVsbG8gd29ybGQ=",
-            "requestId": "req_1"
-        });
-        assert_eq!(extract_order_transaction(&raw).unwrap(), "aGVsbG8gd29ybGQ=");
-    }
-
-    #[test]
-    fn extract_order_transaction_null_fails() {
-        let raw = serde_json::json!({
-            "transaction": null,
-            "requestId": "req_2"
-        });
-        assert!(extract_order_transaction(&raw).is_err());
-    }
-
-    #[test]
-    fn extract_order_transaction_error_message() {
-        let raw = serde_json::json!({
-            "transaction": "",
-            "errorCode": 42,
-            "errorMessage": "Insufficient liquidity"
-        });
-        let err = extract_order_transaction(&raw).unwrap_err();
-        assert!(err.contains("42"));
-        assert!(err.contains("Insufficient liquidity"));
-    }
-
-    #[test]
-    fn extract_request_id_success() {
-        let raw = serde_json::json!({ "requestId": "req_abc" });
-        assert_eq!(extract_request_id(&raw).unwrap(), "req_abc");
-    }
-
-    #[test]
-    fn extract_request_id_missing_fails() {
-        let raw = serde_json::json!({ "noId": "here" });
-        assert!(extract_request_id(&raw).is_err());
-    }
-
-    // ── Swap V2 /execute ──
-
-    #[test]
-    fn build_execute_body_structure() {
-        let body = build_execute_body("signed_tx_base64", "req_123");
-        assert_eq!(body["signedTransaction"], "signed_tx_base64");
-        assert_eq!(body["requestId"], "req_123");
-    }
-
-    #[test]
-    fn shape_execute_response_success() {
-        let raw = serde_json::json!({
-            "status": "Success",
-            "signature": "5Kt8...abc",
-            "totalInputAmount": "100000000",
-            "totalOutputAmount": "14285714300"
-        });
-        let out = shape_execute_response(&raw);
-        assert!(out.contains("Swap executed"));
+        let out = shape_quote_response(&raw);
         assert!(out.contains("100000000"));
         assert!(out.contains("14285714300"));
-        assert!(out.contains("5Kt8"));
+        assert!(out.contains("0.001"));
+        assert!(out.contains("ExactIn"));
         assert!(out.len() < 300);
     }
 
     #[test]
-    fn shape_execute_response_failed() {
+    fn extract_swap_transaction_success() {
         let raw = serde_json::json!({
-            "status": "Failed",
-            "signature": "",
-            "error": "Slippage exceeded"
+            "swapTransaction": "aGVsbG8gd29ybGQ="
         });
-        let out = shape_execute_response(&raw);
-        assert!(out.contains("failed"));
+        assert_eq!(extract_swap_transaction(&raw).unwrap(), "aGVsbG8gd29ybGQ=");
+    }
+
+    #[test]
+    fn extract_swap_transaction_null_fails() {
+        let raw = serde_json::json!({
+            "swapTransaction": null,
+            "error": "insufficient liquidity"
+        });
+        assert!(extract_swap_transaction(&raw).is_err());
     }
 
     // ── OutLayer ──

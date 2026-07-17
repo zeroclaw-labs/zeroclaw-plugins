@@ -1,21 +1,23 @@
 //! ZeroClaw WIT tool plugin: `jupiter-swap-execute`.
 //!
-//! Quotes and executes Solana token swaps via Jupiter Swap API V2, with
-//! custody enforcement through OutLayer (TEE-signed, policy-gated).
+//! Quotes and executes Solana token swaps via Jupiter (public.jupiterapi.com),
+//! with custody enforcement through OutLayer (TEE-signed, policy-gated).
 //!
-//! Jupiter Swap API V2 flow:
-//!   1. GET  /swap/v2/order   → quote + assembled transaction (meta-aggregator)
-//!   2. Sign the transaction  → partial sign (taker only; JupiterZ needs MM sig)
-//!   3. POST /swap/v2/execute → Jupiter lands the tx with managed fees/slippage
-//!
-//! For T1 custody: the agent gets the unsigned tx from /order, passes it to
-//! OutLayer which signs in TEE with policy enforcement (spend caps, mint allowlist).
+//! Jupiter V1 flow:
+//!   1. GET  /quote       → swap quote (with asLegacyTransaction=true)
+//!   2. POST /swap        → unsigned legacy transaction (no address lookup tables)
+//!   3. Replace blockhash with fresh one from Solana RPC
+//!   4. Send message bytes to OutLayer for TEE custody signing
+//!   5. Assemble signed tx + broadcast to Solana
 //!
 //! Custody tier: T1 — agent builds unsigned tx, OutLayer signs in TEE.
 //! Secrets held: OutLayer API key only (via config_read). No private keys.
 //!
-//! The pure swap core lives in [`jupiter`] with no wasm dependency, so it
-//! compiles and tests on the host with a plain `cargo test`.
+//! IMPORTANT: asLegacyTransaction=true is REQUIRED for custody signing.
+//! V0 transactions with address lookup tables have a compiled-message hash
+//! mismatch that causes SignatureFailure. Legacy transactions have no ALTs.
+//!
+//! The pure swap core lives in [`jupiter`] with no wasm dependency.
 
 pub mod jupiter;
 
@@ -89,12 +91,13 @@ mod component {
         }
 
         fn description() -> String {
-            "Quote and execute Solana token swaps via Jupiter Swap API V2 with OutLayer custody. \
-             Actions: 'quote' (swap order), 'price' (token prices), 'swap' (order + custody execution), \
+            "Quote and execute Solana token swaps via Jupiter (public.jupiterapi.com) with OutLayer custody. \
+             Actions: 'quote' (swap quote), 'price' (token prices), 'swap' (quote + custody sign + broadcast), \
              'balance' (OutLayer wallet balance). \
              T1 custody: agent builds unsigned tx, OutLayer signs in TEE with policy enforcement. \
-             Mint allowlist and spend caps enforced client-side before any network call. \
-             Jupiter V2: GET /order returns assembled tx, POST /execute lands it. Keyless: 0.5 RPS."
+             Mint allowlist and spend caps enforced client-side. \
+             Uses asLegacyTransaction=true to avoid address lookup table custody issues. \
+             Jupiter V1: GET /quote, POST /swap. Keyless: 0.5 RPS."
                 .to_string()
         }
 
@@ -228,12 +231,10 @@ mod component {
         Ok(shape_price_response(&parsed))
     }
 
-    /// Handle "quote" action — get a swap order from Jupiter Swap API V2.
+    /// Handle "quote" action — get a swap quote from Jupiter /quote.
     fn handle_quote(cfg: &SwapConfig, args: &ExecuteArgs) -> Result<String, String> {
         if args.input_mint.is_empty() || args.output_mint.is_empty() {
-            return Err(
-                "Missing 'input_mint' and 'output_mint' for quote action".to_string(),
-            );
+            return Err("Missing 'input_mint' and 'output_mint' for quote action".to_string());
         }
         if args.amount == 0 {
             return Err("Missing 'amount' for quote action".to_string());
@@ -248,30 +249,25 @@ mod component {
             cfg.max_slippage_bps
         };
 
-        let url = build_order_url(
-            cfg,
-            &args.input_mint,
-            &args.output_mint,
-            args.amount,
-            slippage,
-            &args.taker,
-        );
-        let response =
-            http_get(&url, cfg.has_jupiter_key().then(|| cfg.jupiter_api_key.as_str()))
-                .map_err(|e| format!("Jupiter order API request failed: {e}"))?;
+        let url = build_quote_url(cfg, &args.input_mint, &args.output_mint, args.amount, slippage);
+        let response = http_get(
+            &url,
+            cfg.has_jupiter_key().then(|| cfg.jupiter_api_key.as_str()),
+        )
+        .map_err(|e| format!("Jupiter quote API request failed: {e}"))?;
 
-        let parsed: serde_json::Value =
-            serde_json::from_str(&response).map_err(|e| format!("Failed to parse order response: {e}"))?;
+        let parsed: serde_json::Value = serde_json::from_str(&response)
+            .map_err(|e| format!("Failed to parse quote response: {e}"))?;
 
         // Check for API-level error
         if let Some(err_msg) = parsed.get("error").and_then(|e| e.as_str()) {
             return Err(format!("Jupiter API error: {err_msg}"));
         }
 
-        Ok(shape_order_response(&parsed))
+        Ok(shape_quote_response(&parsed))
     }
 
-    /// Handle "swap" action — order + submit to OutLayer custody.
+    /// Handle "swap" action — quote → swap → OutLayer custody sign → broadcast.
     fn handle_swap(cfg: &SwapConfig, args: &ExecuteArgs) -> Result<String, String> {
         if args.input_mint.is_empty() || args.output_mint.is_empty() {
             return Err(
@@ -287,8 +283,10 @@ mod component {
                     .to_string(),
             );
         }
+        if args.taker.is_empty() {
+            return Err("Missing 'taker' wallet address for swap action".to_string());
+        }
 
-        // Enforce mint allowlist
         enforce_mint_allowlist(cfg, &args.input_mint, &args.output_mint)?;
 
         let slippage = if args.slippage_bps > 0 {
@@ -297,61 +295,66 @@ mod component {
             cfg.max_slippage_bps
         };
 
-        // Step 1: Get order (quote + assembled transaction) from Jupiter V2
-        let order_url = build_order_url(
-            cfg,
-            &args.input_mint,
-            &args.output_mint,
-            args.amount,
-            slippage,
-            &args.taker,
-        );
-        let order_response =
-            http_get(&order_url, cfg.has_jupiter_key().then(|| cfg.jupiter_api_key.as_str()))
-                .map_err(|e| format!("Jupiter order API request failed: {e}"))?;
-
-        let order_parsed: serde_json::Value = serde_json::from_str(&order_response)
-            .map_err(|e| format!("Failed to parse order response: {e}"))?;
-
-        if let Some(err_msg) = order_parsed.get("error").and_then(|e| e.as_str()) {
-            return Err(format!("Jupiter API error: {err_msg}"));
-        }
-
-        let order_summary = shape_order_response(&order_parsed);
-
-        // Step 2: Extract unsigned transaction + request ID
-        let tx_data = extract_order_transaction(&order_parsed)?;
-        let request_id = extract_request_id(&order_parsed)?;
-
-        // Step 3: Submit to OutLayer for TEE custody signing
-        // OutLayer signs the tx message with its ed25519 key in TEE.
-        // Caller (or plugin) assembles signature + broadcasts to Solana RPC.
-        let outlayer_url = format!("{}/wallet/v1/solana/sign-transaction", cfg.outlayer_api);
-        let sign_body = build_outlayer_solana_sign_body(&tx_data);
-
-        let outlayer_response = http_post_json_with_auth(
-            &outlayer_url,
-            &sign_body,
-            &cfg.outlayer_api_key,
+        // Step 1: Jupiter /quote
+        let quote_url =
+            build_quote_url(cfg, &args.input_mint, &args.output_mint, args.amount, slippage);
+        let quote_response = http_get(
+            &quote_url,
+            cfg.has_jupiter_key().then(|| cfg.jupiter_api_key.as_str()),
         )
-        .map_err(|e| format!("OutLayer sign request failed: {e}"))?;
+        .map_err(|e| format!("Jupiter quote request failed: {e}"))?;
+        let quote_parsed: serde_json::Value = serde_json::from_str(&quote_response)
+            .map_err(|e| format!("Failed to parse quote: {e}"))?;
+        if let Some(err_msg) = quote_parsed.get("error").and_then(|e| e.as_str()) {
+            return Err(format!("Jupiter quote error: {err_msg}"));
+        }
+        let quote_summary = shape_quote_response(&quote_parsed);
 
-        // Step 4: Return result
+        // Step 2: Jupiter /swap → unsigned legacy transaction
+        let swap_url = format!("{}/swap", cfg.swap_api);
+        let swap_body = build_swap_body(cfg, &quote_parsed, &args.taker);
+        let swap_response = http_post_json(&swap_url, &swap_body)
+            .map_err(|e| format!("Jupiter swap request failed: {e}"))?;
+        let swap_parsed: serde_json::Value = serde_json::from_str(&swap_response)
+            .map_err(|e| format!("Failed to parse swap: {e}"))?;
+        let swap_tx = extract_swap_transaction(&swap_parsed)?;
+
+        // Step 3: Extract message bytes → OutLayer sign
+        let tx_bytes = crate::jupiter::decode_base64(&swap_tx)
+            .map_err(|e| format!("Failed to decode swap tx: {e}"))?;
+        let message_bytes = crate::jupiter::extract_message_from_tx(&tx_bytes)
+            .map_err(|e| format!("Failed to extract message: {e}"))?;
+        if message_bytes.len() > 1232 {
+            return Err(format!(
+                "Message ({} bytes) exceeds OutLayer 1232-byte limit. Use simpler route.",
+                message_bytes.len()
+            ));
+        }
+        let message_b64 = crate::jupiter::encode_base64(&message_bytes);
+        let outlayer_url = format!("{}/wallet/v1/solana/sign-transaction", cfg.outlayer_api);
+        let sign_body = build_outlayer_solana_sign_body(&message_b64);
+        let outlayer_response =
+            http_post_json_with_auth(&outlayer_url, &sign_body, &cfg.outlayer_api_key)
+                .map_err(|e| format!("OutLayer sign request failed: {e}"))?;
         let out_parsed: serde_json::Value = serde_json::from_str(&outlayer_response)
             .unwrap_or_else(|_| serde_json::json!({ "raw": outlayer_response }));
+        let signature = out_parsed.get("signature").and_then(|s| s.as_str()).unwrap_or("?");
 
-        let signature = out_parsed
-            .get("signature")
-            .and_then(|s| s.as_str())
-            .unwrap_or("?");
-        let wallet_id = out_parsed
-            .get("wallet_id")
-            .and_then(|w| w.as_str())
-            .unwrap_or("?");
+        // Step 4: Assemble + broadcast
+        let signed_tx_bytes =
+            crate::jupiter::assemble_signed_tx(&tx_bytes, signature).map_err(|e| {
+                format!("Failed to assemble signed tx: {e}")
+            })?;
+        let signed_tx_b64 = crate::jupiter::encode_base64(&signed_tx_bytes);
+        let broadcast_result = crate::jupiter::broadcast_tx(cfg, &signed_tx_b64);
+        let wallet_id = out_parsed.get("wallet_id").and_then(|w| w.as_str()).unwrap_or("?");
 
         Ok(format!(
-            "Swap signed by OutLayer TEE. {}. Sig: {}. Wallet: {}. Request: {}",
-            order_summary, signature, wallet_id, request_id
+            "Swap: {}. OutLayer signed ({}). Sig: {}. Broadcast: {}",
+            quote_summary,
+            wallet_id,
+            signature,
+            broadcast_result.unwrap_or_else(|e| format!("failed: {e}"))
         ))
     }
 
