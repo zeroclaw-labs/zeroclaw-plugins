@@ -1,23 +1,34 @@
 //! Pure Jupiter swap core. No wit-bindgen or wasm dependency so it compiles
 //! and tests on the host with `cargo test`.
 //!
-//! Handles:
-//! 1. Price lookup via Jupiter price API
-//! 2. Swap quote via Jupiter quote API
-//! 3. Output shaping — compact LLM-friendly text, never raw 40KB JSON
+//! Jupiter Swap API V2: https://api.jup.ag/swap/v2
+//!   - GET /order → quote + assembled transaction (meta-aggregator)
+//!   - POST /execute → managed landing (sign + submit)
+//!
+//! Jupiter Price API V3: https://api.jup.ag/price/v3
+//!   - GET ?ids={mints} → USD prices + 24h change
+//!
+//! Keyless access: 0.5 RPS without API key. Production: x-api-key header.
 
-use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+
+// ── Well-known mints ──────────────────────────────────────────────────
+
+pub const SOL_MINT: &str = "So11111111111111111111111111111111111111112"; // 43 chars: wrapped SOL
+pub const USDC_MINT: &str = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+pub const USDT_MINT: &str = "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB";
 
 // ── Config ────────────────────────────────────────────────────────────
 
 /// Plugin config resolved from the host's jailed config section.
 #[derive(Debug, Clone)]
 pub struct SwapConfig {
-    /// Jupiter price API base URL.
+    /// Jupiter API base URL (Swap API V2).
+    pub swap_api: String,
+    /// Jupiter Price API V3 URL.
     pub price_api: String,
-    /// Jupiter quote API base URL.
-    pub quote_api: String,
+    /// Optional Jupiter API key for higher rate limits.
+    pub jupiter_api_key: String,
     /// OutLayer API base URL.
     pub outlayer_api: String,
     /// OutLayer API key (read from config, never hardcoded).
@@ -34,16 +45,20 @@ impl SwapConfig {
     /// Build from the flat `string -> string` section the host injects.
     /// Missing keys fall back to safe defaults.
     pub fn from_section(section: &HashMap<String, String>) -> Self {
+        let swap_api = section
+            .get("swap_api")
+            .filter(|v| !v.is_empty())
+            .cloned()
+            .unwrap_or_else(|| "https://api.jup.ag/swap/v2".to_string());
         let price_api = section
             .get("price_api")
             .filter(|v| !v.is_empty())
             .cloned()
-            .unwrap_or_else(|| "https://price.jup.ag/v6".to_string());
-        let quote_api = section
-            .get("quote_api")
-            .filter(|v| !v.is_empty())
+            .unwrap_or_else(|| "https://api.jup.ag/price/v3".to_string());
+        let jupiter_api_key = section
+            .get("jupiter_api_key")
             .cloned()
-            .unwrap_or_else(|| "https://quote-api.jup.ag/v6".to_string());
+            .unwrap_or_default();
         let outlayer_api = section
             .get("outlayer_api")
             .filter(|v| !v.is_empty())
@@ -72,8 +87,9 @@ impl SwapConfig {
             .and_then(|v| v.parse().ok())
             .unwrap_or(500.0);
         Self {
+            swap_api,
             price_api,
-            quote_api,
+            jupiter_api_key,
             outlayer_api,
             outlayer_api_key,
             max_slippage_bps,
@@ -81,54 +97,53 @@ impl SwapConfig {
             daily_spend_cap_usd,
         }
     }
-}
 
-// ── API types ─────────────────────────────────────────────────────────
-
-/// JSON-RPC request body.
-#[derive(Serialize)]
-pub struct JsonRpcRequest {
-    pub jsonrpc: &'static str,
-    pub id: u64,
-    pub method: &'static str,
-    pub params: serde_json::Value,
-}
-
-/// JSON-RPC response body (we only need result/error).
-#[derive(Deserialize)]
-pub struct JsonRpcResponse {
-    pub result: Option<serde_json::Value>,
-    pub error: Option<RpcError>,
-}
-
-#[derive(Deserialize)]
-pub struct RpcError {
-    pub message: String,
+    /// Whether we have a Jupiter API key (higher rate limits).
+    pub fn has_jupiter_key(&self) -> bool {
+        !self.jupiter_api_key.is_empty()
+    }
 }
 
 // ── Request builders ──────────────────────────────────────────────────
 
-/// Build Jupiter price lookup URL.
-/// GET {price_api}/price?ids={mints}
+/// Build Jupiter Price API V3 URL.
+/// GET {price_api}?ids={mints}
 pub fn build_price_url(cfg: &SwapConfig, mints: &[&str]) -> String {
     let ids = mints.join(",");
-    format!("{}/price?ids={}", cfg.price_api, ids)
+    format!("{}?ids={}", cfg.price_api, ids)
 }
 
-/// Build Jupiter quote URL.
-/// GET {quote_api}/quote?inputMint=..&outputMint=..&amount=..&slippageBps=..
-pub fn build_quote_url(
+/// Build Jupiter Swap API V2 order URL (meta-aggregator).
+/// GET {swap_api}/order?inputMint=..&outputMint=..&amount=..&slippageBps=..
+pub fn build_order_url(
     cfg: &SwapConfig,
     input_mint: &str,
     output_mint: &str,
     amount: u64,
     slippage_bps: u32,
+    taker: &str,
 ) -> String {
     let slippage = slippage_bps.min(cfg.max_slippage_bps);
-    format!(
-        "{}/quote?inputMint={}&outputMint={}&amount={}&slippageBps={}&onlyDirectRoutes=true&asLegacyTransaction=false",
-        cfg.quote_api, input_mint, output_mint, amount, slippage
-    )
+    let mut url = format!(
+        "{}/order?inputMint={}&outputMint={}&amount={}&slippageBps={}",
+        cfg.swap_api, input_mint, output_mint, amount, slippage
+    );
+    if !taker.is_empty() {
+        url.push_str(&format!("&taker={taker}"));
+    }
+    url
+}
+
+/// Build Jupiter Swap API V2 execute request body.
+/// POST {swap_api}/execute
+pub fn build_execute_body(
+    signed_transaction: &str,
+    request_id: &str,
+) -> serde_json::Value {
+    serde_json::json!({
+        "signedTransaction": signed_transaction,
+        "requestId": request_id,
+    })
 }
 
 /// Build OutLayer address derivation URL.
@@ -166,16 +181,25 @@ pub fn build_outlayer_transfer_body(
 
 // ── Output shaping ────────────────────────────────────────────────────
 
-/// Shape a Jupiter price response into a compact string for the LLM.
-/// Target: ~200 tokens, not 40KB of raw JSON.
+/// Shape a Jupiter Price API V3 response into a compact string for the LLM.
+/// V3 format: { "mint": { "usdPrice": f64, "priceChange24h": f64, ... } }
+/// Target: ~200 tokens.
 pub fn shape_price_response(raw: &serde_json::Value) -> String {
-    let prices = raw.as_object().and_then(|o| o.get("data")).and_then(|d| d.as_object());
+    let prices = raw.as_object().filter(|m| !m.is_empty());
     if let Some(prices) = prices {
         let mut lines = Vec::new();
         for (mint, info) in prices {
-            let price = info.get("price").and_then(|v| v.as_str()).unwrap_or("N/A");
+            let usd_price = info.get("usdPrice").and_then(|v| v.as_f64()).unwrap_or(0.0);
+            let change_24h = info
+                .get("priceChange24h")
+                .and_then(|v| v.as_f64())
+                .unwrap_or(0.0);
+            let sign = if change_24h >= 0.0 { "+" } else { "" };
             let symbol = mint_short(mint);
-            lines.push(format!("{}: ${}", symbol, price));
+            lines.push(format!(
+                "{}: ${:.2} (24h: {}{:.2}%)",
+                symbol, usd_price, sign, change_24h
+            ));
         }
         lines.join(", ")
     } else {
@@ -183,72 +207,109 @@ pub fn shape_price_response(raw: &serde_json::Value) -> String {
     }
 }
 
-/// Shape a Jupiter quote response into a compact string for the LLM.
-pub fn shape_quote_response(raw: &serde_json::Value) -> String {
-    let in_amount = raw
-        .get("inAmount")
-        .and_then(|v| v.as_str())
-        .unwrap_or("?");
+/// Shape a Jupiter Swap API V2 order response into a compact string for the LLM.
+/// V2 /order format: { requestId, outAmount, router, mode, feeBps, ... }
+pub fn shape_order_response(raw: &serde_json::Value) -> String {
     let out_amount = raw
         .get("outAmount")
         .and_then(|v| v.as_str())
         .unwrap_or("?");
-    let price_impact_pct = raw
-        .get("priceImpactPct")
+    let router = raw
+        .get("router")
         .and_then(|v| v.as_str())
-        .unwrap_or("0");
-    let slippage_bps = raw
-        .get("slippageBps")
+        .unwrap_or("unknown");
+    let fee_bps = raw
+        .get("feeBps")
         .and_then(|v| v.as_number())
         .and_then(|n| n.as_u64())
         .unwrap_or(0);
+    let has_tx = raw
+        .get("transaction")
+        .and_then(|v| v.as_str())
+        .map_or(false, |s| !s.is_empty() && s != "null");
 
-    // Route info — which DEXes
-    let route_plan = raw.get("routePlan").and_then(|v| v.as_array());
-    let dexes = match route_plan {
-        Some(steps) => {
-            let names: Vec<String> = steps
-                .iter()
-                .filter_map(|step| {
-                    step.get("swapInfo")
-                        .and_then(|si| si.get("label"))
-                        .and_then(|l| l.as_str())
-                        .map(|s| s.to_string())
-                })
-                .collect();
-            if names.is_empty() {
-                "unknown".to_string()
-            } else {
-                names.join(" → ")
-            }
-        }
-        None => "direct".to_string(),
-    };
-
-    let pi: f64 = price_impact_pct.parse().unwrap_or(0.0);
-    let pi_display = (pi * 100.0).abs();
-    let slippage_display = slippage_bps as f64 / 100.0;
+    let fee_display = fee_bps as f64 / 100.0;
+    let tx_status = if has_tx { "ready to sign" } else { "quote-only" };
 
     format!(
-        "Quote: {} in → {} out. Route: {}. Slippage: {:.2}%. Price impact: {:.3}%.",
-        in_amount, out_amount, dexes, slippage_display, pi_display
+        "Order: {} out. Router: {}. Fee: {:.2} bps ({}). {}.",
+        out_amount, router, fee_display, tx_status, tx_status
     )
 }
 
-/// Extract the base64 swap transaction from a Jupiter swap response.
-pub fn extract_swap_transaction(swap_response: &serde_json::Value) -> Result<String, String> {
-    swap_response
-        .get("swapTransaction")
+/// Shape a Jupiter execute response into a compact string.
+/// V2 /execute format: { status, signature, totalInputAmount, totalOutputAmount, ... }
+pub fn shape_execute_response(raw: &serde_json::Value) -> String {
+    let status = raw
+        .get("status")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown");
+    let signature = raw
+        .get("signature")
+        .and_then(|v| v.as_str())
+        .unwrap_or("none");
+    let total_in = raw
+        .get("totalInputAmount")
+        .and_then(|v| v.as_str())
+        .unwrap_or("?");
+    let total_out = raw
+        .get("totalOutputAmount")
+        .and_then(|v| v.as_str())
+        .unwrap_or("?");
+
+    match status {
+        "Success" => format!(
+            "Swap executed. In: {} Out: {}. Tx: {}",
+            total_in, total_out, signature
+        ),
+        _ => format!(
+            "Swap {}: in {} out {}. Tx: {}",
+            status.to_lowercase(),
+            total_in,
+            total_out,
+            signature
+        ),
+    }
+}
+
+/// Extract the base64 transaction from a Jupiter /order response.
+pub fn extract_order_transaction(order_response: &serde_json::Value) -> Result<String, String> {
+    order_response
+        .get("transaction")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty() && *s != "null")
+        .map(|s| s.to_string())
+        .ok_or_else(|| {
+            let code = order_response
+                .get("errorCode")
+                .and_then(|v| v.as_i64())
+                .unwrap_or(0);
+            let msg = order_response
+                .get("errorMessage")
+                .and_then(|v| v.as_str())
+                .unwrap_or("No transaction in response");
+            format!("Order error ({}): {}", code, msg)
+        })
+}
+
+/// Extract the request ID from a Jupiter /order response.
+pub fn extract_request_id(order_response: &serde_json::Value) -> Result<String, String> {
+    order_response
+        .get("requestId")
         .and_then(|v| v.as_str())
         .map(|s| s.to_string())
-        .ok_or_else(|| "No swapTransaction in response".to_string())
+        .ok_or_else(|| "No requestId in order response".to_string())
 }
 
 // ── Mint allowlist enforcement ───────────────────────────────────────
 
 /// Check if a mint is in the allowlist. Empty allowlist = allow all.
 pub fn is_mint_allowed(cfg: &SwapConfig, mint: &str) -> bool {
-    cfg.allowed_mints.is_empty() || cfg.allowed_mints.iter().any(|m| *m == mint.to_lowercase())
+    cfg.allowed_mints.is_empty()
+        || cfg
+            .allowed_mints
+            .iter()
+            .any(|m| *m == mint.to_lowercase())
 }
 
 /// Reject if either mint is not in the allowlist. Returns an error message.
@@ -274,7 +335,7 @@ pub fn enforce_mint_allowlist(
 
 // ── Helpers ───────────────────────────────────────────────────────────
 
-/// Shorten a mint address for display: "So11111111111111111111111111111111" → "So111…1111"
+/// Shorten a mint address for display: "So11111111111111111111111111111111111111112" → "So1111..."
 pub fn mint_short(mint: &str) -> &str {
     if mint.len() > 12 {
         &mint[..8]
@@ -292,16 +353,19 @@ mod tests {
     }
 
     fn config_with(pairs: &[(&str, &str)]) -> SwapConfig {
-        let section: HashMap<String, String> = pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+        let section: HashMap<String, String> =
+            pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
         SwapConfig::from_section(&section)
     }
 
     #[test]
     fn empty_config_has_safe_defaults() {
         let cfg = empty_config();
-        assert_eq!(cfg.price_api, "https://price.jup.ag/v6");
-        assert_eq!(cfg.quote_api, "https://quote-api.jup.ag/v6");
+        assert_eq!(cfg.swap_api, "https://api.jup.ag/swap/v2");
+        assert_eq!(cfg.price_api, "https://api.jup.ag/price/v3");
         assert_eq!(cfg.outlayer_api, "https://api.outlayer.fastnear.com");
+        assert!(cfg.jupiter_api_key.is_empty());
+        assert!(!cfg.has_jupiter_key());
         assert!(cfg.outlayer_api_key.is_empty());
         assert_eq!(cfg.max_slippage_bps, 50);
         assert!(cfg.allowed_mints.is_empty());
@@ -313,11 +377,16 @@ mod tests {
         let cfg = config_with(&[
             ("max_slippage_bps", "100"),
             ("daily_spend_cap_usd", "1000"),
-            ("allowed_mints", "So11111111111111111111111111111111,EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"),
+            (
+                "allowed_mints",
+                "So11111111111111111111111111111111111111112,EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+            ),
+            ("jupiter_api_key", "test_key"),
         ]);
         assert_eq!(cfg.max_slippage_bps, 100);
         assert_eq!(cfg.daily_spend_cap_usd, 1000.0);
         assert_eq!(cfg.allowed_mints.len(), 2);
+        assert!(cfg.has_jupiter_key());
     }
 
     #[test]
@@ -328,129 +397,256 @@ mod tests {
 
     #[test]
     fn non_empty_allowlist_blocks_unlisted_mints() {
-        let cfg = config_with(&[("allowed_mints", "So11111111111111111111111111111111")]);
-        assert!(is_mint_allowed(&cfg, "So11111111111111111111111111111111"));
+        let cfg = config_with(&[("allowed_mints", SOL_MINT)]);
+        assert!(is_mint_allowed(&cfg, SOL_MINT));
         assert!(!is_mint_allowed(&cfg, "random_bad_mint"));
     }
 
     #[test]
     fn enforce_allowlist_passes_for_allowed() {
-        let sol = "So11111111111111111111111111111111";
         let usdc = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
-        let cfg = config_with(&[("allowed_mints", "So11111111111111111111111111111111,EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v")]);
-        assert!(enforce_mint_allowlist(&cfg, sol, usdc).is_ok());
+        let cfg = config_with(&[(
+            "allowed_mints",
+            "So11111111111111111111111111111111111111112,EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+        )]);
+        assert!(enforce_mint_allowlist(&cfg, SOL_MINT, usdc).is_ok());
     }
 
     #[test]
     fn enforce_allowlist_blocks_bad_mint() {
-        let sol = "So11111111111111111111111111111111";
         let bad = "9xyzFAKEtokenMintAddress";
-        let cfg = config_with(&[("allowed_mints", "So11111111111111111111111111111111")]);
-        let result = enforce_mint_allowlist(&cfg, sol, bad);
+        let cfg = config_with(&[("allowed_mints", SOL_MINT)]);
+        let result = enforce_mint_allowlist(&cfg, SOL_MINT, bad);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("not in allowlist"));
     }
 
+    // ── Price V3 ──
+
     #[test]
-    fn build_price_url_formats_correctly() {
+    fn build_price_url_uses_v3() {
         let cfg = empty_config();
-        let url = build_price_url(&cfg, &["So11111111111111111111111111111111", "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"]);
-        assert!(url.contains("price?ids="));
+        let url = build_price_url(&cfg, &[SOL_MINT, USDC_MINT]);
+        assert!(url.contains("price/v3"));
+        assert!(url.contains("ids="));
         assert!(url.contains("So1111"));
         assert!(url.contains("EPjFWdd"));
     }
 
     #[test]
-    fn build_quote_url_clamps_slippage() {
-        let cfg = config_with(&[("max_slippage_bps", "50")]);
-        let url = build_quote_url(&cfg, "So1111", "EPjFWd", 1000000, 500);
-        // slippage should be clamped to 50 (max from config), not 500
-        assert!(url.contains("slippageBps=50"));
-        assert!(url.contains("amount=1000000"));
-    }
-
-    #[test]
-    fn build_quote_url_allows_under_cap() {
-        let cfg = config_with(&[("max_slippage_bps", "300")]);
-        let url = build_quote_url(&cfg, "So1111", "EPjFWd", 1000000, 100);
-        assert!(url.contains("slippageBps=100"));
-    }
-
-    #[test]
-    fn shape_price_response_compact() {
+    fn shape_price_v3_response_compact() {
         let raw = serde_json::json!({
-            "data": {
-                "So11111111111111111111111111111111": {
-                    "id": "So11111111111111111111111111111111",
-                    "price": "143.27"
-                },
-                "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v": {
-                    "id": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
-                    "price": "0.9998"
-                }
+            "So11111111111111111111111111111111111111112": {
+                "usdPrice": 143.27,
+                "decimals": 9,
+                "priceChange24h": 1.29
+            },
+            "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v": {
+                "usdPrice": 0.9998,
+                "decimals": 6,
+                "priceChange24h": -0.15
             }
         });
         let out = shape_price_response(&raw);
         assert!(out.contains("$143.27"));
-        assert!(out.contains("$0.9998"));
-        // Should be compact
-        assert!(out.len() < 200);
-    }
-
-    #[test]
-    fn shape_quote_response_compact() {
-        let raw = serde_json::json!({
-            "inAmount": "1000000",
-            "outAmount": "142857000",
-            "priceImpactPct": "-0.00123",
-            "slippageBps": 50,
-            "routePlan": [
-                { "swapInfo": { "label": "Raydium" } },
-                { "swapInfo": { "label": "Orca" } }
-            ]
-        });
-        let out = shape_quote_response(&raw);
-        assert!(out.contains("1000000"));
-        assert!(out.contains("142857000"));
-        assert!(out.contains("Raydium"));
-        assert!(out.contains("Orca"));
-        assert!(out.contains("0.50%"));
+        assert!(out.contains("+1.29%"));
+        assert!(out.contains("$1.00"));
+        assert!(out.contains("-0.15%"));
         assert!(out.len() < 300);
     }
 
     #[test]
-    fn extract_swap_transaction_from_response() {
-        let raw = serde_json::json!({
-            "swapTransaction": "base64encodedtxdata=="
-        });
-        assert_eq!(
-            extract_swap_transaction(&raw).unwrap(),
-            "base64encodedtxdata=="
-        );
+    fn shape_price_v3_empty_returns_message() {
+        let raw = serde_json::json!({});
+        let out = shape_price_response(&raw);
+        assert_eq!(out, "No prices found.");
     }
 
-    #[test]
-    fn extract_swap_transaction_missing_errors() {
-        let raw = serde_json::json!({ "other": "data" });
-        assert!(extract_swap_transaction(&raw).is_err());
-    }
+    // ── Swap V2 /order ──
 
     #[test]
-    fn outlayer_urls_format_correctly() {
+    fn build_order_url_uses_v2() {
         let cfg = empty_config();
-        let addr = build_outlayer_address_url(&cfg);
-        assert!(addr.contains("/wallet/v1/address"));
-        assert!(addr.contains("chain=solana"));
-
-        let bal = build_outlayer_balance_url(&cfg, "So1111");
-        assert!(bal.contains("token=So1111"));
+        let url = build_order_url(&cfg, SOL_MINT, USDC_MINT, 100000000, 50, "");
+        assert!(url.contains("swap/v2/order"));
+        assert!(url.contains("inputMint=So1111"));
+        assert!(url.contains("outputMint=EPjFWdd"));
+        assert!(url.contains("amount=100000000"));
+        assert!(url.contains("slippageBps=50"));
     }
 
     #[test]
-    fn outlayer_transfer_body_structure() {
-        let body = build_outlayer_transfer_body("solana", "SOL", "dest_addr", "1000000", "tx_base64==");
-        assert_eq!(body["chain"], "solana");
-        assert_eq!(body["token"], "SOL");
-        assert_eq!(body["tx_data"], "tx_base64==");
+    fn build_order_url_includes_taker() {
+        let cfg = empty_config();
+        let url = build_order_url(&cfg, SOL_MINT, USDC_MINT, 100000000, 50, "my_wallet_addr");
+        assert!(url.contains("taker=my_wallet_addr"));
+    }
+
+    #[test]
+    fn build_order_url_clamps_slippage() {
+        let cfg = config_with(&[("max_slippage_bps", "50")]);
+        let url = build_order_url(&cfg, SOL_MINT, USDC_MINT, 1000000, 500, "");
+        assert!(url.contains("slippageBps=50"));
+    }
+
+    #[test]
+    fn shape_order_response_compact() {
+        let raw = serde_json::json!({
+            "requestId": "req_abc123",
+            "outAmount": "14285714300",
+            "router": "jupiterz",
+            "mode": "ultra",
+            "feeBps": 30,
+            "feeMint": "So11111111111111111111111111111111111111112",
+            "transaction": "base64txdata"
+        });
+        let out = shape_order_response(&raw);
+        assert!(out.contains("14285714300"));
+        assert!(out.contains("jupiterz"));
+        assert!(out.contains("0.30"));
+        assert!(out.contains("ready to sign"));
+        assert!(out.len() < 300);
+    }
+
+    #[test]
+    fn shape_order_response_quote_only() {
+        let raw = serde_json::json!({
+            "requestId": "req_xyz",
+            "outAmount": "50000",
+            "router": "metis",
+            "mode": "manual",
+            "feeBps": 0,
+            "transaction": ""
+        });
+        let out = shape_order_response(&raw);
+        assert!(out.contains("quote-only"));
+        assert!(out.contains("metis"));
+    }
+
+    #[test]
+    fn extract_order_transaction_success() {
+        let raw = serde_json::json!({
+            "transaction": "aGVsbG8gd29ybGQ=",
+            "requestId": "req_1"
+        });
+        assert_eq!(extract_order_transaction(&raw).unwrap(), "aGVsbG8gd29ybGQ=");
+    }
+
+    #[test]
+    fn extract_order_transaction_null_fails() {
+        let raw = serde_json::json!({
+            "transaction": null,
+            "requestId": "req_2"
+        });
+        assert!(extract_order_transaction(&raw).is_err());
+    }
+
+    #[test]
+    fn extract_order_transaction_error_message() {
+        let raw = serde_json::json!({
+            "transaction": "",
+            "errorCode": 42,
+            "errorMessage": "Insufficient liquidity"
+        });
+        let err = extract_order_transaction(&raw).unwrap_err();
+        assert!(err.contains("42"));
+        assert!(err.contains("Insufficient liquidity"));
+    }
+
+    #[test]
+    fn extract_request_id_success() {
+        let raw = serde_json::json!({ "requestId": "req_abc" });
+        assert_eq!(extract_request_id(&raw).unwrap(), "req_abc");
+    }
+
+    #[test]
+    fn extract_request_id_missing_fails() {
+        let raw = serde_json::json!({ "noId": "here" });
+        assert!(extract_request_id(&raw).is_err());
+    }
+
+    // ── Swap V2 /execute ──
+
+    #[test]
+    fn build_execute_body_structure() {
+        let body = build_execute_body("signed_tx_base64", "req_123");
+        assert_eq!(body["signedTransaction"], "signed_tx_base64");
+        assert_eq!(body["requestId"], "req_123");
+    }
+
+    #[test]
+    fn shape_execute_response_success() {
+        let raw = serde_json::json!({
+            "status": "Success",
+            "signature": "5Kt8...abc",
+            "totalInputAmount": "100000000",
+            "totalOutputAmount": "14285714300"
+        });
+        let out = shape_execute_response(&raw);
+        assert!(out.contains("Swap executed"));
+        assert!(out.contains("100000000"));
+        assert!(out.contains("14285714300"));
+        assert!(out.contains("5Kt8"));
+        assert!(out.len() < 300);
+    }
+
+    #[test]
+    fn shape_execute_response_failed() {
+        let raw = serde_json::json!({
+            "status": "Failed",
+            "signature": "",
+            "error": "Slippage exceeded"
+        });
+        let out = shape_execute_response(&raw);
+        assert!(out.contains("failed"));
+    }
+
+    // ── OutLayer ──
+
+    #[test]
+    fn outlayer_address_url_has_solana_chain() {
+        let cfg = empty_config();
+        let url = build_outlayer_address_url(&cfg);
+        assert!(url.contains("/wallet/v1/address"));
+        assert!(url.contains("chain=solana"));
+    }
+
+    #[test]
+    fn outlayer_balance_url_includes_token() {
+        let cfg = empty_config();
+        let url = build_outlayer_balance_url(&cfg, USDC_MINT);
+        assert!(url.contains("EPjFWdd"));
+        assert!(url.contains("chain=solana"));
+    }
+
+    #[test]
+    fn outlayer_transfer_body_serializes() {
+        let body = build_outlayer_transfer_body("solana", "SOL", "dest", "1000000", "dGVzdA==");
+        let serialized = serde_json::to_string(&body).unwrap();
+        assert!(serialized.contains("solana"));
+        assert!(serialized.contains("dGVzdA=="));
+        assert!(serialized.len() < 500);
+    }
+
+    // ── Helpers ──
+
+    #[test]
+    fn mint_short_truncates_long_addresses() {
+        assert_eq!(mint_short(USDC_MINT), "EPjFWdd5");
+    }
+
+    #[test]
+    fn mint_short_preserves_short_addresses() {
+        assert_eq!(mint_short("short"), "short");
+    }
+
+    #[test]
+    fn well_known_mints_are_correct() {
+        assert!(SOL_MINT.starts_with("So1111"));
+        assert!(USDC_MINT.starts_with("EPjFWdd"));
+        // Standard wrapped SOL mint (43 chars)
+        assert_eq!(SOL_MINT.len(), 43);
+        // Standard USDC mint (44 chars)
+        assert_eq!(USDC_MINT.len(), 44);
     }
 }

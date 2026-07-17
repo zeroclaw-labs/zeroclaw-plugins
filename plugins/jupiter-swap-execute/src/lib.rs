@@ -1,16 +1,21 @@
 //! ZeroClaw WIT tool plugin: `jupiter-swap-execute`.
 //!
-//! Quotes and executes Solana token swaps via Jupiter's public API, with
+//! Quotes and executes Solana token swaps via Jupiter Swap API V2, with
 //! custody enforcement through OutLayer (TEE-signed, policy-gated).
+//!
+//! Jupiter Swap API V2 flow:
+//!   1. GET  /swap/v2/order   → quote + assembled transaction (meta-aggregator)
+//!   2. Sign the transaction  → partial sign (taker only; JupiterZ needs MM sig)
+//!   3. POST /swap/v2/execute → Jupiter lands the tx with managed fees/slippage
+//!
+//! For T1 custody: the agent gets the unsigned tx from /order, passes it to
+//! OutLayer which signs in TEE with policy enforcement (spend caps, mint allowlist).
 //!
 //! Custody tier: T1 — agent builds unsigned tx, OutLayer signs in TEE.
 //! Secrets held: OutLayer API key only (via config_read). No private keys.
 //!
 //! The pure swap core lives in [`jupiter`] with no wasm dependency, so it
 //! compiles and tests on the host with a plain `cargo test`.
-//!
-//! Build:  rustup target add wasm32-wasip2
-//!         cargo build --target wasm32-wasip2 --release
 
 pub mod jupiter;
 
@@ -34,7 +39,7 @@ mod component {
     struct JupiterSwapExecute;
 
     const PLUGIN_NAME: &str = "jupiter-swap-execute";
-    const PLUGIN_VERSION: &str = "0.1.0";
+    const PLUGIN_VERSION: &str = "0.2.0";
     const TOOL_NAME: &str = "jupiter-swap";
 
     /// Execute arguments from the LLM.
@@ -60,6 +65,9 @@ mod component {
         /// Token mint for balance lookup
         #[serde(default)]
         token: String,
+        /// Taker wallet address (optional — needed for JupiterZ RFQ)
+        #[serde(default)]
+        taker: String,
         /// Injected config section from host
         #[serde(rename = "__config", default)]
         config: HashMap<String, String>,
@@ -81,11 +89,12 @@ mod component {
         }
 
         fn description() -> String {
-            "Quote and execute Solana token swaps via Jupiter with OutLayer custody. \
-             Actions: 'quote' (swap quote), 'price' (token prices), 'swap' (quote + custody-signed execution), \
+            "Quote and execute Solana token swaps via Jupiter Swap API V2 with OutLayer custody. \
+             Actions: 'quote' (swap order), 'price' (token prices), 'swap' (order + custody execution), \
              'balance' (OutLayer wallet balance). \
-             T1 custody: agent builds tx, OutLayer signs in TEE with policy enforcement. \
-             Mint allowlist and spend caps enforced client-side before any network call."
+             T1 custody: agent builds unsigned tx, OutLayer signs in TEE with policy enforcement. \
+             Mint allowlist and spend caps enforced client-side before any network call. \
+             Jupiter V2: GET /order returns assembled tx, POST /execute lands it. Keyless: 0.5 RPS."
                 .to_string()
         }
 
@@ -121,6 +130,10 @@ mod component {
                     "token": {
                         "type": "string",
                         "description": "Token mint for balance lookup"
+                    },
+                    "taker": {
+                        "type": "string",
+                        "description": "Taker wallet address (enables JupiterZ RFQ for best price)"
                     }
                 },
                 "required": ["action"]
@@ -132,7 +145,12 @@ mod component {
             let parsed: ExecuteArgs = match serde_json::from_str(&args) {
                 Ok(a) => a,
                 Err(e) => {
-                    emit(PluginAction::Fail, PluginOutcome::Failure, "invalid arguments", None);
+                    emit(
+                        PluginAction::Fail,
+                        PluginOutcome::Failure,
+                        "invalid arguments",
+                        None,
+                    );
                     return Ok(ToolResult {
                         success: false,
                         output: String::new(),
@@ -149,8 +167,15 @@ mod component {
                 "swap" => handle_swap(&cfg, &parsed),
                 "balance" => handle_balance(&cfg, &parsed),
                 other => {
-                    emit(PluginAction::Fail, PluginOutcome::Failure, "unknown action", None);
-                    Err(format!("Unknown action: '{other}'. Use: quote, price, swap, balance"))
+                    emit(
+                        PluginAction::Fail,
+                        PluginOutcome::Failure,
+                        "unknown action",
+                        None,
+                    );
+                    Err(format!(
+                        "Unknown action: '{other}'. Use: quote, price, swap, balance"
+                    ))
                 }
             };
 
@@ -185,7 +210,7 @@ mod component {
         }
     }
 
-    /// Handle "price" action — look up token prices via Jupiter.
+    /// Handle "price" action — look up token prices via Jupiter Price API V3.
     fn handle_price(cfg: &SwapConfig, args: &ExecuteArgs) -> Result<String, String> {
         if args.mints.is_empty() {
             return Err("Missing 'mints' parameter for price action".to_string());
@@ -193,20 +218,22 @@ mod component {
         let mint_list: Vec<&str> = args.mints.split(',').map(str::trim).collect();
         let url = build_price_url(cfg, &mint_list);
 
-        // HTTP call via wasi:http (host-provided)
-        let response = http_get(&url)
-            .map_err(|e| format!("Jupiter price API request failed: {e}"))?;
+        let response =
+            http_get(&url, cfg.has_jupiter_key().then(|| cfg.jupiter_api_key.as_str()))
+                .map_err(|e| format!("Jupiter price API request failed: {e}"))?;
 
-        let parsed: serde_json::Value = serde_json::from_str(&response)
-            .map_err(|e| format!("Failed to parse price response: {e}"))?;
+        let parsed: serde_json::Value =
+            serde_json::from_str(&response).map_err(|e| format!("Failed to parse price response: {e}"))?;
 
         Ok(shape_price_response(&parsed))
     }
 
-    /// Handle "quote" action — get a swap quote from Jupiter.
+    /// Handle "quote" action — get a swap order from Jupiter Swap API V2.
     fn handle_quote(cfg: &SwapConfig, args: &ExecuteArgs) -> Result<String, String> {
         if args.input_mint.is_empty() || args.output_mint.is_empty() {
-            return Err("Missing 'input_mint' and 'output_mint' for quote action".to_string());
+            return Err(
+                "Missing 'input_mint' and 'output_mint' for quote action".to_string(),
+            );
         }
         if args.amount == 0 {
             return Err("Missing 'amount' for quote action".to_string());
@@ -221,25 +248,35 @@ mod component {
             cfg.max_slippage_bps
         };
 
-        let url = build_quote_url(cfg, &args.input_mint, &args.output_mint, args.amount, slippage);
-        let response = http_get(&url)
-            .map_err(|e| format!("Jupiter quote API request failed: {e}"))?;
+        let url = build_order_url(
+            cfg,
+            &args.input_mint,
+            &args.output_mint,
+            args.amount,
+            slippage,
+            &args.taker,
+        );
+        let response =
+            http_get(&url, cfg.has_jupiter_key().then(|| cfg.jupiter_api_key.as_str()))
+                .map_err(|e| format!("Jupiter order API request failed: {e}"))?;
 
-        let parsed: serde_json::Value = serde_json::from_str(&response)
-            .map_err(|e| format!("Failed to parse quote response: {e}"))?;
+        let parsed: serde_json::Value =
+            serde_json::from_str(&response).map_err(|e| format!("Failed to parse order response: {e}"))?;
 
         // Check for API-level error
         if let Some(err_msg) = parsed.get("error").and_then(|e| e.as_str()) {
             return Err(format!("Jupiter API error: {err_msg}"));
         }
 
-        Ok(shape_quote_response(&parsed))
+        Ok(shape_order_response(&parsed))
     }
 
-    /// Handle "swap" action — quote + submit to OutLayer custody.
+    /// Handle "swap" action — order + submit to OutLayer custody.
     fn handle_swap(cfg: &SwapConfig, args: &ExecuteArgs) -> Result<String, String> {
         if args.input_mint.is_empty() || args.output_mint.is_empty() {
-            return Err("Missing 'input_mint' and 'output_mint' for swap action".to_string());
+            return Err(
+                "Missing 'input_mint' and 'output_mint' for swap action".to_string(),
+            );
         }
         if args.amount == 0 {
             return Err("Missing 'amount' for swap action".to_string());
@@ -260,49 +297,39 @@ mod component {
             cfg.max_slippage_bps
         };
 
-        // Step 1: Get quote from Jupiter
-        let quote_url =
-            build_quote_url(cfg, &args.input_mint, &args.output_mint, args.amount, slippage);
-        let quote_response = http_get(&quote_url)
-            .map_err(|e| format!("Jupiter quote API request failed: {e}"))?;
+        // Step 1: Get order (quote + assembled transaction) from Jupiter V2
+        let order_url = build_order_url(
+            cfg,
+            &args.input_mint,
+            &args.output_mint,
+            args.amount,
+            slippage,
+            &args.taker,
+        );
+        let order_response =
+            http_get(&order_url, cfg.has_jupiter_key().then(|| cfg.jupiter_api_key.as_str()))
+                .map_err(|e| format!("Jupiter order API request failed: {e}"))?;
 
-        let quote_parsed: serde_json::Value = serde_json::from_str(&quote_response)
-            .map_err(|e| format!("Failed to parse quote response: {e}"))?;
+        let order_parsed: serde_json::Value = serde_json::from_str(&order_response)
+            .map_err(|e| format!("Failed to parse order response: {e}"))?;
 
-        if let Some(err_msg) = quote_parsed.get("error").and_then(|e| e.as_str()) {
+        if let Some(err_msg) = order_parsed.get("error").and_then(|e| e.as_str()) {
             return Err(format!("Jupiter API error: {err_msg}"));
         }
 
-        let quote_summary = shape_quote_response(&quote_parsed);
+        let order_summary = shape_order_response(&order_parsed);
 
-        // Step 2: Get swap transaction from Jupiter
-        let swap_url = format!("{}/swap", cfg.quote_api);
-        let swap_body = serde_json::json!({
-            "quoteResponse": quote_parsed,
-            "userPublicKey": "", // OutLayer handles signing — no user key needed
-            "wrapAndUnwrapSol": true,
-            "dynamicComputeUnitLimit": true,
-            "prioritizationFeeLamports": "auto"
-        });
-
-        let swap_response = http_post_json(&swap_url, &swap_body)
-            .map_err(|e| format!("Jupiter swap API request failed: {e}"))?;
-
-        let swap_parsed: serde_json::Value = serde_json::from_str(&swap_response)
-            .map_err(|e| format!("Failed to parse swap response: {e}"))?;
-
-        if let Some(err_msg) = swap_parsed.get("error").and_then(|e| e.as_str()) {
-            return Err(format!("Jupiter swap error: {err_msg}"));
-        }
-
-        let tx_data = extract_swap_transaction(&swap_parsed)?;
+        // Step 2: Extract unsigned transaction + request ID
+        let tx_data = extract_order_transaction(&order_parsed)?;
+        let request_id = extract_request_id(&order_parsed)?;
 
         // Step 3: Submit to OutLayer for custody-signed execution
+        // OutLayer signs the tx in TEE and submits via Jupiter /execute or its own pipeline.
         let outlayer_url = format!("{}/wallet/v1/transfer", cfg.outlayer_api);
         let transfer_body = build_outlayer_transfer_body(
             "solana",
             &args.input_mint,
-            "", // destination handled by the swap tx itself
+            "", // destination embedded in swap tx instructions
             &args.amount.to_string(),
             &tx_data,
         );
@@ -316,31 +343,33 @@ mod component {
 
         // Step 4: Return result
         let out_parsed: serde_json::Value = serde_json::from_str(&outlayer_response)
-            .unwrap_or_else(|_| serde_json::json!({"raw": outlayer_response}));
+            .unwrap_or_else(|_| serde_json::json!({ "raw": outlayer_response }));
 
-        // Check if it went through or needs approval
-        let status = out_parsed.get("status").and_then(|s| s.as_str()).unwrap_or("unknown");
-        let request_id = out_parsed
+        let status = out_parsed
+            .get("status")
+            .and_then(|s| s.as_str())
+            .unwrap_or("unknown");
+        let request_id_out = out_parsed
             .get("request_id")
             .and_then(|r| r.as_str())
-            .unwrap_or("N/A");
+            .unwrap_or(&request_id);
 
         match status {
             "completed" | "signed" => Ok(format!(
                 "Swap executed. {}. Transaction signed by OutLayer TEE. Request: {}",
-                quote_summary, request_id
+                order_summary, request_id_out
             )),
             "pending_approval" | "requires_approval" => Ok(format!(
                 "Swap pending approval. {} exceeds policy threshold — check OutLayer approval queue. Request: {}",
-                quote_summary, request_id
+                order_summary, request_id_out
             )),
             "rejected" => Err(format!(
                 "Swap rejected by OutLayer policy. {}. Request: {}",
-                quote_summary, request_id
+                order_summary, request_id_out
             )),
             _ => Ok(format!(
                 "Swap submitted to OutLayer. {} Status: {} Request: {}",
-                quote_summary, status, request_id
+                order_summary, status, request_id_out
             )),
         }
     }
@@ -355,7 +384,7 @@ mod component {
         }
 
         let token = if args.token.is_empty() {
-            "So11111111111111111111111111111111" // default to SOL
+            SOL_MINT
         } else {
             &args.token
         };
@@ -364,8 +393,8 @@ mod component {
         let response = http_get_with_auth(&url, &cfg.outlayer_api_key)
             .map_err(|e| format!("OutLayer balance request failed: {e}"))?;
 
-        let parsed: serde_json::Value = serde_json::from_str(&response)
-            .map_err(|e| format!("Failed to parse balance response: {e}"))?;
+        let parsed: serde_json::Value =
+            serde_json::from_str(&response).map_err(|e| format!("Failed to parse balance response: {e}"))?;
 
         let balance = parsed
             .get("balance")
@@ -381,10 +410,8 @@ mod component {
     // These use waki (blocking wasi:http) as the reference plugins do.
     // The host grants HTTP access only when manifest declares http_client.
 
-    fn http_get(url: &str) -> Result<String, String> {
-        // In the actual WASM component, this calls wasi:http.
-        // For now, this is the integration point — the host provides
-        // the HTTP client through the wasi:http world import.
+    fn http_get(url: &str, api_key: Option<&str>) -> Result<String, String> {
+        let _ = (url, api_key);
         Err("HTTP not available in test mode".to_string())
     }
 
