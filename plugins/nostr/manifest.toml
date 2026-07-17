@@ -1,15 +1,16 @@
 name = "nostr"
 version = "0.1.0"
-description = "Nostr channel plugin for ZeroClaw: subscribe to a relay over a host-mediated WebSocket and receive plaintext notes (kind 1) as inbound messages."
+description = "Nostr channel plugin for ZeroClaw: signed NIP-04 and NIP-17 private messages over host-mediated WebSockets."
 author = "JordanTheJet"
 wasm_path = "nostr.wasm"
 capabilities = ["channel"]
+sender_match = "exact"
 # Host-gated source: requires the `websocket_client` host capability. Keep the
 # source in this repo, but do not publish it into registry.json yet.
 registry = false
 # websocket_client: the host dials the relay `wss://` socket and pumps frames;
-# the plugin drives the Nostr REQ/EVENT protocol over it (TLS is host-side).
-# config_read: read the relays + keys + allow-list from this channel's config.
+# the plugin drives the Nostr REQ/EVENT/AUTH protocol over it (TLS is host-side).
+# config_read: read the private key and relays from this channel's config.
 permissions = ["websocket_client", "config_read"]
 # provides: mirror the built-in `nostr` channel — read [channels.nostr.*] and
 # honor native-wins. Inert on hosts without the `provides` feature (they load

@@ -1,75 +1,81 @@
-# nostr — ZeroClaw channel plugin
+# Nostr channel plugin
 
-A ZeroClaw WIT **channel** plugin for [Nostr](https://github.com/nostr-protocol/nostr).
-Nostr clients talk to relays over a persistent WebSocket, so this plugin drives
-the relay protocol over the host-mediated **`ws-client`** import (the plugin
-never opens a socket itself — the host dials the relay, performs TLS, and pumps
-frames; the plugin owns the application protocol).
+A ZeroClaw `wasm32-wasip2` channel plugin for private Nostr conversations. The
+host owns each WebSocket and TLS connection through `ws-client`; the component
+owns the Nostr relay protocol and cryptography.
 
-It mirrors the built-in `nostr` channel: it declares `provides = "nostr"` and
-reads the same `[channels.nostr.<alias>]` config, so on a host with the
-`provides` feature it is a drop-in for the native channel (native wins when
-both are present).
+The manifest declares `provides = "nostr"`, so the host injects the canonical
+`[channels.nostr.<alias>]` section. There is no plugin-specific config or sender
+allowlist. ZeroClaw applies the live `peer_groups` authorization gate to the
+decrypted sender pubkey after the component returns an inbound message. The
+plugin emits canonical 64-character lowercase hex pubkeys and declares exact
+sender matching, so peer entries for this plugin must use that wire form.
+An empty resolved peer set denies every inbound sender; `"*"` is the explicit
+operator opt-in for accepting any valid Nostr pubkey.
 
-## Scope (v0.1.0): receive-only, plaintext notes
+## Behavior
 
-This build proves the WebSocket round-trip: **subscribe to a relay and surface
-each received plaintext note (kind 1) as an inbound message.** The pure core
-does the protocol work — build the `["REQ", …]` frame, decode `["EVENT", …]` /
-`EOSE` / `NOTICE` / `OK` / `CLOSED` / `AUTH` frames, and map a note onto the
-host's inbound fields (`sender`/`reply_target` = author hex pubkey,
-`content` = note text, `timestamp` = created_at in ms).
+- Subscribes to NIP-04 kind 4 and NIP-17/NIP-59 kind 1059 events addressed to
+  the configured key.
+- Verifies each outer event signature and ID before decrypting it.
+- Decrypts legacy NIP-04 AES-256-CBC messages.
+- Validates and unwraps NIP-17 rumor, seal, and gift-wrap layers using
+  authenticated NIP-44 v2 encryption.
+- Replies with the protocol most recently used by that sender. Unsolicited
+  outbound messages default to NIP-17.
+- Fans out subscriptions and publishes across every configured relay, suppresses
+  duplicate events, reconnects dropped sockets, and retains a bounded in-memory
+  publish queue until relay acknowledgements arrive.
+- Handles NIP-42 relay authentication challenges with signed kind 22242 events,
+  then re-subscribes and retries pending publishes after authentication.
+- Reports healthy only while at least one host-owned relay connection is live.
 
-Two features are deliberately **deferred** — both need secp256k1 (schnorr) and
-AES, which are too heavy for the dependency-free pure core:
+The cryptographic implementation uses pure-Rust RustCrypto primitives so the
+component builds reproducibly for WASI Preview 2. NIP-44 follows the current
+32-byte nonce and extended-length format, verifies HMAC-SHA256 in constant time
+before decrypting, and is tested against the official vector.
 
-- **Encrypted DMs are not read.** Kind-4 (NIP-04) and NIP-17 gift-wrapped DMs
-  require secp256k1 ECDH + AES to decrypt, so they are filtered out. We
-  subscribe to **kind 1** (public notes / mentions) instead.
-- **Outbound `send` is not implemented.** Publishing a note means schnorr-signing
-  an event with your private key (BIP-340 over secp256k1). Until that lands,
-  `send` returns an explicit error rather than silently dropping the reply.
+## Configuration
 
-The follow-up is to pull in a pure-Rust schnorr/secp256k1 implementation
-(e.g. `k256` with the `schnorr` feature) so the plugin can sign events (enabling
-`send`) and do NIP-04/NIP-17 decrypt (enabling encrypted DMs), plus `bech32` to
-accept `npub…`/`nsec…` keys.
+```toml
+[channels.nostr.default]
+enabled = true
+private_key = "nsec1..." # 64-character hex is also accepted
+relays = [
+  "wss://relay.damus.io",
+  "wss://nos.lol",
+]
+```
 
-## Config — `[channels.nostr.<alias>]`
+`private_key` and `relays` are the only channel fields consumed by the plugin.
+The host's canonical Nostr config supplies its default relay set when `relays`
+is omitted. An explicitly empty list remains empty, makes the health check fail,
+and opens no network connections. Outbound recipients may be 64-character hex
+pubkeys or `npub1...`.
 
-Mirrors the native channel, plus a few plugin conveniences:
+## Host gate and limits
 
-- `relays` (array of `wss://` URLs) — the plugin connects to the **first** one
-  (single-relay in v0.1.0; fan-out is a follow-up). Defaults to the same public
-  relay set as the native channel when omitted.
-- `relay_url` / `relay` (string) — convenience aliases appended to `relays`.
-- `pubkey` / `public_key` (64-char hex) — **optional but recommended.** When
-  set, the subscription narrows to notes that `#p`-tag you (mentions/replies)
-  and it is reported as the bot's self-handle so the runtime drops your own
-  notes. When absent, the plugin samples the relay's recent kind-1 notes.
-  (The native channel derives this from `private_key`; the pure core can't, so
-  it is supplied explicitly. `npub…` is not yet accepted — use hex.)
-- `private_key` / `secret_key` (hex or nsec) — read and retained for the future
-  signed `send`; unused in this receive-only build.
-- `allowed_pubkeys` (array of hex pubkeys, or `["*"]`) — sender allow-list.
-  Empty = allow everyone; non-empty gates by author.
-- `kinds` (array of ints) — event kinds to subscribe to (default `[1]`).
-- `subscription_id` (string, default `"sub1"`) and `limit` (int, default `20`).
+`registry = false` remains required until ZeroClaw's `websocket_client` host
+capability reaches upstream master. The source and component are functional on
+a host that provides that import, but stock upstream cannot instantiate it yet.
 
-## Capabilities & permissions
+- Text private messages only; NIP-17 file messages, reactions, edits, deletes,
+  group-chat fan-out, and attachments are not implemented.
+- The plugin uses the configured relay set. NIP-65/NIP-17 preferred-relay
+  discovery is not implemented.
+- Outbound success means at least one host socket accepted the frame. Relay
+  acknowledgements and authentication retries are tracked asynchronously by
+  subsequent polls; pending state is bounded and not persisted across restart.
+- New chat messages are capped at 64 KiB. Decryption is bounded at 1 MiB to
+  reject oversized relay payloads before excessive allocation.
+- NIP-04 is supported only for compatibility and remains deprecated by Nostr.
 
-- `get_channel_capabilities()` = `HEALTH_CHECK | SELF_HANDLE` (no
-  `WEBHOOK_INGRESS` — this is a WebSocket, not a webhook, channel).
-- Permissions: `websocket_client` (host-mediated relay socket) and `config_read`.
-
-## Build & test
+## Build and test
 
 ```sh
-# pure core, host:
-cargo test --lib
-
-# wasm component:
-rustup target add wasm32-wasip2
+cargo fmt --all -- --check
+cargo test
+cargo clippy --all-targets -- -D warnings
 cargo build --target wasm32-wasip2 --release
-# → target/wasm32-wasip2/release/nostr.wasm  (copy next to manifest.toml)
+cargo clippy --target wasm32-wasip2 -- -D warnings
 ```

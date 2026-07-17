@@ -7,16 +7,27 @@ name = "nostr"
 version = "0.1.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
-description = "Nostr channel plugin for ZeroClaw: subscribe to a relay over a host-mediated WebSocket and receive plaintext notes (kind 1) as inbound messages."
+description = "Nostr channel plugin for ZeroClaw: NIP-04 and NIP-17 private messages over host-mediated WebSockets."
 publish = false
 
 [lib]
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-wit-bindgen = "0.46"
+aes = "0.8"
+base64 = "0.22"
+bech32 = "0.11"
+cbc = { version = "0.1", features = ["alloc"] }
+chacha20 = "0.9"
+getrandom = "0.3"
+hex = "0.4"
+hkdf = "0.12"
+hmac = "0.12"
+k256 = { version = "0.13.4", default-features = false, features = ["ecdh", "schnorr", "std"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+sha2 = "0.10"
+wit-bindgen = "0.46"
 
 [profile.release]
 opt-level = "s"
