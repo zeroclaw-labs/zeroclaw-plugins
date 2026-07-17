@@ -61,7 +61,9 @@ done
 (cd plugins/token-risk-check && cargo build --target wasm32-wasip2 --release)
 python3 tools/build-registry.py --help >/dev/null
 git diff --check
-rg -n 'println!|eprintln!|dbg!' plugins/token-risk-check && exit 1 || true
+if rg -n 'println!|eprintln!|dbg!' plugins/token-risk-check --glob '!target/**'; then
+  exit 1
+fi
 ~~~
 
 The term check found all six terms. The explicit source-code list check found all 36 documented stable codes: `CODE_CROSSCHECK=PASS stable_codes=36`. Host tests passed with 34 integration tests and zero failures. Host and WASM all-target Clippy checks with warnings denied, format check, release WASM build, registry tool help check, diff check, and stdout scan completed with exit code 0. The release artifact was built at `plugins/token-risk-check/target/wasm32-wasip2/release/token_risk_check.wasm`; it remains an untracked build output and is not included in the Task 6 diff.
@@ -73,3 +75,23 @@ The term check found all six terms. The explicit source-code list check found al
 - The endpoint privacy statement identifies the configured RPC service as the trust boundary without suggesting that HTTPS makes the provider trusted.
 - The example uses public-looking values and is explicitly illustrative; no secret, key, signature, transaction, or live result is included.
 - The root catalog remains untouched by design. The remaining operational gap is external publication and runtime demonstration, which are Task 7 work and were not started.
+
+## Review Fix From `1fdf40d`
+
+The runtime configuration syntax and injection path were verified against the local ZeroClaw runtime checkout:
+
+- `crates/zeroclaw-config/src/schema.rs` defines `plugins.entries` as `Vec<PluginEntryConfig>`; each entry has `name` and a string-to-string `config` map.
+- `crates/zeroclaw-plugins/tests/reference_plugin_e2e.rs` uses `[[plugins.entries]]`, `name = "..."`, and `[plugins.entries.config]` in its executable fixture.
+- `crates/zeroclaw-plugins/src/runtime.rs` removes caller-supplied `__config` and injects the resolved entry config only when the manifest grants `config_read`.
+
+The README now uses that exact TOML shape with `name = "token-risk-check"` and `rpc_url` under `[plugins.entries.config]`. It also states that red is limited to explicit high-risk Token-2022 rules; invalid or unsupported evidence is unknown. Request wording now says at most two sequential POSTs, with the second sent only after the first succeeds. The prompt-injection section distinguishes schema guidance from the strict component parser that enforces argument rejection before network access.
+
+The original report displayed a shell scan whose trailing `|| true` could mask a match. The corrected scan above was run directly:
+
+~~~bash
+if rg -n 'println!|eprintln!|dbg!' plugins/token-risk-check --glob '!target/**'; then
+  exit 1
+fi
+~~~
+
+It produced no matches and exited `0`. Term checks, the 36-code README cross-check, documentation consistency checks, host tests, host and WASM all-target Clippy with warnings denied, format, release WASM build, registry tool validation, and diff checks were rerun after these review fixes.

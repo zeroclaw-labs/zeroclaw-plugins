@@ -21,7 +21,7 @@ The result contains lowercase verdict values:
 
 | Verdict | Meaning |
 |---|---|
-| red | A high-risk rule fired: unsupported or invalid evidence, an active permanent delegate, transfer hook, confidential transfer, non-transferable token, or another explicitly red Token-2022 condition. |
+| red | One or more explicit high-risk Token-2022 rules fired: transfer hook, permanent delegate, confidential transfer, or non-transferable token. Invalid or unsupported evidence returns unknown, not red. |
 | amber | Required evidence is usable, but a caution rule fired, such as an active mint or freeze authority, transfer fee, frozen default account state, an unknown extension, or top-account concentration at or above 5,000 basis points. |
 | green | Required evidence is complete and no red or amber rule fired. This is not a safety claim. |
 | unknown | Required evidence is missing, malformed, contradictory, unavailable, or exceeds a bound. Unknown is fail-closed and is never converted to green. |
@@ -33,11 +33,14 @@ The top-token-account threshold is **5,000 basis points inclusive** (50%): a cal
 The manifest requests http_client and config_read. Configure exactly one operator-controlled rpc_url in the plugin's own config section:
 
 ~~~toml
-[plugins.entries.token-risk-check.config]
+[[plugins.entries]]
+name = "token-risk-check"
+
+[plugins.entries.config]
 rpc_url = "https://api.mainnet-beta.solana.com"
 ~~~
 
-The host injects that value as __config.rpc_url after resolving the jailed plugin config. The URL must be HTTPS, have a host, and contain no userinfo, query, or fragment. Do not put credentials in the URL. The RPC operator can observe the queried mint and both fixed methods, so choose an endpoint whose privacy policy and retention are acceptable. The component does not log the endpoint, mint, arguments, or raw responses.
+The runtime selects the `[[plugins.entries]]` item whose `name` matches the plugin and resolves its nested `config` string map. Because this manifest grants `config_read`, the runtime removes any caller-supplied `__config` and injects that resolved map into the tool input, making the configured value available as `__config.rpc_url`. The URL must be HTTPS, have a host, and contain no userinfo, query, or fragment. Do not put credentials in the URL. The RPC operator can observe the queried mint and both fixed methods, so choose an endpoint whose privacy policy and retention are acceptable. The component does not log the endpoint, mint, arguments, or raw responses.
 
 ## Install, build, and use
 
@@ -111,11 +114,11 @@ Caller text cannot alter the policy. A prompt-injected tool call such as:
 }
 ~~~
 
-is rejected by the model-facing additionalProperties: false schema. If it reaches the component, strict argument parsing returns INVALID_EXECUTE_ARGS before any network request. The caller cannot replace the endpoint, threshold, or method. A valid __config.rpc_url is accepted only when injected by the host's jailed config path, not when supplied as a model policy override.
+violates the model-facing `additionalProperties: false` schema, which guides tool-call generation but is not the security boundary. The component's strict argument parser independently rejects the caller-supplied `rpc_url`, `threshold`, and `method` with `INVALID_EXECUTE_ARGS` before any network request. The runtime also strips caller-supplied `__config`; only the host-resolved plugin config can provide `__config.rpc_url`.
 
 ## Bounds and fail-closed behavior
 
-- Exactly two sequential HTTPS POSTs are attempted, with no retry or fallback endpoint.
+- At most two sequential HTTPS POSTs are attempted. The second request is sent only after the first request succeeds; there is no retry or fallback endpoint.
 - Each streamed response is capped at 1 MiB before JSON parsing. The component reads at most 64 KiB per chunk and rejects an empty read or invalid UTF-8.
 - Serialized output is capped at 8 KiB. More than 12 reasons, or an output that exceeds the cap, becomes a compact unknown result with OUTPUT_TOO_LARGE.
 - Reasons are ordered red first, then by stable code. Unknown extension names are truncated to 32 characters and error text to 160 characters.
