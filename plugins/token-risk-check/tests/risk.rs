@@ -484,7 +484,17 @@ fn owner_request_rejects_invalid_addresses() {
 
     assert_eq!(
         owner_accounts_request_body(&largest),
-        Err(RiskError::InvalidMint)
+        Err(RiskError::InvalidLargestAccount)
+    );
+    assert_eq!(
+        assess_with_evidence(
+            SAFE_MINT,
+            include_str!("fixtures/legacy-safe-account.json"),
+            &largest,
+            include_str!("fixtures/owners-dispersed.json"),
+            include_str!("fixtures/liquidity-observed.json"),
+        ),
+        Err(RiskError::InvalidLargestAccount)
     );
 }
 
@@ -573,14 +583,18 @@ fn stream_accumulator_stops_before_appending_chunk_that_crosses_boundary() {
 
 #[test]
 fn stream_errors_have_stable_bounded_unknown_codes() {
-    assert_eq!(ShimError::HttpTransport.code(), "HTTP_TRANSPORT_ERROR");
-    assert_eq!(ShimError::BodyRead.code(), "HTTP_BODY_READ_ERROR");
-    assert_eq!(ShimError::Timeout.code(), "TIMEOUT");
-    assert_eq!(ShimError::ResponseTooLarge.code(), "RESPONSE_TOO_LARGE");
-    assert_eq!(
-        ShimError::ResponseBufferFailure.code(),
-        "RESPONSE_BUFFER_ERROR"
-    );
+    for (error, expected_code) in [
+        (ShimError::HttpTransport, "HTTP_TRANSPORT_ERROR"),
+        (ShimError::BodyRead, "HTTP_BODY_READ_ERROR"),
+        (ShimError::Timeout, "TIMEOUT"),
+        (ShimError::ResponseTooLarge, "RESPONSE_TOO_LARGE"),
+        (ShimError::ResponseBufferFailure, "RESPONSE_BUFFER_ERROR"),
+    ] {
+        assert_eq!(error.code(), expected_code);
+        let report = unknown_report(error.code(), error.code());
+        assert_eq!(report.verdict, Verdict::Unknown);
+        assert_eq!(report.evidence.liquidity_status, LiquidityStatus::Unknown);
+    }
 }
 
 #[test]
@@ -1306,6 +1320,12 @@ fn unknown_reports_use_typed_codes_and_bound_error_messages() {
     assert_eq!(report.verdict, Verdict::Unknown);
     assert_eq!(report.reasons[0].code, "MALFORMED_RPC_RESPONSE");
     assert_eq!(report.reasons[0].message.chars().count(), 160);
+    assert_eq!(report.evidence.liquidity_status, LiquidityStatus::Unknown);
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&serialize_report(&report)).unwrap()["evidence"]
+            ["liquidity_status"],
+        "unknown"
+    );
     assert!(report
         .limitations
         .iter()
@@ -1398,6 +1418,7 @@ fn serialization_is_valid_json_below_the_cap_or_minimal_unknown() {
     let value: serde_json::Value = serde_json::from_str(&output).unwrap();
     assert_eq!(value["verdict"], "unknown");
     assert_eq!(value["reasons"][0]["code"], "OUTPUT_TOO_LARGE");
+    assert_eq!(value["evidence"]["liquidity_status"], "unknown");
 }
 
 #[test]
@@ -1477,6 +1498,11 @@ fn malformed_owner_or_liquidity_evidence_maps_to_stable_unknown() {
         let report = unknown_report(error.code(), &error.to_string());
         assert_eq!(report.verdict, Verdict::Unknown, "{label}");
         assert_eq!(reason_codes(&report), vec![expected_code], "{label}");
+        assert_eq!(
+            report.evidence.liquidity_status,
+            LiquidityStatus::Unknown,
+            "{label}"
+        );
         assert!(serialize_report(&report).len() <= 8 * 1024, "{label}");
     }
 }

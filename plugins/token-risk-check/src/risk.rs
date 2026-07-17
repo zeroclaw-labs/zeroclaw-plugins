@@ -109,7 +109,7 @@ pub fn owner_accounts_request_body(largest_json: &str) -> Result<String, RiskErr
     let mut seen = HashSet::with_capacity(largest.value.len());
     let mut addresses = Vec::with_capacity(largest.value.len());
     for account in largest.value {
-        validate_mint(&account.address)?;
+        validate_mint(&account.address).map_err(|_| RiskError::InvalidLargestAccount)?;
         if !seen.insert(account.address.clone()) {
             return Err(RiskError::InvalidLargestAccount);
         }
@@ -239,7 +239,7 @@ pub fn unknown_report(code: &str, message: &str) -> RiskReport {
             freeze_authority_revoked: false,
             top_account_bps: None,
             top_observed_owner_bps: None,
-            liquidity_status: LiquidityStatus::NotObserved,
+            liquidity_status: LiquidityStatus::Unknown,
             liquidity_pair_count: 0,
             max_liquidity_usd: None,
             liquidity_source: "unknown".to_owned(),
@@ -267,7 +267,7 @@ pub fn serialize_report(report: &RiskReport) -> String {
 fn serialize_minimal_unknown() -> String {
     let fallback = unknown_report("OUTPUT_TOO_LARGE", "Risk report exceeded output size limit");
     serde_json::to_string(&fallback).unwrap_or_else(|_| {
-        "{\"verdict\":\"unknown\",\"reasons\":[],\"evidence\":{\"token_program\":\"unknown\",\"supply\":\"unknown\",\"decimals\":0,\"mint_authority_revoked\":false,\"freeze_authority_revoked\":false,\"top_account_bps\":null,\"top_observed_owner_bps\":null,\"liquidity_status\":\"not_observed\",\"liquidity_pair_count\":0,\"max_liquidity_usd\":null,\"liquidity_source\":\"unknown\"},\"limitations\":[\"EVIDENCE_UNAVAILABLE\"],\"slots\":{\"account\":0,\"largest_accounts\":0,\"owner_accounts\":0}}".to_owned()
+        "{\"verdict\":\"unknown\",\"reasons\":[],\"evidence\":{\"token_program\":\"unknown\",\"supply\":\"unknown\",\"decimals\":0,\"mint_authority_revoked\":false,\"freeze_authority_revoked\":false,\"top_account_bps\":null,\"top_observed_owner_bps\":null,\"liquidity_status\":\"unknown\",\"liquidity_pair_count\":0,\"max_liquidity_usd\":null,\"liquidity_source\":\"unknown\"},\"limitations\":[\"EVIDENCE_UNAVAILABLE\"],\"slots\":{\"account\":0,\"largest_accounts\":0,\"owner_accounts\":0}}".to_owned()
     })
 }
 

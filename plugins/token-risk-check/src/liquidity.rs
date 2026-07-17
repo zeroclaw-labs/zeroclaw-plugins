@@ -12,6 +12,7 @@ const MAX_FIELD_CHARS: usize = 64;
 pub enum LiquidityStatus {
     Observed,
     NotObserved,
+    Unknown,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

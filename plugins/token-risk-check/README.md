@@ -30,7 +30,7 @@ The result contains lowercase verdict values:
 
 The concentration threshold is **5,000 basis points inclusive** (50%): `top_account_bps` or `top_observed_owner_bps` equal to 5000 is Amber. Solana returns at most 20 largest token accounts. Amounts from those accounts are aggregated by parsed wallet owner, so `top_observed_owner_bps` is a **lower bound**, not a complete holder census or identity claim. `OWNER_CONCENTRATION_TOP_ACCOUNTS_ONLY` and `TOP_ACCOUNTS_ARE_NOT_UNIQUE_HOLDERS` make that scope explicit.
 
-`liquidity_status` is `observed` only when DEX Screener returns at least one matching Solana pair with positive `liquidity.usd`. An empty response or zero-only pairs produce Amber `LIQUIDITY_NOT_OBSERVED`. `liquidity_pair_count`, `max_liquidity_usd`, and `liquidity_source` describe the bounded observation. `DEXSCREENER_COVERAGE_ONLY` means absence is not proof that no on-chain liquidity exists. The tool does not verify LP lock, burn, ownership, market depth, slippage, price quality, or sellability.
+`liquidity_status` is `observed` only when DEX Screener returns at least one matching Solana pair with positive `liquidity.usd`. Only a successfully parsed empty response or zero-only pair set is `not_observed` and produces Amber `LIQUIDITY_NOT_OBSERVED`. Transport failures, malformed responses, and other unavailable evidence serialize as `unknown`, never `not_observed`. `liquidity_pair_count`, `max_liquidity_usd`, and `liquidity_source` describe the bounded observation. `DEXSCREENER_COVERAGE_ONLY` means absence is not proof that no on-chain liquidity exists. The tool does not verify LP lock, burn, ownership, market depth, slippage, price quality, or sellability.
 
 ## Configuration
 
