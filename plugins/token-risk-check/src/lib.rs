@@ -6,10 +6,51 @@ const MAX_RESPONSE_BODY_BYTES: usize = 1024 * 1024;
 const MAX_RESPONSE_CHUNK_BYTES: usize = 64 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HttpTimeouts {
+    pub connect_ns: u64,
+    pub first_byte_ns: u64,
+    pub between_bytes_ns: u64,
+    pub full_response_ns: u64,
+}
+
+impl Default for HttpTimeouts {
+    fn default() -> Self {
+        Self {
+            connect_ns: 5_000_000_000,
+            first_byte_ns: 10_000_000_000,
+            between_bytes_ns: 5_000_000_000,
+            full_response_ns: 15_000_000_000,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Deadline {
+    expires_at_ns: u64,
+}
+
+impl Deadline {
+    pub fn new(start_ns: u64, duration_ns: u64) -> Result<Self, ShimError> {
+        let expires_at_ns = start_ns
+            .checked_add(duration_ns)
+            .ok_or(ShimError::Timeout)?;
+        Ok(Self { expires_at_ns })
+    }
+
+    pub fn remaining_ns(self, now_ns: u64) -> Result<u64, ShimError> {
+        self.expires_at_ns
+            .checked_sub(now_ns)
+            .filter(|remaining| *remaining > 0)
+            .ok_or(ShimError::Timeout)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ShimError {
     InvalidMint,
     RequestSerialization,
     HttpTransport,
+    Timeout,
     HttpStatus,
     BodyRead,
     ResponseTooLarge,
@@ -23,6 +64,7 @@ impl ShimError {
             Self::InvalidMint => "INVALID_MINT",
             Self::RequestSerialization => "REQUEST_SERIALIZATION_ERROR",
             Self::HttpTransport => "HTTP_TRANSPORT_ERROR",
+            Self::Timeout => "TIMEOUT",
             Self::HttpStatus => "HTTP_STATUS_ERROR",
             Self::BodyRead => "HTTP_BODY_READ_ERROR",
             Self::ResponseTooLarge => "RESPONSE_TOO_LARGE",
@@ -116,9 +158,25 @@ mod component {
     });
 
     use crate::risk::{assess, parse_execute_args, serialize_report, unknown_report, Verdict};
-    use crate::{parameters_schema, rpc_request_bodies, ResponseBodyAccumulator, ShimError};
+    use crate::{
+        parameters_schema, rpc_request_bodies, Deadline, HttpTimeouts, ResponseBodyAccumulator,
+        ShimError,
+    };
     use exports::zeroclaw::plugin::plugin_info::Guest as PluginInfo;
     use exports::zeroclaw::plugin::tool::{Guest as Tool, ToolResult};
+    use url::{Position, Url};
+    use waki::bindings::wasi::clocks::monotonic_clock;
+    use waki::bindings::wasi::http::{
+        outgoing_handler,
+        types::{
+            ErrorCode, FutureIncomingResponse, Headers, IncomingResponse, Method, OutgoingBody,
+            OutgoingRequest, RequestOptions, Scheme,
+        },
+    };
+    use waki::bindings::wasi::io::{
+        poll::{self, Pollable},
+        streams::{InputStream, StreamError},
+    };
     use zeroclaw::plugin::logging::{
         log_record, LogLevel, PluginAction, PluginEvent, PluginOutcome,
     };
@@ -191,29 +249,184 @@ mod component {
     }
 
     fn post_json(endpoint: &str, request: &str) -> Result<String, ShimError> {
-        let response = waki::Client::new()
-            .post(endpoint)
-            .header("Content-Type", "application/json")
-            .body(request.as_bytes().to_vec())
-            .send()
-            .map_err(|_| ShimError::HttpTransport)?;
-        let status = response.status_code();
+        let timeouts = HttpTimeouts::default();
+        let response = send_request(endpoint, request.as_bytes(), timeouts)?;
+        let status = response.status();
         if !(200..300).contains(&status) {
             return Err(ShimError::HttpStatus);
         }
 
+        let body = response.consume().map_err(|_| ShimError::BodyRead)?;
+        drop(response);
+        let stream = body.stream().map_err(|_| ShimError::BodyRead)?;
         let mut accumulator = ResponseBodyAccumulator::new();
+        let read_deadline = Deadline::new(monotonic_clock::now(), timeouts.full_response_ns)?;
         loop {
-            let chunk = response
-                .chunk(accumulator.next_chunk_len())
-                .map_err(|_| ShimError::BodyRead)?;
-            match chunk {
-                Some(chunk) if chunk.is_empty() => return Err(ShimError::BodyRead),
-                Some(chunk) => accumulator.push_chunk(&chunk)?,
-                None => break,
+            let idle_deadline = Deadline::new(monotonic_clock::now(), timeouts.between_bytes_ns)?;
+            wait_for_stream(&stream, read_deadline, idle_deadline)?;
+            match stream.read(accumulator.next_chunk_len()) {
+                Ok(chunk) if chunk.is_empty() => return Err(ShimError::BodyRead),
+                Ok(chunk) => accumulator.push_chunk(&chunk)?,
+                Err(StreamError::Closed) => break,
+                Err(error) => return Err(classify_stream_error(&error, ShimError::BodyRead)),
             }
         }
+        drop(stream);
+        drop(body);
         accumulator.finish()
+    }
+
+    fn send_request(
+        endpoint: &str,
+        request_body: &[u8],
+        timeouts: HttpTimeouts,
+    ) -> Result<IncomingResponse, ShimError> {
+        let url = Url::parse(endpoint).map_err(|_| ShimError::HttpTransport)?;
+        let headers =
+            Headers::from_list(&[("Content-Type".to_string(), b"application/json".to_vec())])
+                .map_err(|_| ShimError::HttpTransport)?;
+        let request = OutgoingRequest::new(headers);
+        request
+            .set_method(&Method::Post)
+            .map_err(|_| ShimError::HttpTransport)?;
+        request
+            .set_scheme(Some(&Scheme::Https))
+            .map_err(|_| ShimError::HttpTransport)?;
+        request
+            .set_authority(Some(&url[Position::BeforeHost..Position::AfterPort]))
+            .map_err(|_| ShimError::HttpTransport)?;
+        request
+            .set_path_with_query(Some(&url[Position::BeforePath..Position::AfterQuery]))
+            .map_err(|_| ShimError::HttpTransport)?;
+
+        let outgoing_body = request.body().map_err(|_| ShimError::HttpTransport)?;
+        let options = RequestOptions::new();
+        options
+            .set_connect_timeout(Some(timeouts.connect_ns))
+            .map_err(|_| ShimError::HttpTransport)?;
+        options
+            .set_first_byte_timeout(Some(timeouts.first_byte_ns))
+            .map_err(|_| ShimError::HttpTransport)?;
+        options
+            .set_between_bytes_timeout(Some(timeouts.between_bytes_ns))
+            .map_err(|_| ShimError::HttpTransport)?;
+
+        let response_deadline = Deadline::new(
+            monotonic_clock::now(),
+            timeouts
+                .connect_ns
+                .checked_add(timeouts.first_byte_ns)
+                .ok_or(ShimError::Timeout)?,
+        )?;
+        let future =
+            outgoing_handler::handle(request, Some(options)).map_err(classify_http_error)?;
+        write_request_body(&outgoing_body, request_body, response_deadline)?;
+        OutgoingBody::finish(outgoing_body, None).map_err(|_| ShimError::HttpTransport)?;
+        await_response(&future, response_deadline)
+    }
+
+    fn write_request_body(
+        outgoing_body: &OutgoingBody,
+        mut bytes: &[u8],
+        deadline: Deadline,
+    ) -> Result<(), ShimError> {
+        let stream = outgoing_body
+            .write()
+            .map_err(|_| ShimError::HttpTransport)?;
+        while !bytes.is_empty() {
+            wait_for_pollable(&stream.subscribe(), deadline)?;
+            let permit = stream
+                .check_write()
+                .map_err(|error| classify_stream_error(&error, ShimError::HttpTransport))?;
+            if permit == 0 {
+                continue;
+            }
+            let len = bytes.len().min(permit as usize);
+            let (chunk, remaining) = bytes.split_at(len);
+            stream
+                .write(chunk)
+                .map_err(|error| classify_stream_error(&error, ShimError::HttpTransport))?;
+            bytes = remaining;
+        }
+        stream
+            .flush()
+            .map_err(|error| classify_stream_error(&error, ShimError::HttpTransport))?;
+        wait_for_pollable(&stream.subscribe(), deadline)?;
+        stream
+            .check_write()
+            .map_err(|error| classify_stream_error(&error, ShimError::HttpTransport))?;
+        drop(stream);
+        Ok(())
+    }
+
+    fn await_response(
+        future: &FutureIncomingResponse,
+        deadline: Deadline,
+    ) -> Result<IncomingResponse, ShimError> {
+        let response = match future.get() {
+            Some(response) => response,
+            None => {
+                wait_for_pollable(&future.subscribe(), deadline)?;
+                future.get().ok_or(ShimError::HttpTransport)?
+            }
+        };
+        response
+            .map_err(|_| ShimError::HttpTransport)?
+            .map_err(classify_http_error)
+    }
+
+    fn wait_for_stream(
+        stream: &InputStream,
+        total_deadline: Deadline,
+        idle_deadline: Deadline,
+    ) -> Result<(), ShimError> {
+        let now = monotonic_clock::now();
+        let remaining = total_deadline
+            .remaining_ns(now)?
+            .min(idle_deadline.remaining_ns(now)?);
+        wait_for_duration(&stream.subscribe(), remaining)
+    }
+
+    fn wait_for_pollable(pollable: &Pollable, deadline: Deadline) -> Result<(), ShimError> {
+        wait_for_duration(pollable, deadline.remaining_ns(monotonic_clock::now())?)
+    }
+
+    fn wait_for_duration(pollable: &Pollable, duration_ns: u64) -> Result<(), ShimError> {
+        let timer = monotonic_clock::subscribe_duration(duration_ns);
+        let ready = poll::poll(&[pollable, &timer]);
+        if ready.contains(&1) {
+            return Err(ShimError::Timeout);
+        }
+        if ready.contains(&0) {
+            Ok(())
+        } else {
+            Err(ShimError::HttpTransport)
+        }
+    }
+
+    fn classify_http_error(error: ErrorCode) -> ShimError {
+        match error {
+            ErrorCode::DnsTimeout
+            | ErrorCode::ConnectionTimeout
+            | ErrorCode::ConnectionReadTimeout
+            | ErrorCode::ConnectionWriteTimeout
+            | ErrorCode::HttpResponseTimeout => ShimError::Timeout,
+            _ => ShimError::HttpTransport,
+        }
+    }
+
+    fn classify_stream_error(error: &StreamError, fallback: ShimError) -> ShimError {
+        match error {
+            StreamError::LastOperationFailed(error)
+                if error
+                    .to_debug_string()
+                    .to_ascii_lowercase()
+                    .contains("timeout") =>
+            {
+                ShimError::Timeout
+            }
+            StreamError::LastOperationFailed(_) | StreamError::Closed => fallback,
+        }
     }
 
     fn unknown_result(code: &'static str) -> ToolResult {

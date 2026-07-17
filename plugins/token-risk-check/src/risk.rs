@@ -221,7 +221,11 @@ pub fn assess(mint: &str, account_json: &str, largest_json: &str) -> Result<Risk
     }
 
     let token_program = token_program_name(&account_value.owner)?;
-    let info = account_value.data.parsed.info;
+    let parsed = account_value.data.parsed;
+    if parsed.account_type != "mint" {
+        return Err(RiskError::MalformedRpcResponse);
+    }
+    let info = parsed.info;
     if !info.is_initialized {
         return Err(RiskError::MalformedRpcResponse);
     }
@@ -507,6 +511,8 @@ struct ParsedData {
 #[derive(Deserialize)]
 struct ParsedAccount {
     info: MintInfo,
+    #[serde(rename = "type")]
+    account_type: String,
 }
 
 #[derive(Deserialize)]

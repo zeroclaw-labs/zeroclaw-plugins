@@ -11,7 +11,7 @@ The tool validates the mint as a 32-byte base58 public key, accepts only the leg
 - getAccountInfo with jsonParsed, JSON-RPC ID 1;
 - getTokenLargestAccounts, JSON-RPC ID 2.
 
-It checks initialization, supply, decimals, mint authority, freeze authority, the largest supplied token-account concentration, and supported Token-2022 extensions. The two responses must have the same RPC slot. The exact request methods and IDs are fixed in the component; the model cannot choose them.
+It requires `account.data.parsed.type` to be exactly `mint`, then checks initialization, supply, decimals, mint authority, freeze authority, the largest supplied token-account concentration, and supported Token-2022 extensions. The two responses must have the same RPC slot. The exact request methods and IDs are fixed in the component; the model cannot choose them.
 
 This is a bounded evidence check, not a safety guarantee, audit, investment recommendation, or proof that a token can be sold.
 
@@ -99,7 +99,7 @@ The following is a public-value, illustrative response for a 1,000,000,000 unit 
 
 T0 means the component has no custody or transaction authority. It accepts no secret key, signature, transaction, arbitrary RPC method, arbitrary endpoint, or caller-selected threshold. The only model-call parameter is mint; the host-injected __config object is outside the model-call schema and supplies the operator's rpc_url.
 
-The configured HTTPS RPC endpoint is the chain-data trust boundary. TLS protects the connection in transit, but the endpoint can misreport, omit, delay, or reorder evidence. The component binds the two responses to fixed methods and IDs, but standard responses do not echo the queried mint, so this is not independent mint-identity proof. No retries are made.
+The configured HTTPS RPC endpoint is the chain-data trust boundary. TLS protects the connection in transit, but the endpoint can misreport, omit, delay within enforced deadlines, or reorder evidence. The component binds the two responses to fixed methods and IDs, but standard responses do not echo the queried mint, so this is not independent mint-identity proof. No retries are made.
 
 ## Prompt-injection test
 
@@ -119,6 +119,8 @@ violates the model-facing `additionalProperties: false` schema, which guides too
 ## Bounds and fail-closed behavior
 
 - At most two sequential HTTPS POSTs are attempted. The second request is sent only after the first request succeeds; there is no retry or fallback endpoint.
+- Each POST sets WASI host transport options of 5 seconds for TCP connection, 10 seconds for the first response byte, and 5 seconds between response bytes. A separate 15-second guest monotonic deadline covers request-body writes and the complete wait for response headers, including HTTPS setup not covered by a host TCP timer.
+- After response headers arrive, each body-stream wait is limited to 5 seconds and the entire body must reach EOF within 15 seconds. A deadline returns unknown with `TIMEOUT`.
 - Each streamed response is capped at 1 MiB before JSON parsing. The component reads at most 64 KiB per chunk and rejects an empty read or invalid UTF-8.
 - Serialized output is capped at 8 KiB. More than 12 reasons, or an output that exceeds the cap, becomes a compact unknown result with OUTPUT_TOO_LARGE.
 - Reasons are ordered red first, then by stable code. Unknown extension names are truncated to 32 characters and error text to 160 characters.
@@ -144,7 +146,7 @@ These are the stable reason codes produced by the assessment rules:
 
 Stable core and transport error codes are:
 
-INVALID_MINT, INVALID_RPC_URL, MALFORMED_RPC_RESPONSE, JSON_RPC_ERROR, NULL_ACCOUNT, ZERO_SUPPLY, INVALID_LARGEST_ACCOUNT, INCONSISTENT_SUPPLY, INCONSISTENT_SLOTS, RESPONSE_ID_MISMATCH, INVALID_AUTHORITY, UNSUPPORTED_TOKEN_PROGRAM, INVALID_EXECUTE_ARGS, REQUEST_SERIALIZATION_ERROR, HTTP_TRANSPORT_ERROR, HTTP_STATUS_ERROR, HTTP_BODY_READ_ERROR, RESPONSE_TOO_LARGE, RESPONSE_BUFFER_ERROR, RESPONSE_NOT_UTF8.
+INVALID_MINT, INVALID_RPC_URL, MALFORMED_RPC_RESPONSE, JSON_RPC_ERROR, NULL_ACCOUNT, ZERO_SUPPLY, INVALID_LARGEST_ACCOUNT, INCONSISTENT_SUPPLY, INCONSISTENT_SLOTS, RESPONSE_ID_MISMATCH, INVALID_AUTHORITY, UNSUPPORTED_TOKEN_PROGRAM, INVALID_EXECUTE_ARGS, REQUEST_SERIALIZATION_ERROR, HTTP_TRANSPORT_ERROR, TIMEOUT, HTTP_STATUS_ERROR, HTTP_BODY_READ_ERROR, RESPONSE_TOO_LARGE, RESPONSE_BUFFER_ERROR, RESPONSE_NOT_UTF8.
 
 Stable limitation codes are:
 
@@ -160,3 +162,7 @@ ASSESSMENT_COMPLETE is a log-only completion code; it is not a risk reason. The 
 - Top token accounts are not unique holders, and LP status remains LP_STATUS_NOT_CHECKED / not_checked.
 - Parsed RPC evidence cannot prove mint identity independently because the standard response bodies do not echo the queried mint.
 - No live-network result is implied by the examples or build instructions.
+
+## License
+
+This plugin is distributed under the MIT License in `LICENSE`.

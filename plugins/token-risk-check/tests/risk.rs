@@ -3,8 +3,8 @@ use token_risk_check::risk::{
     Evidence, Reason, RiskError, RiskReport, Slots, Verdict,
 };
 use token_risk_check::{
-    bounded_response_body, parameters_schema, rpc_request_bodies, ResponseBodyAccumulator,
-    ShimError,
+    bounded_response_body, parameters_schema, rpc_request_bodies, Deadline, HttpTimeouts,
+    ResponseBodyAccumulator, ShimError,
 };
 
 const SAFE_MINT: &str = "So11111111111111111111111111111111111111112";
@@ -139,11 +139,32 @@ fn stream_accumulator_stops_before_appending_chunk_that_crosses_boundary() {
 fn stream_errors_have_stable_bounded_unknown_codes() {
     assert_eq!(ShimError::HttpTransport.code(), "HTTP_TRANSPORT_ERROR");
     assert_eq!(ShimError::BodyRead.code(), "HTTP_BODY_READ_ERROR");
+    assert_eq!(ShimError::Timeout.code(), "TIMEOUT");
     assert_eq!(ShimError::ResponseTooLarge.code(), "RESPONSE_TOO_LARGE");
     assert_eq!(
         ShimError::ResponseBufferFailure.code(),
         "RESPONSE_BUFFER_ERROR"
     );
+}
+
+#[test]
+fn http_timeout_policy_bounds_connect_headers_chunks_and_total_read() {
+    let timeouts = HttpTimeouts::default();
+
+    assert_eq!(timeouts.connect_ns, 5_000_000_000);
+    assert_eq!(timeouts.first_byte_ns, 10_000_000_000);
+    assert_eq!(timeouts.between_bytes_ns, 5_000_000_000);
+    assert_eq!(timeouts.full_response_ns, 15_000_000_000);
+}
+
+#[test]
+fn deadline_expires_at_boundary_and_rejects_clock_overflow() {
+    let deadline = Deadline::new(100, 25).unwrap();
+    assert_eq!(deadline.remaining_ns(100), Ok(25));
+    assert_eq!(deadline.remaining_ns(124), Ok(1));
+    assert_eq!(deadline.remaining_ns(125), Err(ShimError::Timeout));
+    assert_eq!(deadline.remaining_ns(126), Err(ShimError::Timeout));
+    assert_eq!(Deadline::new(u64::MAX, 1), Err(ShimError::Timeout));
 }
 
 #[test]
@@ -158,6 +179,38 @@ fn reports_green_for_complete_low_risk_legacy_evidence() {
     assert!(report.reasons.is_empty());
     assert_eq!(report.evidence.token_program, "spl-token");
     assert_eq!(report.evidence.top_account_bps, Some(1900));
+}
+
+#[test]
+fn rejects_non_mint_parsed_account_type() {
+    let account = include_str!("fixtures/legacy-safe-account.json")
+        .replace("\"type\": \"mint\"", "\"type\": \"account\"");
+
+    assert!(matches!(
+        assess(
+            SAFE_MINT,
+            &account,
+            include_str!("fixtures/dispersed-largest.json"),
+        ),
+        Err(RiskError::MalformedRpcResponse)
+    ));
+}
+
+#[test]
+fn requires_string_mint_parsed_account_type() {
+    for replacement in ["", "\"type\": null", "\"type\": 7"] {
+        let account = include_str!("fixtures/legacy-safe-account.json")
+            .replace("\"type\": \"mint\"", replacement);
+
+        assert!(matches!(
+            assess(
+                SAFE_MINT,
+                &account,
+                include_str!("fixtures/dispersed-largest.json"),
+            ),
+            Err(RiskError::MalformedRpcResponse)
+        ));
+    }
 }
 
 #[test]
