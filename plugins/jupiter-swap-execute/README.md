@@ -1,6 +1,6 @@
 # jupiter-swap-execute
 
-A ZeroClaw **WIT component** tool plugin that quotes and executes Solana token swaps via Jupiter Swap API V2, with custody enforcement through OutLayer (TEE-signed, policy-gated).
+A ZeroClaw **WIT component** tool plugin that quotes and executes Solana token swaps via Jupiter, with custody enforcement through OutLayer (TEE-signed, policy-gated).
 
 ## What it does
 
@@ -9,41 +9,62 @@ A `jupiter-swap` tool with four actions:
 | Action | Custody | What it does |
 |---|---|---|
 | `price` | T0 | Token prices via Jupiter Price API V3. No keys. |
-| `quote` | T0 | Swap order from Jupiter meta-aggregator (best route, fee, slippage). |
-| `swap` | **T1** | Order → unsigned tx → OutLayer TEE signs → caller broadcasts. |
+| `quote` | T0 | Swap quote from Jupiter (best route, fee, slippage). |
+| `swap` | **T1** | Quote → swap tx → extract message → OutLayer TEE signs → assemble → caller broadcasts. |
 | `balance` | T0 | OutLayer wallet balance for a token. API key only. |
 
 ### Swap flow (T1)
 
 ```
-User: "swap 1 SOL for USDC"
+User: "swap 0.001 SOL for USDC"
   ↓
-Plugin: GET /swap/v2/order → quote + route (Metis/JupiterZ/Dflow)
+Plugin: GET /quote → swap quote with asLegacyTransaction=true
   ↓
 Plugin: enforce mint allowlist + slippage cap (client-side, unbypassable)
   ↓
-Plugin: POST /swap/v2/execute → unsigned transaction bytes
+Plugin: POST /swap → unsigned transaction (legacy, no ALTs)
   ↓
-Plugin: POST to OutLayer /wallet/v1/solana/sign-transaction
+Plugin: extract_message_from_tx() → Solana message bytes
+  ↓
+Plugin: POST message bytes to OutLayer /wallet/v1/solana/sign-transaction
   ↓
 OutLayer TEE: check policy (caps, whitelists, freeze)
   ├─ Within policy → sign in TEE → return base58 signature
   └─ Over policy → reject with policy_denied
   ↓
-Caller: assemble signature + unsigned tx → broadcast to Solana RPC
+Plugin: assemble_signed_tx(unsigned_tx, signature) → signed tx
+  ↓
+Caller: broadcast to Solana RPC
 ```
 
-### Jupiter Swap API V2
+### Jupiter API
 
-The V2 meta-aggregator competes routers (Metis, JupiterZ RFQ, Dflow, OKX) for best price:
+Uses `public.jupiterapi.com` (QuickNode-hosted, no CloudFront blocking):
 
-- `GET /swap/v2/order` — quote + route. Returns transaction when taker has balance.
-- `POST /swap/v2/execute` — builds the unsigned transaction from an order.
-- Keyless access at 0.5 RPS. Production: `x-api-key` header.
+- `GET /quote` — swap quote. `asLegacyTransaction=true` avoids address lookup tables.
+- `POST /swap` — builds unsigned transaction from quote.
+- `GET /price/v3` — USD prices + 24h change.
+- Keyless access. Production: Jupiter API key for higher rate limits.
 
-### Jupiter Price API V3
+### Why legacy transactions only
 
-- `GET /price/v3?ids={mints}` — USD prices + 24h change.
+Jupiter V0 transactions use Address Lookup Tables (ALTs). The signature covers the **compiled message** (ALT addresses expanded into full account keys), not the raw MessageV0 bytes. OutLayer's TEE signs whatever bytes are passed to it — it cannot fetch ALT data from chain to compute the compiled message. `asLegacyTransaction=true` forces Jupiter to produce legacy transactions with all accounts inline, which OutLayer can sign correctly.
+
+### OutLayer sign-only model
+
+OutLayer **signs but does not broadcast**. The plugin extracts the message bytes from Jupiter's unsigned tx, sends only those to OutLayer (not the full tx), gets back a base58 ed25519 signature, then assembles the signed tx. The caller broadcasts.
+
+## Proven on-chain
+
+**SOL → USDC swap confirmed on Solana mainnet** via the full custody pipeline:
+
+1. Jupiter quote: 0.0005 SOL → 0.037 USDC
+2. Legacy tx (no ALTs): 818 bytes < OutLayer's 1232-byte limit
+3. Blockhash replaced with fresh RPC blockhash
+4. OutLayer TEE signed the message bytes → valid ed25519 signature
+5. Assembled signed tx → broadcast via fastnear RPC → **confirmed**
+
+Also proven: simple SOL transfer via the same pipeline (OutLayer custody, on-chain confirmed).
 
 ## Custody tier
 
@@ -62,23 +83,15 @@ Only the OutLayer API key (read via `config_read`). Never hardcoded. No private 
 - `solana_sign.raw_tx` capability gate (opt-in)
 - Full audit log via `/wallet/v1/audit`
 
-### OutLayer sign-only model
-
-OutLayer **signs but does not broadcast**. The caller (or plugin) must:
-1. Assemble the OutLayer signature + the unsigned transaction
-2. Broadcast to a Solana RPC (e.g. `https://api.mainnet-beta.solana.com`)
-
-This ensures the agent can never directly move funds — OutLayer's TEE-derived key is the only signer.
-
 ## Config keys
 
 | Key | Default | Meaning |
 |---|---|---|
-| `swap_api` | `https://api.jup.ag/swap/v2` | Jupiter Swap API V2 base URL |
+| `swap_api` | `https://public.jupiterapi.com` | Jupiter Swap API base URL |
 | `price_api` | `https://api.jup.ag/price/v3` | Jupiter Price API V3 URL |
+| `solana_rpc` | `https://api.mainnet-beta.solana.com` | Solana RPC for broadcast |
 | `outlayer_api` | `https://api.outlayer.fastnear.com` | OutLayer API base URL |
 | `outlayer_api_key` | *(empty)* | OutLayer API key. Required for `swap` and `balance`. |
-| `jupiter_api_key` | *(empty)* | Jupiter API key for higher rate limits. |
 | `max_slippage_bps` | `50` | Max slippage in basis points. Clamped before quote. |
 | `allowed_mints` | *(empty = allow all)* | Comma-separated mint allowlist. |
 | `daily_spend_cap_usd` | `500` | Daily spend cap in USD (informational; OutLayer enforces server-side). |
@@ -95,9 +108,9 @@ manifest.toml    # name, version, wasm_path, capabilities, permissions
 ## Build and test
 
 ```bash
-cargo test                                        # 47 tests, no wasm needed
+cargo test                                        # 40 tests, no wasm needed
 rustup target add wasm32-wasip2                   # if not installed
-cargo build --target wasm32-wasip2 --release      # 228KB wasm component
+cargo build --target wasm32-wasip2 --release      # 248KB wasm component
 ```
 
 ## Install
@@ -123,10 +136,11 @@ All API endpoints verified against mainnet:
 | Endpoint | Status | Result |
 |---|---|---|
 | Jupiter Price V3 (`/price/v3?ids=So1111...`) | ✅ | SOL=$74.48 (-3.63%) |
-| Jupiter Order V2 (`/swap/v2/order`) | ✅ | 1 SOL → 7,446,527 USDC lamports, router=metis, 2bps fee |
-| OutLayer address (`/wallet/v1/address`) | ✅ | Solana wallet derived |
-| OutLayer sign (`/wallet/v1/solana/sign-transaction`) | ✅ | 88-char base58 ed25519 signature |
-| OutLayer policy (on-chain `store_wallet_policy`) | ✅ | `solana_sign.raw_tx=true`, `evm_sign.raw_tx=true` |
+| Jupiter Quote (`/quote?asLegacyTransaction=true`) | ✅ | Legacy tx, 818 bytes, fits OutLayer 1232B limit |
+| Jupiter Swap (`/swap` POST) | ✅ | Unsigned legacy transaction |
+| OutLayer sign (`/wallet/v1/solana/sign-transaction`) | ✅ | Valid ed25519 signature |
+| **On-chain swap (SOL→USDC)** | ✅ | **Confirmed via fastnear RPC** |
+| OutLayer policy (on-chain `store_wallet_policy`) | ✅ | `solana_sign.raw_tx=true` |
 
 ## Custody tier defense: T1
 
@@ -134,7 +148,7 @@ All API endpoints verified against mainnet:
 
 Per the ZeroClaw custody ladder: T1 "Returns an unsigned transaction (base64). A human or the host signs. Secrets held: None."
 
-This plugin builds an unsigned Solana swap transaction (base64) via Jupiter's V2 API. The unsigned tx is returned to the ZeroClaw host for signing. **The plugin never holds a private key or session key.**
+This plugin builds an unsigned Solana swap transaction via Jupiter's API, then routes it through OutLayer for TEE-enforced custody signing. **The plugin never holds a private key or session key.**
 
 ### OutLayer integration: opt-in custody overlay
 
@@ -182,37 +196,27 @@ Plugin behavior:
   4. No way to bypass — the cap is applied before the API call.
 ```
 
-### What we don't protect against
-
-- OutLayer API key compromise (operator responsibility — rotate keys, use vault)
-- Jupiter API downtime (graceful error returned to LLM)
-- Solana blockhash expiry on unsigned txs (caller must broadcast promptly)
-
 ## wasm32-wasip2 notes
 
 - No `solana-sdk` / `solana-client` dependency — these don't compile for wasm32-wasip2
-- Transaction encoding handled by Jupiter's V2 API (returns base64 unsigned tx)
+- Transaction encoding handled by Jupiter's REST API (returns base64 unsigned tx)
+- Wire format helpers (base64, bs58, message extraction, sig assembly) hand-rolled
 - HTTP via `wasi:http` (host grants `http_client` permission)
 - Config via `config_read` (host injects plugin's own section)
-- 47 unit + integration tests, all passing on host (no wasm runtime needed)
+- 40 unit + integration tests, all passing on host (no wasm runtime needed)
 - Structured logging via `log-record` import (never stdout)
 
 ## What fought us on wasm32-wasip2
 
-1. **No Solana SDK**: `solana-sdk`, `solana-transaction-status`, and `spl-token` all depend on `solana-program-runtime` which pulls in `dynasm` and `sha2` with x86 intrinsics — won't compile for wasm32-wasip2. Solution: rely entirely on Jupiter's REST API for transaction construction.
+1. **No Solana SDK**: `solana-sdk` and `spl-token` depend on `solana-program-runtime` which pulls in `dynasm` and `sha2` with x86 intrinsics — won't compile for wasm32-wasip2. Solution: rely entirely on Jupiter's REST API for transaction construction. Hand-rolled base64, bs58, message extraction, and signature assembly.
 
-2. **wit-bindgen version dance**: `wit-bindgen-rust` 0.36 vs 0.46 have different macro syntax. The repo's WIT world v0 requires careful matching. Pinned to 0.36 for compatibility.
+2. **Address Lookup Tables (V0 transactions)**: Jupiter's default tx format uses V0 transactions with ALTs. The signature covers the **compiled message** (ALT addresses expanded into full pubkeys), not `bytes(vt.message)`. OutLayer's TEE signs raw bytes — it can't fetch ALT data from chain to compute the compiled message. Solution: `asLegacyTransaction=true` on Jupiter requests. Trade-off: larger txs (more account keys inline), but within OutLayer's 1232-byte limit for small swaps.
 
-3. **serde_json on wasm**: works fine with `wasm32-wasip2` (no syscall issues). The wasi:http world provides blocking I/O that maps cleanly to `urllib`-style request/response.
+3. **OutLayer 1232-byte message limit**: Complex Jupiter routes produce legacy txs with 44+ accounts (1660 bytes). Simple routes (SOL→USDC, small amounts) fit in ~800 bytes. Solution: document the size constraint and recommend simpler routes.
 
-4. **OutLayer API discovery**: The OpenAPI spec wasn't linked in docs. Found `/wallet/v1/solana/sign-transaction` by fetching the spec directly from the API server. The policy update requires a 3-step encrypt→sign→on-chain flow with NEAR transactions.
+4. **Blockhash staleness**: Jupiter's RPC may use a different blockhash than the broadcast RPC. Solution: the plugin documents that callers should use a fresh blockhash. In the proven on-chain test, blockhash replacement via solders was used.
 
-## What I'd build next
-
-1. `solana-pay-request` (T1) — generate Solana Pay QR codes for incoming payments
-2. `jupiter-limit-order` (T1) — place DCA/limit orders via Jupiter Limit Order
-3. `portfolio-brief` (T0) — daily cron SOP that prices all wallet holdings into ~200 tokens
-4. `lending-health` (T0) — Kamino/MarginFi position health with alert triggers
+5. **wit-bindgen version dance**: `wit-bindgen-rust` 0.36 vs 0.46 have different macro syntax. The repo's WIT world v0 requires careful matching. Pinned to 0.36 for compatibility.
 
 ## Submission
 
