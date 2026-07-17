@@ -276,3 +276,66 @@ fn orders_red_reasons_before_amber_reasons_by_code() {
         ]
     );
 }
+
+#[test]
+fn rejects_malformed_default_account_state_evidence() {
+    let fixture = include_str!("fixtures/token-2022-amber-extensions.json");
+    let missing_state = fixture.replace(
+        "                \"extension\": \"defaultAccountState\",\n                \"state\": { \"accountState\": \"frozen\" }\n",
+        "                \"extension\": \"defaultAccountState\"\n",
+    );
+    assert!(
+        assess(
+            TOKEN_2022_MINT,
+            &missing_state,
+            include_str!("fixtures/dispersed-largest.json"),
+        )
+        .is_err(),
+        "missing state"
+    );
+
+    let malformed_states = [
+        ("null state", "\"state\": null"),
+        ("non-object state", "\"state\": \"frozen\""),
+        ("missing accountState", "\"state\": {}"),
+        (
+            "non-string accountState",
+            "\"state\": { \"accountState\": 7 }",
+        ),
+    ];
+
+    for (label, replacement) in malformed_states {
+        let account = fixture.replace("\"state\": { \"accountState\": \"frozen\" }", replacement);
+        assert!(
+            assess(
+                TOKEN_2022_MINT,
+                &account,
+                include_str!("fixtures/dispersed-largest.json"),
+            )
+            .is_err(),
+            "{label}"
+        );
+    }
+}
+
+#[test]
+fn accepts_initialized_default_account_state_without_default_frozen_risk() {
+    let account = include_str!("fixtures/legacy-safe-account.json")
+        .replace(
+            "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
+            TOKEN_2022_OWNER,
+        )
+        .replace(
+            "            \"decimals\": 6,\n",
+            "            \"decimals\": 6,\n            \"extensions\": [{ \"extension\": \"defaultAccountState\", \"state\": { \"accountState\": \"initialized\" } }],\n",
+        );
+    let report = assess(
+        TOKEN_2022_MINT,
+        &account,
+        include_str!("fixtures/dispersed-largest.json"),
+    )
+    .unwrap();
+
+    assert_eq!(report.verdict, Verdict::Green);
+    assert!(report.reasons.is_empty());
+}

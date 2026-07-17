@@ -108,3 +108,57 @@ No Task 3 defects were found.
 Task 4 owns the additional caps for unknown extension-name length and total
 serialized report size. This task limits reason count as required, but does not
 preemptively change Task 4's remaining bounded-serialization scope.
+
+## Fix Review
+
+Base commit: `effd4e1`.
+
+Finding: `defaultAccountState` decoded `state` as an unconstrained JSON value;
+missing, null, non-object, missing `accountState`, and non-string
+`accountState` values were treated as not frozen and could therefore produce a
+green report.
+
+TDD RED evidence:
+
+```bash
+cd plugins/token-risk-check && cargo test default_account_state
+```
+
+Result: exit `101`; the initialized test passed and the malformed-state test
+failed at `null state`, demonstrating the pre-fix permissive behavior. During
+self-review, the missing-state fixture mutation was corrected to remain valid
+JSON with the field absent; the final regression test covers all five required
+malformed variants.
+
+Fix: `defaultAccountState` now requires an object `state` containing a string
+`accountState`. The validator returns `RiskError::MalformedRpcResponse` for
+malformed evidence, propagating the error from Token-2022 rule evaluation.
+`frozen` still emits `DEFAULT_FROZEN`; `initialized` emits no such reason and
+is green when no other rule applies.
+
+Covering verification:
+
+```bash
+cd plugins/token-risk-check && cargo test default_account_state
+cd plugins/token-risk-check && cargo test marks_fee_and_default_frozen_extensions_amber
+```
+
+Results: exit `0`; 2 default-state tests passed, and the frozen/fee regression
+test passed.
+
+Full verification:
+
+```bash
+cd plugins/token-risk-check && cargo test
+cd plugins/token-risk-check && cargo clippy --all-targets -- -D warnings
+cd plugins/token-risk-check && cargo fmt -- --check
+git diff --check
+```
+
+Results: exit `0`; 16 integration tests passed, doc tests had 0 tests and 0
+failures, Clippy and format checks were clean, and the diff check was clean.
+
+Self-review: the strict check is reached only for the exact
+`defaultAccountState` extension, preserves existing extension severity and
+ordering, and does not alter legacy-token behavior. No additional concerns
+were identified for this finding.

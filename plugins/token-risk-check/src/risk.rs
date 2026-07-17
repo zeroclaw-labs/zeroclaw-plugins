@@ -186,7 +186,7 @@ pub fn assess(mint: &str, account_json: &str, largest_json: &str) -> Result<Risk
         ));
     }
     if token_program == "token-2022" {
-        rules.extend(token_2022_extension_rules(&info.extensions));
+        rules.extend(token_2022_extension_rules(&info.extensions)?);
     }
 
     let (verdict, reasons, reasons_truncated) = finalize_rules(rules);
@@ -287,50 +287,56 @@ fn rule(severity: RuleSeverity, code: &str, message: &str) -> Rule {
     }
 }
 
-fn token_2022_extension_rules(extensions: &[TokenExtension]) -> Vec<Rule> {
+fn token_2022_extension_rules(extensions: &[TokenExtension]) -> Result<Vec<Rule>, RiskError> {
     extensions
         .iter()
-        .filter_map(|extension| match extension.extension.as_str() {
-            "transferFeeConfig" => Some(rule(
+        .map(|extension| match extension.extension.as_str() {
+            "transferFeeConfig" => Ok(Some(rule(
                 RuleSeverity::Amber,
                 "TRANSFER_FEE",
                 "Token-2022 transfer fee is configured",
-            )),
-            "transferHook" => Some(rule(
+            ))),
+            "transferHook" => Ok(Some(rule(
                 RuleSeverity::Red,
                 "TRANSFER_HOOK",
                 "Token-2022 transfer hook is configured",
-            )),
-            "permanentDelegate" => Some(rule(
+            ))),
+            "permanentDelegate" => Ok(Some(rule(
                 RuleSeverity::Red,
                 "PERMANENT_DELEGATE",
                 "Token-2022 permanent delegate is configured",
-            )),
-            "defaultAccountState" if extension.default_state_is_frozen() => Some(rule(
-                RuleSeverity::Amber,
-                "DEFAULT_FROZEN",
-                "Token-2022 default account state is frozen",
-            )),
-            "defaultAccountState" => None,
-            "confidentialTransferMint" => Some(rule(
+            ))),
+            "defaultAccountState" => {
+                if extension.default_state_is_frozen()? {
+                    Ok(Some(rule(
+                        RuleSeverity::Amber,
+                        "DEFAULT_FROZEN",
+                        "Token-2022 default account state is frozen",
+                    )))
+                } else {
+                    Ok(None)
+                }
+            }
+            "confidentialTransferMint" => Ok(Some(rule(
                 RuleSeverity::Red,
                 "CONFIDENTIAL_TRANSFER",
                 "Token-2022 confidential transfer is configured",
-            )),
-            "nonTransferable" => Some(rule(
+            ))),
+            "nonTransferable" => Ok(Some(rule(
                 RuleSeverity::Red,
                 "NON_TRANSFERABLE",
                 "Token-2022 token is non-transferable",
-            )),
-            _ => Some(Rule {
+            ))),
+            _ => Ok(Some(Rule {
                 severity: RuleSeverity::Amber,
                 reason: Reason {
                     code: "UNKNOWN_EXTENSION".to_owned(),
                     message: format!("Unrecognized Token-2022 extension: {}", extension.extension),
                 },
-            }),
+            })),
         })
-        .collect()
+        .collect::<Result<Vec<_>, _>>()
+        .map(|rules| rules.into_iter().flatten().collect())
 }
 
 fn finalize_rules(mut rules: Vec<Rule>) -> (Verdict, Vec<Reason>, bool) {
@@ -422,11 +428,16 @@ struct TokenExtension {
 }
 
 impl TokenExtension {
-    fn default_state_is_frozen(&self) -> bool {
-        self.state
+    fn default_state_is_frozen(&self) -> Result<bool, RiskError> {
+        let state = self
+            .state
+            .as_object()
+            .ok_or(RiskError::MalformedRpcResponse)?;
+        let account_state = state
             .get("accountState")
             .and_then(serde_json::Value::as_str)
-            == Some("frozen")
+            .ok_or(RiskError::MalformedRpcResponse)?;
+        Ok(account_state == "frozen")
     }
 }
 
