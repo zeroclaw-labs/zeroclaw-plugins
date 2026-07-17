@@ -1,0 +1,9 @@
+name = "solana-mint-forensics"
+version = "0.1.0"
+description = "Raw-byte Solana mint forensics: authorities, Token-2022 TLV, supply consistency, and concentration"
+author = "nonggde"
+wasm_path = "solana_mint_forensics.wasm"
+capabilities = ["tool"]
+# http_client: perform bounded, read-only Solana JSON-RPC requests.
+# config_read: receive this plugin's jailed rpc_url setting as __config.
+permissions = ["http_client", "config_read"]
