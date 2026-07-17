@@ -49,17 +49,92 @@ fn reports_green_for_complete_low_risk_legacy_evidence() {
 
 #[test]
 fn recognizes_token_2022_owner() {
-    let account = include_str!("fixtures/legacy-safe-account.json").replace(
-        "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
-        TOKEN_2022_OWNER,
-    );
     let report = assess(
         SAFE_MINT,
-        &account,
+        include_str!("fixtures/token-2022-extensions.json"),
         include_str!("fixtures/dispersed-largest.json"),
     )
     .unwrap();
     assert_eq!(report.evidence.token_program, "token-2022");
+}
+
+#[test]
+fn rejects_token_2022_without_extensions_evidence() {
+    let account = include_str!("fixtures/legacy-safe-account.json").replace(
+        "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
+        TOKEN_2022_OWNER,
+    );
+
+    assert!(matches!(
+        assess(
+            TOKEN_2022_MINT,
+            &account,
+            include_str!("fixtures/dispersed-largest.json"),
+        ),
+        Err(RiskError::MalformedRpcResponse)
+    ));
+}
+
+#[test]
+fn rejects_null_legacy_extensions_evidence() {
+    let account = include_str!("fixtures/legacy-safe-account.json").replace(
+        "\"isInitialized\": true,",
+        "\"isInitialized\": true,\n            \"extensions\": null,",
+    );
+
+    assert!(matches!(
+        assess(
+            SAFE_MINT,
+            &account,
+            include_str!("fixtures/dispersed-largest.json"),
+        ),
+        Err(RiskError::MalformedRpcResponse)
+    ));
+}
+
+#[test]
+fn rejects_uninitialized_mint() {
+    let account = include_str!("fixtures/legacy-safe-account.json")
+        .replace("\"isInitialized\": true", "\"isInitialized\": false");
+
+    assert!(matches!(
+        assess(
+            SAFE_MINT,
+            &account,
+            include_str!("fixtures/dispersed-largest.json"),
+        ),
+        Err(RiskError::MalformedRpcResponse)
+    ));
+}
+
+#[test]
+fn rejects_mint_without_initialization_evidence() {
+    let account = include_str!("fixtures/legacy-safe-account.json")
+        .replace("            \"isInitialized\": true,\n", "");
+
+    assert!(matches!(
+        assess(
+            SAFE_MINT,
+            &account,
+            include_str!("fixtures/dispersed-largest.json"),
+        ),
+        Err(RiskError::MalformedRpcResponse)
+    ));
+}
+
+#[test]
+fn rejects_malformed_initialization_evidence() {
+    let account = include_str!("fixtures/legacy-safe-account.json")
+        .replace("\"isInitialized\": true", "\"isInitialized\": \"true\"");
+
+    assert!(matches!(
+        assess(
+            SAFE_MINT,
+            &account,
+            include_str!("fixtures/dispersed-largest.json"),
+        ),
+        Err(RiskError::MalformedRpcResponse)
+    ));
 }
 
 #[test]
@@ -412,7 +487,7 @@ fn never_reports_green_when_required_evidence_is_invalid_or_missing() {
         ),
         (
             "null account",
-            &null_account,
+            null_account,
             include_str!("fixtures/dispersed-largest.json"),
         ),
         (

@@ -8,6 +8,7 @@
           "info": {
             "decimals": 6,
             "freezeAuthority": null,
+            "isInitialized": true,
             "mintAuthority": null,
             "supply": "1000000"
           }

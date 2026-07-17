@@ -222,6 +222,9 @@ pub fn assess(mint: &str, account_json: &str, largest_json: &str) -> Result<Risk
 
     let token_program = token_program_name(&account_value.owner)?;
     let info = account_value.data.parsed.info;
+    if !info.is_initialized {
+        return Err(RiskError::MalformedRpcResponse);
+    }
     let supply = parse_amount(&info.supply)?;
     if supply == 0 {
         return Err(RiskError::ZeroSupply);
@@ -278,7 +281,10 @@ pub fn assess(mint: &str, account_json: &str, largest_json: &str) -> Result<Risk
         ));
     }
     if token_program == "token-2022" {
-        rules.extend(token_2022_extension_rules(&info.extensions)?);
+        let ExtensionsEvidence::Present(extensions) = &info.extensions else {
+            return Err(RiskError::MalformedRpcResponse);
+        };
+        rules.extend(token_2022_extension_rules(extensions)?);
     }
 
     let (verdict, reasons, reasons_truncated) = finalize_rules(rules);
@@ -509,8 +515,10 @@ struct MintInfo {
     mint_authority: Authority,
     supply: String,
     decimals: u8,
+    #[serde(rename = "isInitialized")]
+    is_initialized: bool,
     #[serde(default)]
-    extensions: Vec<TokenExtension>,
+    extensions: ExtensionsEvidence,
     #[serde(default, rename = "freezeAuthority")]
     freeze_authority: Authority,
 }
@@ -520,6 +528,22 @@ struct TokenExtension {
     extension: String,
     #[serde(default)]
     state: serde_json::Value,
+}
+
+#[derive(Default)]
+enum ExtensionsEvidence {
+    #[default]
+    Missing,
+    Present(Vec<TokenExtension>),
+}
+
+impl<'de> Deserialize<'de> for ExtensionsEvidence {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        Vec::<TokenExtension>::deserialize(deserializer).map(Self::Present)
+    }
 }
 
 impl TokenExtension {

@@ -52,3 +52,53 @@ git diff --check                   # passed
 - The existing report schema represents authority status as booleans. For unknown evidence the fallback keeps schema compatibility and adds `EVIDENCE_UNAVAILABLE`; consumers must honor the `unknown` verdict rather than infer meaning from placeholder evidence fields.
 - Task 5 must route every tool response through `serialize_report` and map all `RiskError` values through `unknown_report`; the pure core now exposes both interfaces for that purpose.
 - No network, WASM, manifest, documentation, or Task 5 verification was run because it is outside this task's scope.
+
+## Review Fix From `6a01a13`
+
+### Schema Confirmation
+
+Agave's current `UiMint` source defines `is_initialized: bool` under `#[serde(rename_all = "camelCase")]`, so the exact JSON field is `isInitialized` and its type is boolean. The same source defines `extensions` as `Vec<UiExtension>` with `skip_serializing_if = "Vec::is_empty"`, so legacy mints and Token-2022 mints with no parsed extensions may omit the field:
+
+- <https://github.com/anza-xyz/agave/blob/master/account-decoder-client-types/src/token.rs#L1454-L1473>
+- <https://github.com/anza-xyz/agave/blob/master/account-decoder/src/parse_token.rs#L1754-L1791>
+
+Task 4 now intentionally requires explicit `extensions` presence for Token-2022 despite that omission behavior. This may return `unknown` for a no-extension Token-2022 mint, but it prevents missing extension evidence from becoming `green`. Legacy mints continue to accept omitted `extensions`.
+
+### RED Evidence
+
+After adding four regressions and before changing production code:
+
+```text
+cargo test rejects_
+test result: FAILED. 7 passed; 4 failed
+```
+
+The failing tests were `rejects_token_2022_without_extensions_evidence`, `rejects_uninitialized_mint`, `rejects_mint_without_initialization_evidence`, and `rejects_malformed_initialization_evidence`. Each failed because `assess` returned a report instead of `MalformedRpcResponse`.
+
+A second presence-model RED verified that JSON null is not treated like an omitted legacy field:
+
+```text
+cargo test rejects_null_legacy_extensions_evidence
+test result: FAILED. 0 passed; 1 failed
+```
+
+The first `Option<Vec<_>>` implementation collapsed missing and null. It was replaced with an explicit `Missing | Present(Vec<_>)` evidence type, so only an omitted key receives the legacy-compatible `Missing` state; null and non-array values fail deserialization.
+
+### GREEN And Verification Evidence
+
+The focused suite passed after modeling extension presence and requiring a true boolean `isInitialized`:
+
+```text
+cargo test rejects_                  # 12 passed
+```
+
+Final verification:
+
+```text
+cargo test                           # 27 integration tests passed
+cargo clippy --all-targets -- -D warnings
+cargo fmt -- --check
+git diff --check
+```
+
+All commands exited successfully. The prior malformed-account fixture now includes truthful `isInitialized: true`, leaving its missing owner as the intended malformed evidence.
