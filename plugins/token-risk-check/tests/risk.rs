@@ -182,6 +182,36 @@ fn liquidity_compares_fractional_values_across_the_zero_integer_boundary() {
 }
 
 #[test]
+fn liquidity_selects_the_larger_fraction_when_zero_leading_decimals_are_ordered() {
+    let body = include_str!("fixtures/liquidity-observed.json")
+        .replace("125000.5", "0.01")
+        .replace("2400", "0.1");
+    let evidence = assess_liquidity(SAFE_MINT, &body).unwrap();
+
+    assert_eq!(evidence.max_liquidity_usd.as_deref(), Some("0.1"));
+}
+
+#[test]
+fn liquidity_compares_fractional_values_with_different_leading_zero_counts() {
+    let body = include_str!("fixtures/liquidity-observed.json")
+        .replace("125000.5", "0.001")
+        .replace("2400", "0.0009");
+    let evidence = assess_liquidity(SAFE_MINT, &body).unwrap();
+
+    assert_eq!(evidence.max_liquidity_usd.as_deref(), Some("0.001"));
+}
+
+#[test]
+fn liquidity_canonicalizes_equal_fractional_values() {
+    let body = include_str!("fixtures/liquidity-observed.json")
+        .replace("125000.5", "0.10")
+        .replace("2400", "0.1");
+    let evidence = assess_liquidity(SAFE_MINT, &body).unwrap();
+
+    assert_eq!(evidence.max_liquidity_usd.as_deref(), Some("0.1"));
+}
+
+#[test]
 fn liquidity_accepts_plain_json_decimals_and_rejects_exponent_notation() {
     let canonical_body = include_str!("fixtures/liquidity-observed.json")
         .replace("125000.5", "125000.5000")

@@ -80,9 +80,8 @@ fn validate_pair(pair: &DexPair, mint: &str) -> Result<(), RiskError> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct BoundedDecimal {
     canonical: String,
-    digits: String,
-    scale: usize,
-    whole_digits: usize,
+    integer: String,
+    fraction: String,
 }
 
 impl BoundedDecimal {
@@ -105,37 +104,23 @@ impl BoundedDecimal {
             return Err(RiskError::MalformedLiquidityResponse);
         }
 
-        let fraction = fraction.map(|fraction| fraction.trim_end_matches('0'));
-        let scale = fraction.map_or(0, str::len);
-        let canonical = match fraction {
-            Some(fraction) if !fraction.is_empty() => format!("{integer}.{fraction}"),
-            _ => integer.to_owned(),
+        let fraction = fraction.unwrap_or_default();
+        let canonical_fraction = fraction.trim_end_matches('0');
+        let canonical = if canonical_fraction.is_empty() {
+            integer.to_owned()
+        } else {
+            format!("{integer}.{canonical_fraction}")
         };
-        let digits = canonical
-            .chars()
-            .filter(|character| *character != '.')
-            .skip_while(|character| *character == '0')
-            .collect::<String>();
-
-        if digits.is_empty() {
-            return Ok(Self {
-                canonical: "0".to_owned(),
-                digits: "0".to_owned(),
-                scale: 0,
-                whole_digits: 0,
-            });
-        }
 
         Ok(Self {
             canonical,
-            digits,
-            scale,
-            whole_digits: usize::from(integer != "0") * integer.len(),
+            integer: integer.to_owned(),
+            fraction: fraction.to_owned(),
         })
     }
 
     fn is_positive(&self) -> bool {
-        self.digits != "0"
+        self.integer != "0" || self.fraction.bytes().any(|byte| byte != b'0')
     }
 
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
@@ -146,14 +131,21 @@ impl BoundedDecimal {
             (true, true) => {}
         }
 
-        match self.whole_digits.cmp(&other.whole_digits) {
+        match self.integer.len().cmp(&other.integer.len()) {
+            std::cmp::Ordering::Equal => {}
+            ordering => return ordering,
+        }
+        match self.integer.cmp(&other.integer) {
             std::cmp::Ordering::Equal => {}
             ordering => return ordering,
         }
 
-        let scale = self.scale.max(other.scale);
-        for index in 0..self.whole_digits + scale {
-            match self.digit_at(index).cmp(&other.digit_at(index)) {
+        let scale = self.fraction.len().max(other.fraction.len());
+        for index in 0..scale {
+            match self
+                .fraction_digit_at(index)
+                .cmp(&other.fraction_digit_at(index))
+            {
                 std::cmp::Ordering::Equal => {}
                 ordering => return ordering,
             }
@@ -161,8 +153,8 @@ impl BoundedDecimal {
         std::cmp::Ordering::Equal
     }
 
-    fn digit_at(&self, index: usize) -> u8 {
-        self.digits.as_bytes().get(index).copied().unwrap_or(b'0')
+    fn fraction_digit_at(&self, index: usize) -> u8 {
+        self.fraction.as_bytes().get(index).copied().unwrap_or(b'0')
     }
 }
 
