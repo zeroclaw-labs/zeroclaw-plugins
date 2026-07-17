@@ -15,11 +15,15 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 base64 = "0.22"
 bs58 = "0.5"
-# no solana-sdk — hand-rolled instruction encoding for wasm32-wasip2 compatibility
+ureq = { version = "2", optional = true }
+
+[features]
+e2e = ["ureq"]
 
 [[bin]]
 name = "e2e-swap"
 path = "src/bin/e2e_swap.rs"
+required-features = ["e2e"]
 
 # no solana-sdk — hand-rolled instruction encoding for wasm32-wasip2 compatibility
 
