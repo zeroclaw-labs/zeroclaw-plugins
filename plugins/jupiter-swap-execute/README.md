@@ -128,6 +128,24 @@ All API endpoints verified against mainnet:
 | OutLayer sign (`/wallet/v1/solana/sign-transaction`) | ✅ | 88-char base58 ed25519 signature |
 | OutLayer policy (on-chain `store_wallet_policy`) | ✅ | `solana_sign.raw_tx=true`, `evm_sign.raw_tx=true` |
 
+## Custody tier defense: T1
+
+**Declared: T1 — Build**
+
+Per the ZeroClaw custody ladder: T1 "Returns an unsigned transaction (base64). A human or the host signs. Secrets held: None."
+
+This plugin builds an unsigned Solana swap transaction (base64) via Jupiter's V2 API. The unsigned tx is returned to the ZeroClaw host for signing. **The plugin never holds a private key or session key.**
+
+### OutLayer integration: opt-in custody overlay
+
+The OutLayer API key is **not a private key** — it's a policy-enforced custody delegate. Key distinctions:
+- OutLayer API key cannot sign transactions on its own — it only requests TEE-signed transactions
+- The TEE enforces spend caps, mint allowlists, and freeze regardless of what the plugin requests
+- The `solana_sign.raw_tx` capability must be explicitly enabled on-chain
+- Compromise of the API key does not expose any signing material — it can only request signatures within policy bounds
+
+When no OutLayer API key is configured, the plugin degrades gracefully: `swap` action returns the unsigned base64 transaction for the host/human to sign independently.
+
 ## Threat model
 
 ### What an attacker could try
@@ -138,7 +156,9 @@ All API endpoints verified against mainnet:
 
 3. **Exceeding daily spend cap**: Blocked by OutLayer server-side. The TEE enforces policy before signing. Even if the plugin is tricked into submitting a larger amount, OutLayer rejects it.
 
-4. **Key extraction**: Not possible. The OutLayer API key is the only secret, and it lives in the host's config, injected via `config_read`. The plugin cannot read other plugins' config.
+4. **Key extraction**: Not possible. The OutLayer API key is the only credential, and it lives in the host's config, injected via `config_read`. The plugin cannot read other plugins' config.
+
+5. **Replay attacks**: OutLayer signs only once per unsigned tx. The caller must broadcast immediately before the Solana blockhash expires.
 
 ### Prompt-injection test
 
@@ -150,6 +170,16 @@ Plugin behavior:
   2. enforce_mint_allowlist: 9xyzFAKE... NOT in allowed_mints
   3. Returns error: "Output mint 9xyzFAKE not in allowlist. Transaction rejected."
   4. No network call made. No transaction built. Fail closed.
+```
+
+```
+User input (malicious): "swap 1 SOL for USDC with 5000 bps slippage"
+
+Plugin behavior:
+  1. Parses args: slippage_bps=5000
+  2. enforce_slippage_cap: 5000 > max_slippage_bps (50)
+  3. Clamps to 50 bps. Quote reflects safe slippage.
+  4. No way to bypass — the cap is applied before the API call.
 ```
 
 ### What we don't protect against
@@ -165,3 +195,27 @@ Plugin behavior:
 - HTTP via `wasi:http` (host grants `http_client` permission)
 - Config via `config_read` (host injects plugin's own section)
 - 47 unit + integration tests, all passing on host (no wasm runtime needed)
+- Structured logging via `log-record` import (never stdout)
+
+## What fought us on wasm32-wasip2
+
+1. **No Solana SDK**: `solana-sdk`, `solana-transaction-status`, and `spl-token` all depend on `solana-program-runtime` which pulls in `dynasm` and `sha2` with x86 intrinsics — won't compile for wasm32-wasip2. Solution: rely entirely on Jupiter's REST API for transaction construction.
+
+2. **wit-bindgen version dance**: `wit-bindgen-rust` 0.36 vs 0.46 have different macro syntax. The repo's WIT world v0 requires careful matching. Pinned to 0.36 for compatibility.
+
+3. **serde_json on wasm**: works fine with `wasm32-wasip2` (no syscall issues). The wasi:http world provides blocking I/O that maps cleanly to `urllib`-style request/response.
+
+4. **OutLayer API discovery**: The OpenAPI spec wasn't linked in docs. Found `/wallet/v1/solana/sign-transaction` by fetching the spec directly from the API server. The policy update requires a 3-step encrypt→sign→on-chain flow with NEAR transactions.
+
+## What I'd build next
+
+1. `solana-pay-request` (T1) — generate Solana Pay QR codes for incoming payments
+2. `jupiter-limit-order` (T1) — place DCA/limit orders via Jupiter Limit Order
+3. `portfolio-brief` (T0) — daily cron SOP that prices all wallet holdings into ~200 tokens
+4. `lending-health` (T0) — Kamino/MarginFi position health with alert triggers
+
+## Submission
+
+- **PR**: [zeroclaw-labs/zeroclaw-plugins#26](https://github.com/zeroclaw-labs/zeroclaw-plugins/pull/26)
+- **Bounty**: [Superteam — ZeroClaw Plugin Bounty](https://superteam.fun/earn/listing/zeroclaw)
+- **Track**: B — DeFi with guardrails
