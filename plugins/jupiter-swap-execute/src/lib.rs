@@ -221,12 +221,14 @@ mod component {
         let mint_list: Vec<&str> = args.mints.split(',').map(str::trim).collect();
         let url = build_price_url(cfg, &mint_list);
 
-        let response =
-            http_get(&url, cfg.has_jupiter_key().then(|| cfg.jupiter_api_key.as_str()))
-                .map_err(|e| format!("Jupiter price API request failed: {e}"))?;
+        let response = http_get(
+            &url,
+            cfg.has_jupiter_key().then(|| cfg.jupiter_api_key.as_str()),
+        )
+        .map_err(|e| format!("Jupiter price API request failed: {e}"))?;
 
-        let parsed: serde_json::Value =
-            serde_json::from_str(&response).map_err(|e| format!("Failed to parse price response: {e}"))?;
+        let parsed: serde_json::Value = serde_json::from_str(&response)
+            .map_err(|e| format!("Failed to parse price response: {e}"))?;
 
         Ok(shape_price_response(&parsed))
     }
@@ -249,7 +251,13 @@ mod component {
             cfg.max_slippage_bps
         };
 
-        let url = build_quote_url(cfg, &args.input_mint, &args.output_mint, args.amount, slippage);
+        let url = build_quote_url(
+            cfg,
+            &args.input_mint,
+            &args.output_mint,
+            args.amount,
+            slippage,
+        );
         let response = http_get(
             &url,
             cfg.has_jupiter_key().then(|| cfg.jupiter_api_key.as_str()),
@@ -270,9 +278,7 @@ mod component {
     /// Handle "swap" action — quote → swap → OutLayer custody sign → broadcast.
     fn handle_swap(cfg: &SwapConfig, args: &ExecuteArgs) -> Result<String, String> {
         if args.input_mint.is_empty() || args.output_mint.is_empty() {
-            return Err(
-                "Missing 'input_mint' and 'output_mint' for swap action".to_string(),
-            );
+            return Err("Missing 'input_mint' and 'output_mint' for swap action".to_string());
         }
         if args.amount == 0 {
             return Err("Missing 'amount' for swap action".to_string());
@@ -296,8 +302,13 @@ mod component {
         };
 
         // Step 1: Jupiter /quote
-        let quote_url =
-            build_quote_url(cfg, &args.input_mint, &args.output_mint, args.amount, slippage);
+        let quote_url = build_quote_url(
+            cfg,
+            &args.input_mint,
+            &args.output_mint,
+            args.amount,
+            slippage,
+        );
         let quote_response = http_get(
             &quote_url,
             cfg.has_jupiter_key().then(|| cfg.jupiter_api_key.as_str()),
@@ -368,7 +379,10 @@ mod component {
                 .map_err(|e| format!("OutLayer sign request failed: {e}"))?;
         let out_parsed: serde_json::Value = serde_json::from_str(&outlayer_response)
             .unwrap_or_else(|_| serde_json::json!({ "raw": outlayer_response }));
-        let signature = out_parsed.get("signature").and_then(|s| s.as_str()).unwrap_or("?");
+        let signature = out_parsed
+            .get("signature")
+            .and_then(|s| s.as_str())
+            .unwrap_or("?");
 
         // Step 6: Assemble signed tx with fresh blockhash + signature
         let mut signed_tx_bytes = crate::jupiter::assemble_signed_tx(&tx_bytes, signature)
@@ -379,13 +393,17 @@ mod component {
         // Instead of duplicating the calculation, replace the message portion directly.
         let msg_start = 66; // legacy tx: 1 prefix + 1 compact_u32 + 64 sig
         if signed_tx_bytes.len() > msg_start + fresh_message.len() {
-            signed_tx_bytes[msg_start..msg_start + fresh_message.len()].copy_from_slice(&fresh_message);
+            signed_tx_bytes[msg_start..msg_start + fresh_message.len()]
+                .copy_from_slice(&fresh_message);
         }
 
         // Step 7: Broadcast
         let signed_tx_b64 = crate::jupiter::encode_base64(&signed_tx_bytes);
         let broadcast_result = crate::jupiter::broadcast_tx(cfg, &signed_tx_b64);
-        let wallet_id = out_parsed.get("wallet_id").and_then(|w| w.as_str()).unwrap_or("?");
+        let wallet_id = out_parsed
+            .get("wallet_id")
+            .and_then(|w| w.as_str())
+            .unwrap_or("?");
 
         Ok(format!(
             "Swap: {}. OutLayer signed ({}). Sig: {}. Broadcast: {}",
@@ -415,8 +433,8 @@ mod component {
         let response = http_get_with_auth(&url, &cfg.outlayer_api_key)
             .map_err(|e| format!("OutLayer balance request failed: {e}"))?;
 
-        let parsed: serde_json::Value =
-            serde_json::from_str(&response).map_err(|e| format!("Failed to parse balance response: {e}"))?;
+        let parsed: serde_json::Value = serde_json::from_str(&response)
+            .map_err(|e| format!("Failed to parse balance response: {e}"))?;
 
         let balance = parsed
             .get("balance")

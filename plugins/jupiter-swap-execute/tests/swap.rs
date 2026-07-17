@@ -104,10 +104,21 @@ fn extract_message_from_legacy_tx() {
 }
 
 #[test]
-fn extract_message_rejects_v0_tx() {
-    let tx = vec![0x01, 0x01, 0x00]; // V0 prefix
+#[test]
+fn extract_message_handles_v0_tx() {
+    // V0 tx: [0x01 prefix][compact_u32 num_sigs=0x01][64 zero sigs][MessageV0 bytes]
+    let mut tx = vec![0x01, 0x01]; // V0 prefix + compact_u32(1)
+    tx.extend_from_slice(&[0u8; 64]); // zero sig
+    tx.extend_from_slice(b"V0MSG");
+    let msg = extract_message_from_tx(&tx).unwrap();
+    assert_eq!(&msg[..], b"V0MSG");
+}
+
+#[test]
+fn extract_message_v0_tx_too_short() {
+    let tx = vec![0x01, 0x01, 0x00]; // V0 prefix + num_sigs + partial sig
     let err = extract_message_from_tx(&tx).unwrap_err();
-    assert!(err.contains("address lookup tables"));
+    assert!(err.contains("V0 tx too short"));
 }
 
 #[test]
@@ -199,9 +210,6 @@ fn config_custom_swap_api() {
 
 #[test]
 fn config_custom_solana_rpc() {
-    let cfg = SwapConfig::from_section(&config_with(&[(
-        "solana_rpc",
-        "https://my-rpc.com",
-    )]));
+    let cfg = SwapConfig::from_section(&config_with(&[("solana_rpc", "https://my-rpc.com")]));
     assert_eq!(cfg.solana_rpc, "https://my-rpc.com");
 }

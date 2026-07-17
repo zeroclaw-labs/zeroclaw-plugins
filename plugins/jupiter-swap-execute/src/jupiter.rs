@@ -65,19 +65,13 @@ impl SwapConfig {
             .filter(|v| !v.is_empty())
             .cloned()
             .unwrap_or_else(|| "https://api.jup.ag/price/v3".to_string());
-        let jupiter_api_key = section
-            .get("jupiter_api_key")
-            .cloned()
-            .unwrap_or_default();
+        let jupiter_api_key = section.get("jupiter_api_key").cloned().unwrap_or_default();
         let outlayer_api = section
             .get("outlayer_api")
             .filter(|v| !v.is_empty())
             .cloned()
             .unwrap_or_else(|| "https://api.outlayer.fastnear.com".to_string());
-        let outlayer_api_key = section
-            .get("outlayer_api_key")
-            .cloned()
-            .unwrap_or_default();
+        let outlayer_api_key = section.get("outlayer_api_key").cloned().unwrap_or_default();
         let max_slippage_bps = section
             .get("max_slippage_bps")
             .and_then(|v| v.parse().ok())
@@ -147,14 +141,8 @@ pub fn build_quote_url(
 
 /// Shape a Jupiter /quote response into a compact string for the LLM.
 pub fn shape_quote_response(raw: &serde_json::Value) -> String {
-    let in_amount = raw
-        .get("inAmount")
-        .and_then(|v| v.as_str())
-        .unwrap_or("?");
-    let out_amount = raw
-        .get("outAmount")
-        .and_then(|v| v.as_str())
-        .unwrap_or("?");
+    let in_amount = raw.get("inAmount").and_then(|v| v.as_str()).unwrap_or("?");
+    let out_amount = raw.get("outAmount").and_then(|v| v.as_str()).unwrap_or("?");
     let price_impact = raw
         .get("priceImpactPct")
         .and_then(|v| v.as_f64())
@@ -216,14 +204,8 @@ pub fn build_outlayer_solana_sign_body(unsigned_message_base64: &str) -> serde_j
 /// Shape an OutLayer Solana sign response into a compact string.
 /// Response: { signature: base58, chain: "solana", wallet_id: uuid }
 pub fn shape_outlayer_sign_response(raw: &serde_json::Value) -> String {
-    let signature = raw
-        .get("signature")
-        .and_then(|v| v.as_str())
-        .unwrap_or("?");
-    let wallet_id = raw
-        .get("wallet_id")
-        .and_then(|v| v.as_str())
-        .unwrap_or("?");
+    let signature = raw.get("signature").and_then(|v| v.as_str()).unwrap_or("?");
+    let wallet_id = raw.get("wallet_id").and_then(|v| v.as_str()).unwrap_or("?");
     format!("Signed by OutLayer ({}). Sig: {}", wallet_id, signature)
 }
 
@@ -258,10 +240,7 @@ pub fn shape_price_response(raw: &serde_json::Value) -> String {
 /// Shape a Jupiter Swap API V2 order response into a compact string for the LLM.
 /// V2 /order format: { requestId, outAmount, router, mode, feeBps, ... }
 pub fn shape_order_response(raw: &serde_json::Value) -> String {
-    let out_amount = raw
-        .get("outAmount")
-        .and_then(|v| v.as_str())
-        .unwrap_or("?");
+    let out_amount = raw.get("outAmount").and_then(|v| v.as_str()).unwrap_or("?");
     let router = raw
         .get("router")
         .and_then(|v| v.as_str())
@@ -277,7 +256,11 @@ pub fn shape_order_response(raw: &serde_json::Value) -> String {
         .map_or(false, |s| !s.is_empty() && s != "null");
 
     let fee_display = fee_bps as f64 / 100.0;
-    let tx_status = if has_tx { "ready to sign" } else { "quote-only" };
+    let tx_status = if has_tx {
+        "ready to sign"
+    } else {
+        "quote-only"
+    };
 
     format!(
         "Order: {} out. Router: {}. Fee: {:.2} bps ({}). {}.",
@@ -353,11 +336,7 @@ pub fn extract_request_id(order_response: &serde_json::Value) -> Result<String, 
 
 /// Check if a mint is in the allowlist. Empty allowlist = allow all.
 pub fn is_mint_allowed(cfg: &SwapConfig, mint: &str) -> bool {
-    cfg.allowed_mints.is_empty()
-        || cfg
-            .allowed_mints
-            .iter()
-            .any(|m| *m == mint.to_lowercase())
+    cfg.allowed_mints.is_empty() || cfg.allowed_mints.iter().any(|m| *m == mint.to_lowercase())
 }
 
 /// Reject if either mint is not in the allowlist. Returns an error message.
@@ -395,8 +374,7 @@ pub fn build_swap_body(
         "quoteResponse": quote,
         "userPublicKey": user_public_key,
         "wrapAndUnwrapSol": true,
-        "asLegacyTransaction": true,
-        "prioritizationFeeLamports": "auto"
+        "asLegacyTransaction": true
     })
 }
 
@@ -432,7 +410,9 @@ pub fn decode_base64(s: &str) -> Result<Vec<u8>, String> {
     let mut buf = Vec::new();
     let engine = base64::engine::general_purpose::STANDARD;
     let mut decoder = base64::read::DecoderReader::new(s.as_bytes(), &engine);
-    decoder.read_to_end(&mut buf).map_err(|e| format!("base64 decode error: {e}"))?;
+    decoder
+        .read_to_end(&mut buf)
+        .map_err(|e| format!("base64 decode error: {e}"))?;
     Ok(buf)
 }
 
@@ -447,6 +427,47 @@ pub fn decode_base58(s: &str) -> Result<Vec<u8>, String> {
 pub fn encode_base64(data: &[u8]) -> String {
     use base64::Engine;
     base64::engine::general_purpose::STANDARD.encode(data)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+/// Read a compact_u32 starting at `pos` in `buf`.
+/// Returns (value, bytes_consumed).
+pub fn compact_u32_at(buf: &[u8], pos: usize) -> Result<(usize, usize), String> {
+    if buf.len() <= pos {
+        return Err("buffer too short for compact_u32".to_string());
+    }
+    let byte = buf[pos];
+    if byte < 0x80 {
+        Ok((byte as usize, 1))
+    } else if buf.len() > pos + 2 && byte < 0xC0 {
+        // 2-byte: 10xxxxxx 1xxxxxxx
+        let val = ((byte as usize & 0x3F) << 8) | (buf[pos + 1] as usize & 0x7F);
+        Ok((val, 2))
+    } else if buf.len() > pos + 4 && byte < 0xE0 {
+        // 3-byte
+        let val = ((byte as usize & 0x1F) << 24)
+            | ((buf[pos + 1] as usize & 0x7F) << 16)
+            | ((buf[pos + 2] as usize & 0x7F) << 8)
+            | (buf[pos + 3] as usize & 0x7F);
+        Ok((val, 4))
+    } else if buf.len() > pos + 5 {
+        // 5-byte
+        let val = ((byte as usize & 0x0F) << 56)
+            | ((buf[pos + 1] as usize & 0x7F) << 48)
+            | ((buf[pos + 2] as usize & 0x7F) << 40)
+            | ((buf[pos + 3] as usize & 0x7F) << 32)
+            | ((buf[pos + 4] as usize & 0x7F) << 24)
+            | ((buf[pos + 5] as usize & 0x7F) << 16);
+        Ok((val, 6))
+    } else {
+        Err(format!("unsupported compact_u32 at pos {pos}"))
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+/// Detect transaction version from first byte.
+pub fn tx_version(tx_bytes: &[u8]) -> u8 {
+    tx_bytes.first().copied().unwrap_or(0xFF)
 }
 
 /// Extract message bytes from a bincode-encoded Solana transaction.
@@ -470,24 +491,36 @@ pub fn extract_message_from_tx(tx_bytes: &[u8]) -> Result<Vec<u8>, String> {
                     tx_bytes.len()
                 ));
             }
-            // byte[1] = compact_u32 num_sigs. For unsigned: 0x01 (1 placeholder sig).
-            // byte[2] = 0x00 (compact_u32 for 1 is just 0x01, but in practice
-            // Jupiter returns [0x00, 0x01, ...] where 0x00=prefix, 0x01=compact_u32(1))
-            // Actually: compact_u32 for 1 = [0x01], so:
             // byte[0] = 0x00 (legacy prefix)
             // byte[1] = 0x01 (compact_u32: num_sigs = 1)
             // byte[2..66] = 64 bytes of signature (zeros for unsigned)
             // byte[66..] = Message bytes
             Ok(tx_bytes[66..].to_vec())
         }
-        // V0 transaction (with address lookup tables) — NOT supported for custody
-        0x01 => Err(
-            "V0 transaction (address lookup tables) is NOT supported for custody signing. \
-             Use asLegacyTransaction=true."
-                .to_string(),
-        ),
+        #[cfg(not(target_arch = "wasm32"))]
+        // V0 transaction: byte[0]=0x01
+        // byte[1..] = compact_u32 num_sigs, then 64*N sig bytes, then MessageV0 bytes
+        0x01 => {
+            let (num_sigs, sigs_size) = compact_u32_at(&tx_bytes, 1)?;
+            let msg_start = 1 + sigs_size + num_sigs * 64;
+            if tx_bytes.len() <= msg_start {
+                return Err(format!(
+                    "V0 tx too short ({} bytes, need >{})",
+                    tx_bytes.len(),
+                    msg_start
+                ));
+            }
+            let msg = tx_bytes[msg_start..].to_vec();
+            if msg.len() > 1232 {
+                return Err(format!(
+                    "V0 message ({} bytes) exceeds OutLayer 1232-byte limit",
+                    msg.len()
+                ));
+            }
+            Ok(msg)
+        }
         other => Err(format!(
-            "Unknown transaction prefix 0x{other:02x}. Expected 0x00 (legacy)."
+            "Unknown transaction prefix 0x{other:02x}. Expected 0x00 (legacy) or 0x01 (V0)."
         )),
     }
 }
@@ -498,8 +531,8 @@ pub fn extract_message_from_tx(tx_bytes: &[u8]) -> Result<Vec<u8>, String> {
 /// Returns a new byte array with the signature inserted.
 pub fn assemble_signed_tx(tx_bytes: &[u8], sig_base58: &str) -> Result<Vec<u8>, String> {
     let mut out = tx_bytes.to_vec();
-    if out.len() < 66 {
-        return Err("tx too short to contain signature slot".to_string());
+    if out.is_empty() {
+        return Err("empty transaction".to_string());
     }
 
     // Decode base58 signature to 64 bytes
@@ -514,9 +547,35 @@ pub fn assemble_signed_tx(tx_bytes: &[u8], sig_base58: &str) -> Result<Vec<u8>, 
         ));
     }
 
-    // Replace bytes 2..66 (the 64-byte zero sig slot) with the real signature.
-    // Layout: [0x00 legacy prefix][compact_u32 num_sigs=0x01][64 bytes sig][message bytes]
-    out[2..66].copy_from_slice(&sig_bytes);
+    // Find sig slot based on transaction version prefix
+    match out[0] {
+        // Legacy: [0x00 prefix][compact_u32 num_sigs=0x01][64 bytes sig][message bytes]
+        0x00 => {
+            if out.len() < 66 {
+                return Err("legacy tx too short for signature slot".to_string());
+            }
+            out[2..66].copy_from_slice(&sig_bytes);
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        // V0: [0x01 prefix][compact_u32 num_sigs][64 bytes sig][MessageV0 bytes]
+        0x01 => {
+            let (num_sigs, sigs_size) = compact_u32_at(&out, 1)?;
+            let sig_start = 1 + sigs_size;
+            let sig_end = sig_start + num_sigs * 64;
+            if out.len() < sig_end {
+                return Err(format!(
+                    "V0 tx too short for {} sigs (need {}, have {})",
+                    num_sigs,
+                    sig_end,
+                    out.len()
+                ));
+            }
+            // Replace first signature slot
+            out[sig_start..sig_start + 64].copy_from_slice(&sig_bytes);
+        }
+        other => return Err(format!("unsupported tx prefix 0x{other:02x}")),
+    }
+
     Ok(out)
 }
 
@@ -606,8 +665,10 @@ mod tests {
     }
 
     fn config_with(pairs: &[(&str, &str)]) -> SwapConfig {
-        let section: HashMap<String, String> =
-            pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+        let section: HashMap<String, String> = pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
         SwapConfig::from_section(&section)
     }
 

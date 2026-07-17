@@ -17,6 +17,12 @@ base64 = "0.22"
 bs58 = "0.5"
 # no solana-sdk — hand-rolled instruction encoding for wasm32-wasip2 compatibility
 
+[[bin]]
+name = "e2e-swap"
+path = "src/bin/e2e_swap.rs"
+
+# no solana-sdk — hand-rolled instruction encoding for wasm32-wasip2 compatibility
+
 [profile.release]
 opt-level = "s"
 lto = true
