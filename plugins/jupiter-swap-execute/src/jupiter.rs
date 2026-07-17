@@ -374,8 +374,18 @@ pub fn build_swap_body(
         "quoteResponse": quote,
         "userPublicKey": user_public_key,
         "wrapAndUnwrapSol": true,
-        "asLegacyTransaction": true
+        "asLegacyTransaction": true,
     })
+}
+
+/// Build swap body using raw quote JSON string to preserve float precision.
+/// Jupiter is sensitive to JSON structure — re-serialization via serde can
+/// change float precision and cause V0 routing instead of legacy.
+pub fn build_swap_body_raw(quote_json: &str, user_public_key: &str) -> String {
+    format!(
+        r#"{{ "quoteResponse": {}, "userPublicKey": "{}", "wrapAndUnwrapSol": true, "asLegacyTransaction": true }}"#,
+        quote_json, user_public_key
+    )
 }
 
 /// Extract swapTransaction from Jupiter /swap response.
@@ -427,6 +437,59 @@ pub fn decode_base58(s: &str) -> Result<Vec<u8>, String> {
 pub fn encode_base64(data: &[u8]) -> String {
     use base64::Engine;
     base64::engine::general_purpose::STANDARD.encode(data)
+}
+
+/// Parse the end offset of a CompiledMessage within a MessageV0 wire buffer.
+///
+/// CompiledMessage layout:
+///   [0] num_required_signatures
+///   [1] num_readonly_signed_accounts
+///   [2] num_readonly_unsigned_accounts
+///   [3..] compact_u32(num_account_keys)
+///   [..] account_keys (32 bytes each)
+///   [..] recent_blockhash (32 bytes)
+///   [..] compact_u32(num_instructions)
+///   [..] instructions (each: compact_u32(num_acct_indexes) + acct_indexes + u8(prog_idx) + compact_u32(data_len) + data)
+///
+/// Returns the byte offset where the CompiledMessage ends (ALT data begins).
+#[cfg(not(target_arch = "wasm32"))]
+pub fn parse_compiled_message_end(buf: &[u8]) -> Result<usize, String> {
+    if buf.len() < 4 {
+        return Err("CompiledMessage too short".to_string());
+    }
+
+    // Header: 3 bytes
+    let header_end = 3;
+
+    // num_account_keys (compact_u32)
+    let (num_keys, keys_cusize) = compact_u32_at(buf, header_end)?;
+    let keys_start = header_end + keys_cusize;
+
+    // Account keys: num_keys * 32
+    let bh_offset = keys_start + num_keys * 32;
+
+    // Blockhash: 32 bytes
+    let ix_offset = bh_offset + 32;
+
+    // num_instructions (compact_u32)
+    let (num_ix, ix_cusize) = compact_u32_at(buf, ix_offset)?;
+    let mut offset = ix_offset + ix_cusize;
+
+    // Parse each instruction
+    for _ in 0..num_ix {
+        // num_account_indexes (compact_u32)
+        let (num_ai, ai_cusize) = compact_u32_at(buf, offset)?;
+        offset += ai_cusize + num_ai;
+
+        // program_id_index (u8)
+        offset += 1;
+
+        // data length (compact_u32)
+        let (data_len, data_cusize) = compact_u32_at(buf, offset)?;
+        offset += data_cusize + data_len;
+    }
+
+    Ok(offset)
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -498,19 +561,21 @@ pub fn extract_message_from_tx(tx_bytes: &[u8]) -> Result<Vec<u8>, String> {
             Ok(tx_bytes[66..].to_vec())
         }
         #[cfg(not(target_arch = "wasm32"))]
-        // V0 transaction: byte[0]=0x01
-        // byte[1..] = compact_u32 num_sigs, then 64*N sig bytes, then MessageV0 bytes
+        // V0 transaction (Jupiter/solders format): byte[0]=0x01
+        // Layout: [0x01 prefix][64 bytes sig slot][CompiledMessage][ALT data]
+        // No explicit num_sigs byte — the sig slot is always 64 bytes.
+        // CompiledMessage starts at byte 65.
         0x01 => {
-            let (num_sigs, sigs_size) = compact_u32_at(&tx_bytes, 1)?;
-            let msg_start = 1 + sigs_size + num_sigs * 64;
-            if tx_bytes.len() <= msg_start {
+            if tx_bytes.len() < 66 {
                 return Err(format!(
-                    "V0 tx too short ({} bytes, need >{})",
-                    tx_bytes.len(),
-                    msg_start
+                    "V0 tx too short ({} bytes, need at least 66)",
+                    tx_bytes.len()
                 ));
             }
-            let msg = tx_bytes[msg_start..].to_vec();
+            // Take everything from byte 65 to end. This is the message blob that
+            // OutLayer signs. We don't need to parse instruction boundaries —
+            // only the blockhash offset (handled by replace_blockhash_in_message).
+            let msg = tx_bytes[65..].to_vec();
             if msg.len() > 1232 {
                 return Err(format!(
                     "V0 message ({} bytes) exceeds OutLayer 1232-byte limit",
@@ -557,21 +622,13 @@ pub fn assemble_signed_tx(tx_bytes: &[u8], sig_base58: &str) -> Result<Vec<u8>, 
             out[2..66].copy_from_slice(&sig_bytes);
         }
         #[cfg(not(target_arch = "wasm32"))]
-        // V0: [0x01 prefix][compact_u32 num_sigs][64 bytes sig][MessageV0 bytes]
+        // V0 (Jupiter/solders format): [0x01][64B sig][CompiledMessage][ALT?]
+        // Place 64-byte signature at bytes [1:65].
         0x01 => {
-            let (num_sigs, sigs_size) = compact_u32_at(&out, 1)?;
-            let sig_start = 1 + sigs_size;
-            let sig_end = sig_start + num_sigs * 64;
-            if out.len() < sig_end {
-                return Err(format!(
-                    "V0 tx too short for {} sigs (need {}, have {})",
-                    num_sigs,
-                    sig_end,
-                    out.len()
-                ));
+            if out.len() < 65 {
+                return Err("V0 tx too short for signature slot".to_string());
             }
-            // Replace first signature slot
-            out[sig_start..sig_start + 64].copy_from_slice(&sig_bytes);
+            out[1..65].copy_from_slice(&sig_bytes);
         }
         other => return Err(format!("unsupported tx prefix 0x{other:02x}")),
     }

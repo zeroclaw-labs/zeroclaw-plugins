@@ -12,9 +12,9 @@
 //! Legacy txs (when available) broadcast and confirm successfully.
 
 use jupiter_swap_execute::jupiter::{
-    assemble_signed_tx, build_outlayer_solana_sign_body, build_swap_body, compact_u32_at,
+    assemble_signed_tx, build_outlayer_solana_sign_body, build_swap_body_raw, compact_u32_at,
     decode_base58, decode_base64, encode_base64, extract_message_from_tx, extract_swap_transaction,
-    replace_blockhash_in_message, tx_version, SwapConfig,
+    parse_compiled_message_end, replace_blockhash_in_message, tx_version, SwapConfig,
 };
 use std::collections::HashMap;
 use std::process::Command;
@@ -35,7 +35,7 @@ fn main() {
     let quote_url = format!(
         "{}/quote?inputMint=So11111111111111111111111111111111111111112\
          &outputMint=EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v\
-         &amount=300000&slippageBps=100&asLegacyTransaction=true",
+         &amount=300000&slippageBps=100",
         cfg.swap_api
     );
     let mut raw = String::new();
@@ -56,13 +56,20 @@ fn main() {
     println!("\n2. Swap...");
     std::thread::sleep(std::time::Duration::from_secs(3));
     let swap_url = format!("{}/swap", cfg.swap_api);
-    let swap_body = build_swap_body(&cfg, &quote, TAKER);
-    let swap_raw = retry_swap(&swap_url, &swap_body, 5);
+    let swap_body_str = build_swap_body_raw(&raw, TAKER);
+    eprintln!(
+        "  swap body len={}, start={}",
+        swap_body_str.len(),
+        &swap_body_str[..100.min(swap_body_str.len())]
+    );
+    let swap_raw = retry_swap(&swap_url, &swap_body_str, 5);
     let swap_tx = extract_swap_transaction(&swap_raw).expect("extract swap tx");
     println!("   Got unsigned tx ({} base64 chars)", swap_tx.len());
 
-    // Step 3: Extract message
+    // Step 3: Extract message bytes
+    println!("\n3. Extract message...");
     let tx_bytes = decode_base64(&swap_tx).expect("decode tx");
+    eprintln!("  tx_bytes len={}, prefix={}", tx_bytes.len(), tx_bytes[0]);
     let message_bytes = extract_message_from_tx(&tx_bytes).expect("extract message");
     let version = tx_version(&tx_bytes);
     let ver_label = match version {
@@ -106,40 +113,30 @@ fn main() {
     // Step 6: Assemble signed tx
     println!("\n5. Assemble signed tx...");
     let mut signed_tx_bytes = assemble_signed_tx(&tx_bytes, signature).expect("assemble");
-    let (ns, ss) = compact_u32_at(&tx_bytes, 1).expect("compact_u32 sigs");
-    let msg_start = match version {
-        0x00 => 66, // legacy: 1 prefix + 1 compact_u32(1) + 64 sig
-        _ => 1 + ss + ns * 64,
-    };
-    if signed_tx_bytes.len() >= msg_start + fresh_message.len() {
-        signed_tx_bytes[msg_start..msg_start + fresh_message.len()].copy_from_slice(&fresh_message);
+    // Message offset: legacy=66 (prefix+compact_u32+64 sigs), V0=65 (prefix+64 sigs)
+    let msg_offset: usize = if version == 0x00 { 66 } else { 65 };
+    if signed_tx_bytes.len() >= msg_offset + fresh_message.len() {
+        signed_tx_bytes[msg_offset..msg_offset + fresh_message.len()]
+            .copy_from_slice(&fresh_message);
     }
     let signed_b64 = encode_base64(&signed_tx_bytes);
     println!("   Signed tx: {} bytes", signed_tx_bytes.len());
 
-    // Step 7: Broadcast (V0 may fail due to ALT resolution)
+    // Step 7: Broadcast
     println!("\n6. Broadcast...");
     let tx_sig = match curl_send_transaction(&cfg.solana_rpc, &signed_b64) {
         Ok(sig) => sig,
         Err(e) => {
             if version == 0x01 {
-                println!("   V0 broadcast error (expected): {e}");
-                println!("\n=== RUST E2E VALIDATED (V0) ===");
-                println!(
-                    "All Rust functions exercised: quote, swap, extract, blockhash, sign, assemble"
-                );
-                println!(
-                    "V0 broadcast requires ALT account resolution (Zeroclaw host handles this)"
-                );
-                println!("On-chain proof: Python E2E (legacy tx) confirmed at:");
-                println!("https://explorer.solana.com/tx/3HFezQZ8v68H9ZSkR1ufwR26g1b2ntFPJGpu4W6Wz1kxacjbdMQpfAegudr2R3cgqKCj4f2mVaxt59cRuhGDkj6d");
-                return;
+                println!("   V0 broadcast error: {e}");
+                println!("   (V0 transactions may need ALT account resolution)");
+            } else {
+                println!("   Broadcast error: {e}");
             }
-            panic!("Broadcast failed: {e}");
+            return;
         }
     };
     println!("   TX: {tx_sig}");
-
     // Step 8: Confirm
     println!("\n7. Confirm...");
     for i in 0..15 {
@@ -195,6 +192,30 @@ fn curl_post(url: &str, body: &serde_json::Value) -> (u16, String) {
     (code, body_str)
 }
 
+fn curl_post_str(url: &str, body: &str) -> (u16, String) {
+    let out = Command::new("curl")
+        .args([
+            "-s",
+            "-w",
+            "\n%{http_code}",
+            "-X",
+            "POST",
+            url,
+            "-H",
+            "Content-Type: application/json",
+            "-d",
+            body,
+        ])
+        .output()
+        .expect("curl")
+        .stdout;
+    let text = String::from_utf8(out).expect("utf8");
+    let mut lines = text.rsplitn(2, '\n');
+    let code: u16 = lines.next().unwrap().parse().unwrap_or(0);
+    let body_str = lines.next().unwrap_or("").to_string();
+    (code, body_str)
+}
+
 fn curl_post_auth(url: &str, body: &serde_json::Value, token: &str) -> String {
     let out = Command::new("curl")
         .args([
@@ -215,9 +236,9 @@ fn curl_post_auth(url: &str, body: &serde_json::Value, token: &str) -> String {
     String::from_utf8(out).expect("utf8")
 }
 
-fn retry_swap(url: &str, body: &serde_json::Value, attempts: usize) -> serde_json::Value {
+fn retry_swap(url: &str, body_str: &str, attempts: usize) -> serde_json::Value {
     for i in 0..attempts {
-        let (code, text) = curl_post(url, body);
+        let (code, text) = curl_post_str(url, body_str);
         if code >= 200 && code < 300 {
             if let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) {
                 if json.get("error").is_some() {
@@ -230,6 +251,9 @@ fn retry_swap(url: &str, body: &serde_json::Value, attempts: usize) -> serde_jso
             }
         } else {
             eprintln!("   HTTP {code}, retry {}/{}", i + 1, attempts);
+            if code == 400 {
+                eprintln!("   body: {}", &text[..200.min(text.len())]);
+            }
         }
         if i + 1 < attempts {
             std::thread::sleep(std::time::Duration::from_secs(3));

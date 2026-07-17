@@ -106,17 +106,30 @@ fn extract_message_from_legacy_tx() {
 #[test]
 #[test]
 fn extract_message_handles_v0_tx() {
-    // V0 tx: [0x01 prefix][compact_u32 num_sigs=0x01][64 zero sigs][MessageV0 bytes]
-    let mut tx = vec![0x01, 0x01]; // V0 prefix + compact_u32(1)
-    tx.extend_from_slice(&[0u8; 64]); // zero sig
-    tx.extend_from_slice(b"V0MSG");
+    // V0 unsigned tx (Jupiter/solders format):
+    // [0x01 prefix][64 zero sig bytes][message blob]
+    // Message is everything from byte 65 to end.
+    let mut compiled = Vec::new();
+    compiled.push(1); // num_required_signatures
+    compiled.push(0); // num_readonly_signed
+    compiled.push(0); // num_readonly_unsigned
+    compiled.push(1); // compact_u32(1) = num_account_keys
+    compiled.extend_from_slice(&[0u8; 32]); // key
+    compiled.extend_from_slice(&[0u8; 32]); // blockhash
+    compiled.push(0); // compact_u32(0) = num_instructions
+
+    let mut tx = vec![0x01]; // V0 prefix
+    tx.extend_from_slice(&[0u8; 64]); // 64 zero sig bytes
+    tx.extend_from_slice(&compiled); // message blob (no ALT suffix in this test)
+
     let msg = extract_message_from_tx(&tx).unwrap();
-    assert_eq!(&msg[..], b"V0MSG");
+    assert_eq!(msg.len(), compiled.len());
+    assert_eq!(&msg[..], &compiled[..]);
 }
 
 #[test]
 fn extract_message_v0_tx_too_short() {
-    let tx = vec![0x01, 0x01, 0x00]; // V0 prefix + num_sigs + partial sig
+    let tx = vec![0x01, 0x00, 0x00]; // V0 prefix + num_sigs=0 + 1 byte (need 67 min)
     let err = extract_message_from_tx(&tx).unwrap_err();
     assert!(err.contains("V0 tx too short"));
 }
