@@ -2,7 +2,10 @@ use token_risk_check::risk::{
     assess, parse_execute_args, serialize_report, unknown_report, validate_mint, validate_rpc_url,
     Evidence, Reason, RiskError, RiskReport, Slots, Verdict,
 };
-use token_risk_check::{bounded_response_body, parameters_schema, rpc_request_bodies, ShimError};
+use token_risk_check::{
+    bounded_response_body, parameters_schema, rpc_request_bodies, ResponseBodyAccumulator,
+    ShimError,
+};
 
 const SAFE_MINT: &str = "So11111111111111111111111111111111111111112";
 const TOKEN_2022_MINT: &str = "So11111111111111111111111111111111111111112";
@@ -104,6 +107,43 @@ fn bounded_response_body_rejects_non_2xx_and_oversized_data_before_parsing() {
         Err(ShimError::ResponseNotUtf8)
     );
     assert_eq!(bounded_response_body(204, b"{}".to_vec()).unwrap(), "{}");
+}
+
+#[test]
+fn stream_accumulator_accepts_multiple_chunks_at_exact_boundary() {
+    let mut accumulator = ResponseBodyAccumulator::new();
+    for _ in 0..16 {
+        accumulator.push_chunk(&vec![b'a'; 64 * 1024]).unwrap();
+    }
+
+    assert_eq!(accumulator.next_chunk_len(), 1);
+    assert_eq!(accumulator.finish().unwrap().len(), 1024 * 1024);
+}
+
+#[test]
+fn stream_accumulator_stops_before_appending_chunk_that_crosses_boundary() {
+    let mut accumulator = ResponseBodyAccumulator::new();
+    for _ in 0..15 {
+        accumulator.push_chunk(&vec![b'a'; 64 * 1024]).unwrap();
+    }
+    accumulator.push_chunk(&vec![b'b'; 63 * 1024]).unwrap();
+
+    assert_eq!(
+        accumulator.push_chunk(&vec![b'c'; 2 * 1024]),
+        Err(ShimError::ResponseTooLarge)
+    );
+    assert_eq!(accumulator.finish().unwrap().len(), 1023 * 1024);
+}
+
+#[test]
+fn stream_errors_have_stable_bounded_unknown_codes() {
+    assert_eq!(ShimError::HttpTransport.code(), "HTTP_TRANSPORT_ERROR");
+    assert_eq!(ShimError::BodyRead.code(), "HTTP_BODY_READ_ERROR");
+    assert_eq!(ShimError::ResponseTooLarge.code(), "RESPONSE_TOO_LARGE");
+    assert_eq!(
+        ShimError::ResponseBufferFailure.code(),
+        "RESPONSE_BUFFER_ERROR"
+    );
 }
 
 #[test]

@@ -3,26 +3,68 @@ pub mod risk;
 use risk::{validate_mint, ACCOUNT_REQUEST_ID, LARGEST_ACCOUNTS_REQUEST_ID};
 
 const MAX_RESPONSE_BODY_BYTES: usize = 1024 * 1024;
+const MAX_RESPONSE_CHUNK_BYTES: usize = 64 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ShimError {
     InvalidMint,
     RequestSerialization,
+    HttpTransport,
     HttpStatus,
+    BodyRead,
     ResponseTooLarge,
+    ResponseBufferFailure,
     ResponseNotUtf8,
 }
 
-#[cfg(target_family = "wasm")]
 impl ShimError {
-    fn code(self) -> &'static str {
+    pub fn code(self) -> &'static str {
         match self {
             Self::InvalidMint => "INVALID_MINT",
             Self::RequestSerialization => "REQUEST_SERIALIZATION_ERROR",
+            Self::HttpTransport => "HTTP_TRANSPORT_ERROR",
             Self::HttpStatus => "HTTP_STATUS_ERROR",
+            Self::BodyRead => "HTTP_BODY_READ_ERROR",
             Self::ResponseTooLarge => "RESPONSE_TOO_LARGE",
+            Self::ResponseBufferFailure => "RESPONSE_BUFFER_ERROR",
             Self::ResponseNotUtf8 => "RESPONSE_NOT_UTF8",
         }
+    }
+}
+
+#[derive(Debug, Default)]
+pub struct ResponseBodyAccumulator {
+    bytes: Vec<u8>,
+}
+
+impl ResponseBodyAccumulator {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn push_chunk(&mut self, chunk: &[u8]) -> Result<(), ShimError> {
+        let new_len = self
+            .bytes
+            .len()
+            .checked_add(chunk.len())
+            .ok_or(ShimError::ResponseTooLarge)?;
+        if new_len > MAX_RESPONSE_BODY_BYTES {
+            return Err(ShimError::ResponseTooLarge);
+        }
+        self.bytes
+            .try_reserve(chunk.len())
+            .map_err(|_| ShimError::ResponseBufferFailure)?;
+        self.bytes.extend_from_slice(chunk);
+        Ok(())
+    }
+
+    pub fn next_chunk_len(&self) -> u64 {
+        let remaining = MAX_RESPONSE_BODY_BYTES - self.bytes.len();
+        remaining.saturating_add(1).min(MAX_RESPONSE_CHUNK_BYTES) as u64
+    }
+
+    pub fn finish(self) -> Result<String, ShimError> {
+        String::from_utf8(self.bytes).map_err(|_| ShimError::ResponseNotUtf8)
     }
 }
 
@@ -50,10 +92,9 @@ pub fn bounded_response_body(status: u16, body: Vec<u8>) -> Result<String, ShimE
     if !(200..300).contains(&status) {
         return Err(ShimError::HttpStatus);
     }
-    if body.len() > MAX_RESPONSE_BODY_BYTES {
-        return Err(ShimError::ResponseTooLarge);
-    }
-    String::from_utf8(body).map_err(|_| ShimError::ResponseNotUtf8)
+    let mut accumulator = ResponseBodyAccumulator::new();
+    accumulator.push_chunk(&body)?;
+    accumulator.finish()
 }
 
 pub fn parameters_schema() -> String {
@@ -75,7 +116,7 @@ mod component {
     });
 
     use crate::risk::{assess, parse_execute_args, serialize_report, unknown_report, Verdict};
-    use crate::{bounded_response_body, parameters_schema, rpc_request_bodies, ShimError};
+    use crate::{parameters_schema, rpc_request_bodies, ResponseBodyAccumulator, ShimError};
     use exports::zeroclaw::plugin::plugin_info::Guest as PluginInfo;
     use exports::zeroclaw::plugin::tool::{Guest as Tool, ToolResult};
     use zeroclaw::plugin::logging::{
@@ -122,11 +163,11 @@ mod component {
             };
             let account_body = match post_json(&parsed.config.rpc_url, &account_request) {
                 Ok(body) => body,
-                Err(code) => return Ok(unknown_result(code)),
+                Err(error) => return Ok(unknown_result(error.code())),
             };
             let largest_body = match post_json(&parsed.config.rpc_url, &largest_request) {
                 Ok(body) => body,
-                Err(code) => return Ok(unknown_result(code)),
+                Err(error) => return Ok(unknown_result(error.code())),
             };
 
             match assess(&parsed.mint, &account_body, &largest_body) {
@@ -149,19 +190,30 @@ mod component {
         }
     }
 
-    fn post_json(endpoint: &str, request: &str) -> Result<String, &'static str> {
+    fn post_json(endpoint: &str, request: &str) -> Result<String, ShimError> {
         let response = waki::Client::new()
             .post(endpoint)
             .header("Content-Type", "application/json")
             .body(request.as_bytes().to_vec())
             .send()
-            .map_err(|_| "HTTP_TRANSPORT_ERROR")?;
+            .map_err(|_| ShimError::HttpTransport)?;
         let status = response.status_code();
         if !(200..300).contains(&status) {
-            return Err(ShimError::HttpStatus.code());
+            return Err(ShimError::HttpStatus);
         }
-        let body = response.body().map_err(|_| "HTTP_BODY_READ_ERROR")?;
-        bounded_response_body(status, body).map_err(ShimError::code)
+
+        let mut accumulator = ResponseBodyAccumulator::new();
+        loop {
+            let chunk = response
+                .chunk(accumulator.next_chunk_len())
+                .map_err(|_| ShimError::BodyRead)?;
+            match chunk {
+                Some(chunk) if chunk.is_empty() => return Err(ShimError::BodyRead),
+                Some(chunk) => accumulator.push_chunk(&chunk)?,
+                None => break,
+            }
+        }
+        accumulator.finish()
     }
 
     fn unknown_result(code: &'static str) -> ToolResult {
