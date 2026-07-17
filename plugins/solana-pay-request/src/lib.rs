@@ -1,13 +1,22 @@
 //! A ZeroClaw WIT tool plugin that creates Solana Pay transfer-request URLs.
 //!
-//! This is deliberately a custody-tier T1 component: it does not hold private
-//! keys, sign transactions, call an RPC endpoint, or move funds. Operator
-//! configuration constrains recipients, token mints, and maximum amounts.
+//! The component holds no private keys, signs and broadcasts no transactions,
+//! and calls no RPC endpoint. Operator configuration constrains recipients and
+//! maximum native-SOL amounts. A generated URL asks a compatible wallet to
+//! compose a transfer, so the wallet remains the review and approval boundary.
 //!
 //! Build:  rustup target add wasm32-wasip2
 //!         cargo build --target wasm32-wasip2 --release
 
 pub mod solana_pay;
+
+/// Manifest/package identity. Cargo metadata is the source of truth.
+pub const PLUGIN_PACKAGE_ID: &str = env!("CARGO_PKG_NAME");
+/// Immutable release identity. Cargo metadata is the source of truth.
+pub const PLUGIN_VERSION: &str = env!("CARGO_PKG_VERSION");
+/// WIT tool identity exposed to the model. This is intentionally not the
+/// hyphenated manifest/package identifier used for installation and config.
+pub const EXPORTED_TOOL_NAME: &str = "solana_pay_request";
 
 #[cfg(target_family = "wasm")]
 mod component {
@@ -19,7 +28,10 @@ mod component {
 
     use std::collections::HashMap;
 
-    use crate::solana_pay::{build_request, PayConfig, PayRequest};
+    use crate::{
+        solana_pay::{build_request, PayConfig, PayRequest},
+        EXPORTED_TOOL_NAME, PLUGIN_PACKAGE_ID, PLUGIN_VERSION,
+    };
     use exports::zeroclaw::plugin::plugin_info::Guest as PluginInfo;
     use exports::zeroclaw::plugin::tool::{Guest as Tool, ToolResult};
     use zeroclaw::plugin::logging::{
@@ -27,10 +39,6 @@ mod component {
     };
 
     struct SolanaPayRequest;
-
-    const PLUGIN_NAME: &str = "solana-pay-request";
-    const PLUGIN_VERSION: &str = "0.1.0";
-    const TOOL_NAME: &str = "solana_pay_request";
 
     #[derive(serde::Deserialize)]
     struct ExecuteArgs {
@@ -42,7 +50,7 @@ mod component {
 
     impl PluginInfo for SolanaPayRequest {
         fn plugin_name() -> String {
-            PLUGIN_NAME.to_string()
+            PLUGIN_PACKAGE_ID.to_string()
         }
 
         fn plugin_version() -> String {
@@ -52,14 +60,13 @@ mod component {
 
     impl Tool for SolanaPayRequest {
         fn name() -> String {
-            TOOL_NAME.to_string()
+            EXPORTED_TOOL_NAME.to_string()
         }
 
         fn description() -> String {
-            "Create a validated Solana Pay transfer-request URL. This tool never signs a \
-             transaction or moves funds. Operator configuration can allowlist recipients \
-             and token mints and cap the requested amount; a wallet must still display and \
-             approve the request."
+            "Create a validated native-SOL transfer-request URL. The URL asks a compatible \
+             wallet to compose a transfer. This plugin cannot sign or broadcast a \
+             transaction; operator configuration allowlists recipients and caps the amount."
                 .to_string()
         }
 
@@ -73,11 +80,7 @@ mod component {
                     },
                     "amount": {
                         "type": "string",
-                        "description": "Canonical decimal amount, with at most 9 fractional digits."
-                    },
-                    "spl_token": {
-                        "type": "string",
-                        "description": "Optional base58 SPL token mint. Omit for native SOL."
+                        "description": "Canonical native-SOL amount, with at most 9 fractional digits."
                     },
                     "references": {
                         "type": "array",
@@ -126,7 +129,7 @@ mod component {
                     emit(
                         PluginAction::Complete,
                         PluginOutcome::Success,
-                        "created unsigned Solana Pay request",
+                        "created native-SOL transfer request URL",
                         Some(result.reference_count),
                     );
                     Ok(ToolResult {
@@ -178,4 +181,20 @@ mod component {
     }
 
     export!(SolanaPayRequest);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{EXPORTED_TOOL_NAME, PLUGIN_PACKAGE_ID, PLUGIN_VERSION};
+
+    #[test]
+    fn package_and_exported_tool_identities_are_distinct_and_explicit() {
+        assert_ne!(PLUGIN_PACKAGE_ID, EXPORTED_TOOL_NAME);
+        assert_eq!(EXPORTED_TOOL_NAME, PLUGIN_PACKAGE_ID.replace('-', "_"));
+        assert_eq!(PLUGIN_VERSION, env!("CARGO_PKG_VERSION"));
+
+        let manifest = include_str!("../manifest.toml");
+        assert!(manifest.contains(&format!("name = \"{PLUGIN_PACKAGE_ID}\"")));
+        assert!(manifest.contains(&format!("version = \"{PLUGIN_VERSION}\"")));
+    }
 }

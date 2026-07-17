@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 const MAX_REFERENCES: usize = 8;
 const MAX_LABEL_BYTES: usize = 64;
 const MAX_TEXT_BYTES: usize = 200;
-const TOKEN_SCALE: u32 = 9;
+const SOL_SCALE: u32 = 9;
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 pub struct PayRequest {
@@ -31,9 +31,6 @@ pub struct PayConfig {
     pub default_recipient: Option<String>,
     pub allowed_recipients: HashSet<String>,
     pub allow_unlisted_recipients: bool,
-    pub allowed_mints: HashSet<String>,
-    pub allow_unlisted_mints: bool,
-    pub allow_native_sol: bool,
     max_amount_minor: u128,
     max_amount_display: String,
 }
@@ -44,9 +41,6 @@ impl Default for PayConfig {
             default_recipient: None,
             allowed_recipients: HashSet::new(),
             allow_unlisted_recipients: false,
-            allowed_mints: HashSet::new(),
-            allow_unlisted_mints: false,
-            allow_native_sol: true,
             max_amount_minor: 1_000 * 1_000_000_000,
             max_amount_display: "1000".to_string(),
         }
@@ -65,19 +59,11 @@ impl PayConfig {
             validate_public_key("allowed recipient", recipient)?;
         }
 
-        let allowed_mints = parse_list(section.get("allowed_mints"));
-        for mint in &allowed_mints {
-            validate_public_key("allowed mint", mint)?;
-        }
-
         let max_amount = non_empty(section.get("max_amount")).unwrap_or("1000");
         Ok(Self {
             default_recipient,
             allowed_recipients,
             allow_unlisted_recipients: parse_bool(section, "allow_unlisted_recipients", false)?,
-            allowed_mints,
-            allow_unlisted_mints: parse_bool(section, "allow_unlisted_mints", false)?,
-            allow_native_sol: parse_bool(section, "allow_native_sol", true)?,
             max_amount_minor: parse_amount("max_amount", max_amount)?,
             max_amount_display: max_amount.to_string(),
         })
@@ -88,9 +74,9 @@ impl PayConfig {
 pub struct PayResult {
     pub url: String,
     pub summary: String,
-    pub custody_tier: &'static str,
     pub requires_wallet_approval: bool,
-    pub moves_funds: bool,
+    pub plugin_signed_transaction: bool,
+    pub plugin_broadcast_transaction: bool,
     pub reference_count: usize,
 }
 
@@ -120,24 +106,14 @@ pub fn build_request(request: &PayRequest, config: &PayConfig) -> Result<PayResu
         ));
     }
 
-    let spl_token = request
+    if request
         .spl_token
         .as_deref()
-        .filter(|value| !value.trim().is_empty());
-    match spl_token {
-        Some(mint) => {
-            validate_public_key("spl_token", mint)?;
-            if !config.allow_unlisted_mints && !config.allowed_mints.contains(mint) {
-                return Err(
-                    "spl_token is not in allowed_mints; operator policy rejected the request"
-                        .to_string(),
-                );
-            }
-        }
-        None if !config.allow_native_sol => {
-            return Err("native SOL requests are disabled by operator policy".to_string());
-        }
-        None => {}
+        .is_some_and(|value| !value.trim().is_empty())
+    {
+        return Err(
+            "SPL token requests are not supported in this release; native SOL only".to_string(),
+        );
     }
 
     validate_references(&request.references)?;
@@ -147,9 +123,6 @@ pub fn build_request(request: &PayRequest, config: &PayConfig) -> Result<PayResu
 
     let mut query = Vec::new();
     query.push(format!("amount={}", encode_component(&request.amount)));
-    if let Some(mint) = spl_token {
-        query.push(format!("spl-token={}", encode_component(mint)));
-    }
     for reference in &request.references {
         query.push(format!("reference={}", encode_component(reference)));
     }
@@ -157,16 +130,15 @@ pub fn build_request(request: &PayRequest, config: &PayConfig) -> Result<PayResu
     push_optional(&mut query, "message", request.message.as_deref());
     push_optional(&mut query, "memo", request.memo.as_deref());
 
-    let asset = spl_token.unwrap_or("SOL");
     Ok(PayResult {
         url: format!("solana:{}?{}", encode_component(recipient), query.join("&")),
         summary: format!(
-            "Unsigned request for {} {} to {}. Review and approve it in a compatible wallet.",
-            request.amount, asset, recipient
+            "Native-SOL transfer request for {} SOL to {}. This plugin did not sign or broadcast a transaction; verify the recipient and amount in a compatible wallet before approving.",
+            request.amount, recipient
         ),
-        custody_tier: "T1",
         requires_wallet_approval: true,
-        moves_funds: false,
+        plugin_signed_transaction: false,
+        plugin_broadcast_transaction: false,
         reference_count: request.references.len(),
     })
 }
@@ -239,24 +211,23 @@ fn parse_amount(field: &str, value: &str) -> Result<u128, String> {
     if value.contains('.') && fraction.is_empty() {
         return Err(format!("{field} must not end with a decimal point"));
     }
-    if fraction.len() > TOKEN_SCALE as usize || !fraction.bytes().all(|byte| byte.is_ascii_digit())
-    {
+    if fraction.len() > SOL_SCALE as usize || !fraction.bytes().all(|byte| byte.is_ascii_digit()) {
         return Err(format!(
-            "{field} must have at most {TOKEN_SCALE} fractional digits"
+            "{field} must have at most {SOL_SCALE} fractional digits"
         ));
     }
 
     let integer_value = integer
         .parse::<u128>()
         .map_err(|_| format!("{field} is too large"))?;
-    let scale = 10_u128.pow(TOKEN_SCALE);
+    let scale = 10_u128.pow(SOL_SCALE);
     let fraction_value = if fraction.is_empty() {
         0
     } else {
         fraction
             .parse::<u128>()
             .map_err(|_| format!("{field} is not a decimal"))?
-            .checked_mul(10_u128.pow(TOKEN_SCALE - fraction.len() as u32))
+            .checked_mul(10_u128.pow(SOL_SCALE - fraction.len() as u32))
             .ok_or_else(|| format!("{field} is too large"))?
     };
     integer_value

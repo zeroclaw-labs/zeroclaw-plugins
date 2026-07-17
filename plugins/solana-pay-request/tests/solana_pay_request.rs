@@ -44,31 +44,22 @@ fn creates_native_sol_url_in_spec_order() {
             "solana:{recipient}?amount=0.01&reference={reference}&label=Acme%20Store&message=Order%20%2342&memo=INV-42"
         )
     );
-    assert_eq!(result.custody_tier, "T1");
     assert!(result.requires_wallet_approval);
-    assert!(!result.moves_funds);
+    assert!(!result.plugin_signed_transaction);
+    assert!(!result.plugin_broadcast_transaction);
+    assert!(result.summary.contains("verify the recipient and amount"));
 }
 
 #[test]
-fn creates_allowlisted_spl_token_request() {
+fn rejects_spl_tokens_until_mint_specific_precision_policy_exists() {
     let recipient = key(3);
     let mint = key(4);
-    let config = PayConfig::from_section(&HashMap::from([
-        ("allowed_recipients".to_string(), recipient.clone()),
-        ("allowed_mints".to_string(), mint.clone()),
-        ("allow_native_sol".to_string(), "false".to_string()),
-        ("max_amount".to_string(), "100.50".to_string()),
-    ]))
-    .expect("valid config");
-    let mut req = request(&recipient, "25.5");
-    req.spl_token = Some(mint.clone());
+    let config = config_for(&recipient);
+    let mut req = request(&recipient, "2.5");
+    req.spl_token = Some(mint);
 
-    let result = build_request(&req, &config).expect("request");
-
-    assert_eq!(
-        result.url,
-        format!("solana:{recipient}?amount=25.5&spl-token={mint}")
-    );
+    let error = build_request(&req, &config).unwrap_err();
+    assert!(error.contains("native SOL only"));
 }
 
 #[test]
@@ -120,7 +111,7 @@ fn fails_closed_without_recipient_allowlist() {
 }
 
 #[test]
-fn rejects_unlisted_recipient_and_mint() {
+fn rejects_unlisted_recipient_and_any_spl_mint() {
     let trusted = key(10);
     let attacker = key(11);
     let error = build_request(&request(&attacker, "1"), &config_for(&trusted)).unwrap_err();
@@ -129,7 +120,7 @@ fn rejects_unlisted_recipient_and_mint() {
     let mut req = request(&trusted, "1");
     req.spl_token = Some(key(12));
     let error = build_request(&req, &config_for(&trusted)).unwrap_err();
-    assert!(error.contains("allowed_mints"));
+    assert!(error.contains("native SOL only"));
 }
 
 #[test]
@@ -198,7 +189,10 @@ fn prompt_text_cannot_redirect_the_recipient() {
 
 #[test]
 fn rejects_malformed_configuration() {
-    let bad_bool = HashMap::from([("allow_native_sol".to_string(), "sometimes".to_string())]);
+    let bad_bool = HashMap::from([(
+        "allow_unlisted_recipients".to_string(),
+        "sometimes".to_string(),
+    )]);
     assert!(PayConfig::from_section(&bad_bool).is_err());
 
     let bad_key = HashMap::from([(
