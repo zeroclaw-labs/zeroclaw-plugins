@@ -1,0 +1,7 @@
+name = "solana-pay-verify"
+version = "0.1.0"
+description = "Verify a Solana Pay invoice using bounded read-only RPC calls; never sign or move funds"
+author = "Angel Silva"
+wasm_path = "solana_pay_verify.wasm"
+capabilities = ["tool"]
+permissions = ["http_client", "config_read"]
