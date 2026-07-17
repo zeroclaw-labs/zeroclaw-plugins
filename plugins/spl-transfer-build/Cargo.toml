@@ -1,0 +1,32 @@
+[package]
+name = "spl-transfer-build"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "ZeroClaw WIT tool plugin: build an UNSIGNED Solana transfer transaction (SOL or SPL) under operator policy — recipient allowlist, per-transfer caps, optional durable nonce so the tx survives an approval queue. Holds no keys; cannot sign or broadcast."
+publish = false
+
+# cdylib for the wasm component; rlib so the pure builder core is testable on
+# the host with a plain `cargo test`.
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+wit-bindgen = "0.46"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+solana-core-wasi = { path = "../../libs/solana-core" }
+
+# waki is wasm-only: the blocking wasi:http client. Host `cargo test` must not
+# compile it.
+[target.'cfg(target_family = "wasm")'.dependencies]
+waki = { version = "0.5.1", features = ["json"] }
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true
+codegen-units = 1
+
+# Standalone crate: built for wasm32-wasip2, not part of the host workspace.
+[workspace]

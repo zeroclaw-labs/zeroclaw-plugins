@@ -1,0 +1,12 @@
+name = "spl-transfer-build"
+version = "0.1.0"
+description = "Build an unsigned Solana transfer transaction (SOL or SPL) under operator policy: recipient allowlist, per-transfer caps, optional durable nonce so the transaction survives an approval queue. Returns base64 bytes plus a plain digest; holds no keys, cannot sign or broadcast."
+author = "zkasuran"
+wasm_path = "spl_transfer_build.wasm"
+capabilities = ["tool"]
+# http_client: JSON-RPC calls to the operator-configured Solana RPC endpoint
+# (TLS is performed host-side). config_read: the host injects this plugin's
+# own config section (rpc_url, allow_recipients, caps, nonce_account) into
+# execute args as `__config`; without it every transfer is refused (fail
+# closed, empty policy denies all).
+permissions = ["http_client", "config_read"]
