@@ -7,6 +7,7 @@ use url::Url;
 const LEGACY_TOKEN_PROGRAM: &str = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
 const TOKEN_2022_PROGRAM: &str = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb";
 const CONCENTRATION_THRESHOLD_BPS: u128 = 5_000;
+const MAX_FORWARD_SLOT_SKEW: u64 = 32;
 const MAX_REASONS: usize = 12;
 const MAX_ERROR_TEXT_CHARS: usize = 160;
 const MAX_EXTENSION_NAME_CHARS: usize = 32;
@@ -37,7 +38,9 @@ impl fmt::Display for RiskError {
         match self {
             Self::InvalidMint => f.write_str("mint must be a 32-byte base58 public key"),
             Self::InvalidRpcUrl => {
-                f.write_str("RPC URL must be HTTPS without credentials, query, or fragment")
+                f.write_str(
+                    "RPC URL must be HTTPS without credentials or fragment; only one non-empty api-key query is allowed",
+                )
             }
             Self::MalformedRpcResponse => f.write_str("RPC response is malformed or incomplete"),
             Self::JsonRpcError => f.write_str("RPC response contains an error"),
@@ -45,7 +48,9 @@ impl fmt::Display for RiskError {
             Self::ZeroSupply => f.write_str("mint supply must be greater than zero"),
             Self::InvalidLargestAccount => f.write_str("largest account amount is invalid"),
             Self::InconsistentSupply => f.write_str("largest account amounts exceed mint supply"),
-            Self::InconsistentSlots => f.write_str("RPC evidence slots do not match"),
+            Self::InconsistentSlots => {
+                f.write_str("RPC evidence slots are reversed or too far apart")
+            }
             Self::ResponseIdMismatch => f.write_str("RPC response ID does not match its request"),
             Self::InvalidAuthority => f.write_str("authority must be a 32-byte base58 public key"),
             Self::UnsupportedTokenProgram => {
@@ -90,11 +95,25 @@ pub fn validate_mint(mint: &str) -> Result<(), RiskError> {
 
 pub fn validate_rpc_url(raw: &str) -> Result<String, RiskError> {
     let url = Url::parse(raw).map_err(|_| RiskError::InvalidRpcUrl)?;
+    let query_is_allowed = match url.query() {
+        None => true,
+        Some(_) => {
+            let mut pairs = url.query_pairs();
+            matches!(pairs.next(), Some((key, value))
+                if key == "api-key"
+                    && !value.is_empty()
+                    && value.len() <= 128
+                    && value
+                        .bytes()
+                        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_')))
+                && pairs.next().is_none()
+        }
+    };
     if url.scheme() != "https"
         || url.host_str().is_none()
         || !url.username().is_empty()
         || url.password().is_some()
-        || url.query().is_some()
+        || !query_is_allowed
         || url.fragment().is_some()
     {
         return Err(RiskError::InvalidRpcUrl);
@@ -216,9 +235,12 @@ pub fn assess(mint: &str, account_json: &str, largest_json: &str) -> Result<Risk
     let largest: LargestResult = decode_rpc(largest_json, LARGEST_ACCOUNTS_REQUEST_ID)?;
     let account_value = account.value.ok_or(RiskError::NullAccount)?;
 
-    if account.context.slot != largest.context.slot {
-        return Err(RiskError::InconsistentSlots);
-    }
+    let slot_skew = largest
+        .context
+        .slot
+        .checked_sub(account.context.slot)
+        .filter(|skew| *skew <= MAX_FORWARD_SLOT_SKEW)
+        .ok_or(RiskError::InconsistentSlots)?;
 
     let token_program = token_program_name(&account_value.owner)?;
     let parsed = account_value.data.parsed;
@@ -263,6 +285,13 @@ pub fn assess(mint: &str, account_json: &str, largest_json: &str) -> Result<Risk
     let freeze_authority_revoked = authority_is_revoked(&info.freeze_authority)?;
 
     let mut rules = Vec::new();
+    if slot_skew > 0 {
+        rules.push(rule(
+            RuleSeverity::Amber,
+            "EVIDENCE_SLOT_SKEW",
+            "RPC evidence is recent but not from one atomic slot",
+        ));
+    }
     if !mint_authority_revoked {
         rules.push(rule(
             RuleSeverity::Amber,
@@ -296,6 +325,9 @@ pub fn assess(mint: &str, account_json: &str, largest_json: &str) -> Result<Risk
         "LP_STATUS_NOT_CHECKED".to_owned(),
         "TOP_ACCOUNTS_ARE_NOT_UNIQUE_HOLDERS".to_owned(),
     ];
+    if slot_skew > 0 {
+        limitations.push("EVIDENCE_SLOT_SKEW".to_owned());
+    }
     if reasons_truncated {
         limitations.push("REASONS_TRUNCATED".to_owned());
     }

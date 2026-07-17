@@ -27,13 +27,58 @@ fn validates_mint_and_rpc_endpoint() {
         validate_rpc_url("https://api.mainnet-beta.solana.com").unwrap(),
         "https://api.mainnet-beta.solana.com/"
     );
+    assert_eq!(
+        validate_rpc_url("https://mainnet.helius-rpc.com/?api-key=abc_123-XYZ").unwrap(),
+        "https://mainnet.helius-rpc.com/?api-key=abc_123-XYZ"
+    );
     for unsafe_url in [
         "http://rpc.example.com",
         "https://key@rpc.example.com",
         "https://rpc.example.com/?key=secret",
+        "https://rpc.example.com/?api-key=",
+        "https://rpc.example.com/?api-key=secret&method=getBalance",
+        "https://rpc.example.com/?api-key=secret&api-key=override",
+        "https://rpc.example.com/?api-key=secret%26method%3DgetBalance",
         "https://rpc.example.com/#override",
     ] {
         assert!(validate_rpc_url(unsafe_url).is_err(), "{unsafe_url}");
+    }
+}
+
+#[test]
+fn bounded_forward_slot_skew_never_reports_green() {
+    let largest = include_str!("fixtures/dispersed-largest.json")
+        .replace("\"slot\": 347119291", "\"slot\": 347119293");
+    let report = assess(
+        SAFE_MINT,
+        include_str!("fixtures/legacy-safe-account.json"),
+        &largest,
+    )
+    .unwrap();
+
+    assert_eq!(report.verdict, Verdict::Amber);
+    assert!(reason_codes(&report).contains(&"EVIDENCE_SLOT_SKEW"));
+    assert!(report
+        .limitations
+        .iter()
+        .any(|limitation| limitation == "EVIDENCE_SLOT_SKEW"));
+    assert_eq!(report.slots.account, 347119291);
+    assert_eq!(report.slots.largest_accounts, 347119293);
+}
+
+#[test]
+fn rejects_backward_or_excessive_slot_skew() {
+    for slot in [347119290_u64, 347119324_u64] {
+        let largest = include_str!("fixtures/dispersed-largest.json")
+            .replace("\"slot\": 347119291", &format!("\"slot\": {slot}"));
+        assert!(matches!(
+            assess(
+                SAFE_MINT,
+                include_str!("fixtures/legacy-safe-account.json"),
+                &largest,
+            ),
+            Err(RiskError::InconsistentSlots)
+        ));
     }
 }
 

@@ -11,7 +11,7 @@ The tool validates the mint as a 32-byte base58 public key, accepts only the leg
 - getAccountInfo with jsonParsed, JSON-RPC ID 1;
 - getTokenLargestAccounts, JSON-RPC ID 2.
 
-It requires `account.data.parsed.type` to be exactly `mint`, then checks initialization, supply, decimals, mint authority, freeze authority, the largest supplied token-account concentration, and supported Token-2022 extensions. The two responses must have the same RPC slot. The exact request methods and IDs are fixed in the component; the model cannot choose them.
+It requires `account.data.parsed.type` to be exactly `mint`, then checks initialization, supply, decimals, mint authority, freeze authority, the largest supplied token-account concentration, and supported Token-2022 extensions. Equal response slots can produce Green. A largest-accounts response up to 32 slots ahead is accepted only with an `EVIDENCE_SLOT_SKEW` Amber reason and limitation, so non-atomic evidence can never produce Green; reversed or larger gaps return Unknown. The exact request methods and IDs are fixed in the component; the model cannot choose them.
 
 This is a bounded evidence check, not a safety guarantee, audit, investment recommendation, or proof that a token can be sold.
 
@@ -37,10 +37,10 @@ The manifest requests http_client and config_read. Configure exactly one operato
 name = "token-risk-check"
 
 [plugins.entries.config]
-rpc_url = "https://api.mainnet-beta.solana.com"
+rpc_url = "https://mainnet.helius-rpc.com/?api-key=YOUR_KEY"
 ~~~
 
-The runtime selects the `[[plugins.entries]]` item whose `name` matches the plugin and resolves its nested `config` string map. Because this manifest grants `config_read`, the runtime removes any caller-supplied `__config` and injects that resolved map into the tool input, making the configured value available as `__config.rpc_url`. The URL must be HTTPS, have a host, and contain no userinfo, query, or fragment. Do not put credentials in the URL. The RPC operator can observe the queried mint and both fixed methods, so choose an endpoint whose privacy policy and retention are acceptable. The component does not log the endpoint, mint, arguments, or raw responses.
+The runtime selects the `[[plugins.entries]]` item whose `name` matches the plugin and resolves its nested `config` string map. Because this manifest grants `config_read`, the runtime removes any caller-supplied `__config` and injects that resolved map into the tool input, making the configured value available as `__config.rpc_url`. The URL must be HTTPS, have a host, and contain no userinfo or fragment. An optional query is accepted only when it is exactly one non-empty `api-key` parameter containing ASCII letters, digits, `_`, or `-`; all other query shapes are rejected. Set the value through ZeroClaw's secret-aware config surface so it is encrypted at rest, and never commit it. The RPC operator can observe the queried mint and both fixed methods, so choose an endpoint whose privacy policy and retention are acceptable. The component does not log the endpoint, mint, arguments, or raw responses.
 
 ## Install, build, and use
 
@@ -124,7 +124,7 @@ violates the model-facing `additionalProperties: false` schema, which guides too
 - Each streamed response is capped at 1 MiB before JSON parsing. The component reads at most 64 KiB per chunk and rejects an empty read or invalid UTF-8.
 - Serialized output is capped at 8 KiB. More than 12 reasons, or an output that exceeds the cap, becomes a compact unknown result with OUTPUT_TOO_LARGE.
 - Reasons are ordered red first, then by stable code. Unknown extension names are truncated to 32 characters and error text to 160 characters.
-- A slot mismatch, malformed JSON-RPC envelope, JSON-RPC error, missing account, unsupported owner, invalid authority, invalid amount, or contradictory supply is returned as unknown, never as green.
+- Reversed or more-than-32-slot evidence, a malformed JSON-RPC envelope, JSON-RPC error, missing account, unsupported owner, invalid authority, invalid amount, or contradictory supply is returned as unknown, never as green. A bounded forward slot skew is explicitly Amber, never Green.
 
 ## Stable codes
 
