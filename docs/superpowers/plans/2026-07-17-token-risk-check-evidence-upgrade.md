@@ -108,7 +108,6 @@ fn shared_owner_at_half_supply_is_amber() {
         include_str!("fixtures/legacy-safe-account.json"),
         include_str!("fixtures/dispersed-largest.json"),
         include_str!("fixtures/owners-shared.json"),
-        OBSERVED_LIQUIDITY,
     )
     .unwrap();
     assert_eq!(report.evidence.top_observed_owner_bps, Some(5000));
@@ -120,7 +119,7 @@ fn shared_owner_at_half_supply_is_amber() {
 
 Run: `cargo test --manifest-path plugins/token-risk-check/Cargo.toml owner -- --nocapture`
 
-Expected: compilation fails because `assess` does not accept owner evidence and `Evidence` lacks `top_observed_owner_bps`.
+Expected: compilation fails because `assess` does not accept the fourth owner-evidence argument and `Evidence` lacks `top_observed_owner_bps`. Liquidity remains out of this task and is added as the fifth argument in Task 3.
 
 - [ ] **Step 3: Implement strict owner parsing and aggregation**
 
