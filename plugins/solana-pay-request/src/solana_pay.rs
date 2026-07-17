@@ -8,6 +8,12 @@ const MAX_REFERENCES: usize = 8;
 const MAX_LABEL_BYTES: usize = 64;
 const MAX_TEXT_BYTES: usize = 200;
 const SOL_SCALE: u32 = 9;
+const SUPPORTED_CONFIG_KEYS: [&str; 4] = [
+    "default_recipient",
+    "allowed_recipients",
+    "allow_unlisted_recipients",
+    "max_amount",
+];
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 pub struct PayRequest {
@@ -49,6 +55,20 @@ impl Default for PayConfig {
 
 impl PayConfig {
     pub fn from_section(section: &HashMap<String, String>) -> Result<Self, String> {
+        let mut unknown_keys: Vec<&str> = section
+            .keys()
+            .map(String::as_str)
+            .filter(|key| !SUPPORTED_CONFIG_KEYS.contains(key))
+            .collect();
+        unknown_keys.sort_unstable();
+        if !unknown_keys.is_empty() {
+            return Err(format!(
+                "unsupported config key(s): {}; supported keys: {}",
+                unknown_keys.join(", "),
+                SUPPORTED_CONFIG_KEYS.join(", ")
+            ));
+        }
+
         let default_recipient = non_empty(section.get("default_recipient")).map(str::to_owned);
         let mut allowed_recipients = parse_list(section.get("allowed_recipients"));
         if let Some(recipient) = &default_recipient {

@@ -204,3 +204,25 @@ fn rejects_malformed_configuration() {
     let bad_amount = HashMap::from([("max_amount".to_string(), "1e9".to_string())]);
     assert!(PayConfig::from_section(&bad_amount).is_err());
 }
+
+#[test]
+fn rejects_unknown_config_keys_instead_of_falling_back_to_defaults() {
+    let recipient = key(18);
+    let misspelled_cap = HashMap::from([
+        ("allowed_recipients".to_string(), recipient),
+        ("max_amout".to_string(), "1".to_string()),
+    ]);
+    let error = PayConfig::from_section(&misspelled_cap).unwrap_err();
+    assert!(error.contains("max_amout"));
+    assert!(error.contains("max_amount"));
+}
+
+#[test]
+fn rejects_retired_spl_and_mint_config_keys() {
+    for retired in ["allowed_mints", "allow_unlisted_mints", "allow_native_sol"] {
+        let section = HashMap::from([(retired.to_string(), "true".to_string())]);
+        let error = PayConfig::from_section(&section).unwrap_err();
+        assert!(error.contains(retired), "missing retired key in: {error}");
+        assert!(error.contains("unsupported config key"));
+    }
+}

@@ -79,9 +79,16 @@ keys:
 | `allow_unlisted_recipients` | `false` | Explicit escape hatch for operators who accept arbitrary recipients. |
 | `max_amount` | `1000` | Maximum SOL amount, parsed without floating point. |
 
-Canonical ZeroClaw array-of-tables syntax:
+Unknown keys are rejected before defaults are applied. This makes operator
+policy fail closed: a misspelled `max_amount` or a retired SPL/mint key cannot
+silently fall back to the default cap.
+
+Canonical runnable ZeroClaw configuration:
 
 ~~~toml
+[plugins]
+enabled = true
+
 [[plugins.entries]]
 name = "solana-pay-request"
 
@@ -91,6 +98,19 @@ allowed_recipients = "11111111111111111111111111111111"
 allow_unlisted_recipients = "false"
 max_amount = "25"
 ~~~
+
+Installing the package only seeds its entry; it does not enable the plugin
+subsystem. The ZeroClaw host must also include the `plugins-wasm` umbrella and
+one execution backend. From the ZeroClaw **core** repository (not this plugin
+crate), build a host with Cranelift:
+
+~~~bash
+cargo build --release --features plugins-wasm,plugins-wasm-cranelift
+~~~
+
+Then use `zeroclaw plugin list` and an actual agent call to verify that the
+component is loaded and callable. A configured catalog entry alone is not a
+liveness check.
 
 Example arguments:
 
