@@ -36,29 +36,25 @@ pub fn assess_liquidity(mint: &str, body: &str) -> Result<LiquidityEvidence, Ris
         return Err(RiskError::MalformedLiquidityResponse);
     }
 
-    let mut maximum: Option<(serde_json::Number, String)> = None;
+    let mut maximum: Option<BoundedDecimal> = None;
     for pair in pairs.iter() {
         validate_pair(pair, mint)?;
-        let liquidity = pair.liquidity.usd.clone();
-        let serialized = liquidity.to_string();
-        if serialized.len() > MAX_NUMBER_CHARS || !is_finite_non_negative(&liquidity) {
-            return Err(RiskError::MalformedLiquidityResponse);
-        }
+        let liquidity = BoundedDecimal::parse(pair.liquidity.usd.get())?;
 
         if maximum
             .as_ref()
-            .map(|(current, _)| compare_numbers(&liquidity, current).is_gt())
+            .map(|current| liquidity.cmp(current).is_gt())
             .unwrap_or(true)
         {
-            maximum = Some((liquidity, serialized));
+            maximum = Some(liquidity);
         }
     }
 
     let status = match maximum.as_ref() {
-        Some((number, _)) if is_positive(number) => LiquidityStatus::Observed,
+        Some(number) if number.is_positive() => LiquidityStatus::Observed,
         _ => LiquidityStatus::NotObserved,
     };
-    let max_liquidity_usd = maximum.map(|(_, serialized)| serialized);
+    let max_liquidity_usd = maximum.map(|number| number.canonical);
 
     Ok(LiquidityEvidence {
         status,
@@ -81,28 +77,100 @@ fn validate_pair(pair: &DexPair, mint: &str) -> Result<(), RiskError> {
     validate_mint(&pair.pair_address).map_err(|_| RiskError::MalformedLiquidityResponse)
 }
 
-fn is_finite_non_negative(number: &serde_json::Number) -> bool {
-    match number.as_f64() {
-        Some(value) => value.is_finite() && value >= 0.0,
-        None => number.as_u64().is_some(),
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct BoundedDecimal {
+    canonical: String,
+    digits: String,
+    scale: usize,
+    whole_digits: usize,
+}
+
+impl BoundedDecimal {
+    /// Accept only non-negative JSON decimals without exponent notation:
+    /// `0|[1-9][0-9]*(\.[0-9]+)?`.
+    fn parse(raw: &str) -> Result<Self, RiskError> {
+        if raw.is_empty() || raw.len() > MAX_NUMBER_CHARS {
+            return Err(RiskError::MalformedLiquidityResponse);
+        }
+
+        let (integer, fraction) = match raw.split_once('.') {
+            Some((integer, fraction)) => (integer, Some(fraction)),
+            None => (raw, None),
+        };
+        if !valid_integer(integer)
+            || fraction.is_some_and(|fraction| {
+                fraction.is_empty() || !fraction.bytes().all(|byte| byte.is_ascii_digit())
+            })
+        {
+            return Err(RiskError::MalformedLiquidityResponse);
+        }
+
+        let fraction = fraction.map(|fraction| fraction.trim_end_matches('0'));
+        let scale = fraction.map_or(0, str::len);
+        let canonical = match fraction {
+            Some(fraction) if !fraction.is_empty() => format!("{integer}.{fraction}"),
+            _ => integer.to_owned(),
+        };
+        let digits = canonical
+            .chars()
+            .filter(|character| *character != '.')
+            .skip_while(|character| *character == '0')
+            .collect::<String>();
+
+        if digits.is_empty() {
+            return Ok(Self {
+                canonical: "0".to_owned(),
+                digits: "0".to_owned(),
+                scale: 0,
+                whole_digits: 0,
+            });
+        }
+
+        Ok(Self {
+            canonical,
+            digits,
+            scale,
+            whole_digits: usize::from(integer != "0") * integer.len(),
+        })
+    }
+
+    fn is_positive(&self) -> bool {
+        self.digits != "0"
+    }
+
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        match (self.is_positive(), other.is_positive()) {
+            (false, false) => return std::cmp::Ordering::Equal,
+            (false, true) => return std::cmp::Ordering::Less,
+            (true, false) => return std::cmp::Ordering::Greater,
+            (true, true) => {}
+        }
+
+        match self.whole_digits.cmp(&other.whole_digits) {
+            std::cmp::Ordering::Equal => {}
+            ordering => return ordering,
+        }
+
+        let scale = self.scale.max(other.scale);
+        for index in 0..self.whole_digits + scale {
+            match self.digit_at(index).cmp(&other.digit_at(index)) {
+                std::cmp::Ordering::Equal => {}
+                ordering => return ordering,
+            }
+        }
+        std::cmp::Ordering::Equal
+    }
+
+    fn digit_at(&self, index: usize) -> u8 {
+        self.digits.as_bytes().get(index).copied().unwrap_or(b'0')
     }
 }
 
-fn compare_numbers(left: &serde_json::Number, right: &serde_json::Number) -> std::cmp::Ordering {
-    match (left.as_u64(), right.as_u64()) {
-        (Some(left), Some(right)) => left.cmp(&right),
-        _ => left
-            .as_f64()
-            .expect("validated finite number")
-            .total_cmp(&right.as_f64().expect("validated finite number")),
-    }
-}
-
-fn is_positive(number: &serde_json::Number) -> bool {
-    number
-        .as_u64()
-        .map(|value| value > 0)
-        .unwrap_or_else(|| number.as_f64().is_some_and(|value| value > 0.0))
+fn valid_integer(integer: &str) -> bool {
+    integer == "0"
+        || integer
+            .strip_prefix(|character: char| character.is_ascii_digit() && character != '0')
+            .is_some_and(|rest| rest.bytes().all(|byte| byte.is_ascii_digit()))
 }
 
 #[derive(Deserialize)]
@@ -122,5 +190,5 @@ struct DexToken {
 
 #[derive(Deserialize)]
 struct DexLiquidity {
-    usd: serde_json::Number,
+    usd: Box<serde_json::value::RawValue>,
 }

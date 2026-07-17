@@ -147,6 +147,56 @@ fn liquidity_selects_the_maximum_deterministically() {
 }
 
 #[test]
+fn liquidity_rejects_raw_numeric_tokens_longer_than_32_characters() {
+    let oversized = "100000000000000000000000000000000";
+    assert_eq!(oversized.len(), 33);
+
+    let body = include_str!("fixtures/liquidity-observed.json").replace("125000.5", oversized);
+    assert_eq!(
+        assess_liquidity(SAFE_MINT, &body),
+        Err(RiskError::MalformedLiquidityResponse)
+    );
+}
+
+#[test]
+fn liquidity_selects_the_larger_of_precise_decimals_that_collapse_to_the_same_f64() {
+    let body = include_str!("fixtures/liquidity-observed.json")
+        .replace("125000.5", "1000000000000000.0001")
+        .replace("2400", "1000000000000000.0002");
+    let evidence = assess_liquidity(SAFE_MINT, &body).unwrap();
+
+    assert_eq!(
+        evidence.max_liquidity_usd.as_deref(),
+        Some("1000000000000000.0002")
+    );
+}
+
+#[test]
+fn liquidity_compares_fractional_values_across_the_zero_integer_boundary() {
+    let body = include_str!("fixtures/liquidity-observed.json")
+        .replace("125000.5", "0.9")
+        .replace("2400", "1");
+    let evidence = assess_liquidity(SAFE_MINT, &body).unwrap();
+
+    assert_eq!(evidence.max_liquidity_usd.as_deref(), Some("1"));
+}
+
+#[test]
+fn liquidity_accepts_plain_json_decimals_and_rejects_exponent_notation() {
+    let canonical_body = include_str!("fixtures/liquidity-observed.json")
+        .replace("125000.5", "125000.5000")
+        .replace("2400", "0");
+    let evidence = assess_liquidity(SAFE_MINT, &canonical_body).unwrap();
+    assert_eq!(evidence.max_liquidity_usd.as_deref(), Some("125000.5"));
+
+    let exponent_body = include_str!("fixtures/liquidity-observed.json").replace("125000.5", "1e3");
+    assert_eq!(
+        assess_liquidity(SAFE_MINT, &exponent_body),
+        Err(RiskError::MalformedLiquidityResponse)
+    );
+}
+
+#[test]
 fn liquidity_rejects_malformed_vendor_evidence() {
     let mut wrong_chain = liquidity_fixture();
     wrong_chain[0]["chainId"] = serde_json::json!("ethereum");
