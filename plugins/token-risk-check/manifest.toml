@@ -1,0 +1,8 @@
+[plugin]
+name = "token-risk-check"
+description = "Zero-trust token risk check plugin"
+version = "0.1.0"
+
+[capabilities]
+httpclient = { } # Required for making HTTP requests
+configread = { } # Required for reading plugin configuration

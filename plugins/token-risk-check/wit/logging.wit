@@ -1,0 +1,75 @@
+package zeroclaw:plugin@0.1.0;
+
+/// Centralized logging interface used by all ZeroClaw plugin types.
+interface logging {
+    use types.{json-string};
+
+    /// Severity level for a log record. Mirrors `Severity` in zeroclaw-log.
+    enum log-level {
+        trace,
+        debug,
+        info,
+        warn,
+        error,
+    }
+
+    /// Closed taxonomy of actions a plugin may report.
+    enum plugin-action {
+        start,
+        complete,
+        fail,
+        cancel,
+        skip,
+        timeout,
+        retry,
+        inbound,
+        outbound,
+        send,
+        receive,
+        connect,
+        disconnect,
+        reconnect,
+        spawn,
+        kill,
+        tick,
+        trigger,
+        schedule,
+        approve,
+        reject,
+        defer,
+        read,
+        write,
+        delete,
+        list-action,
+        query,
+        invoke,
+        dispatch,
+        resolve,
+        register,
+        unregister,
+        load,
+        save,
+        migrate,
+        validate,
+        note,
+    }
+
+    /// Binary outcome reported alongside an action.
+    enum plugin-outcome {
+        success,
+        failure,
+    }
+
+    /// A structured log event emitted by a plugin.
+    record plugin-event {
+        function-name: string,
+        action: plugin-action,
+        outcome: option<plugin-outcome>,
+        duration-ms: option<u64>,
+        attrs: option<json-string>,
+        message: string,
+    }
+
+    /// Emit a structured log record to the host runtime.
+    log-record: func(level: log-level, event: plugin-event);
+}
