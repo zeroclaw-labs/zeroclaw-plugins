@@ -387,13 +387,13 @@ mod component {
         // Step 6: Assemble signed tx with fresh blockhash + signature
         let mut signed_tx_bytes = crate::jupiter::assemble_signed_tx(&tx_bytes, signature)
             .map_err(|e| format!("Failed to assemble signed tx: {e}"))?;
-        // Also replace blockhash in the full signed tx.
-        // The message starts at byte 66 in the signed tx (prefix + num_sigs + sig).
-        // We need the same offset within the message that replace_blockhash_in_message uses.
-        // Instead of duplicating the calculation, replace the message portion directly.
-        let msg_start = 66; // legacy tx: 1 prefix + 1 compact_u32 + 64 sig
-        if signed_tx_bytes.len() > msg_start + fresh_message.len() {
-            signed_tx_bytes[msg_start..msg_start + fresh_message.len()]
+        // Replace the message portion with fresh blockhash.
+        // Legacy: msg starts at byte 66 (1 prefix + 1 compact_u32 + 64 sig).
+        // V0: msg starts at byte 65 (1 prefix + 64 sig, no compact_u32).
+        let msg_start = crate::jupiter::tx_version(&tx_bytes) as usize;
+        let msg_offset = msg_start + 64 + if msg_start == 0 { 1 } else { 0 };
+        if signed_tx_bytes.len() > msg_offset + fresh_message.len() {
+            signed_tx_bytes[msg_offset..msg_offset + fresh_message.len()]
                 .copy_from_slice(&fresh_message);
         }
 
@@ -445,32 +445,53 @@ mod component {
         Ok(format!("{} balance: {}", symbol, balance))
     }
 
-    // ── HTTP helpers (wasi:http outbound) ──────────────────────────
-    //
-    // These use waki (blocking wasi:http) as the reference plugins do.
-    // The host grants HTTP access only when manifest declares http_client.
+    // ── HTTP helpers (wasi:http via waki) ──────────────────────────
 
     fn http_get(url: &str, api_key: Option<&str>) -> Result<String, String> {
-        let _ = (url, api_key);
-        Err("HTTP not available in test mode".to_string())
+        let mut req = waki::Client::new().get(url);
+        if let Some(key) = api_key {
+            req = req.header("Authorization", format!("Bearer {key}"));
+        }
+        let resp = req.send().map_err(|e| format!("GET {url}: {e}"))?;
+        let bytes = resp.body().map_err(|e| format!("GET {url} body: {e}"))?;
+        String::from_utf8(bytes).map_err(|e| format!("GET {url} utf8: {e}"))
     }
 
-    fn http_get_with_auth(_url: &str, _token: &str) -> Result<String, String> {
-        Err("HTTP not available in test mode".to_string())
+    fn http_get_with_auth(url: &str, token: &str) -> Result<String, String> {
+        let resp = waki::Client::new()
+            .get(url)
+            .header("Authorization", format!("Bearer {token}"))
+            .send()
+            .map_err(|e| format!("GET {url}: {e}"))?;
+        let bytes = resp.body().map_err(|e| format!("GET {url} body: {e}"))?;
+        String::from_utf8(bytes).map_err(|e| format!("GET {url} utf8: {e}"))
     }
 
-    #[allow(dead_code)]
-    fn http_post_json(_url: &str, _body: &serde_json::Value) -> Result<String, String> {
-        Err("HTTP not available in test mode".to_string())
+    fn http_post_json(url: &str, body: &serde_json::Value) -> Result<String, String> {
+        let resp = waki::Client::new()
+            .post(url)
+            .header("Content-Type", "application/json")
+            .json(body)
+            .send()
+            .map_err(|e| format!("POST {url}: {e}"))?;
+        let bytes = resp.body().map_err(|e| format!("POST {url} body: {e}"))?;
+        String::from_utf8(bytes).map_err(|e| format!("POST {url} utf8: {e}"))
     }
 
     fn http_post_json_with_auth(
         url: &str,
         body: &serde_json::Value,
-        _token: &str,
+        token: &str,
     ) -> Result<String, String> {
-        let _ = (url, body);
-        Err("HTTP not available in test mode".to_string())
+        let resp = waki::Client::new()
+            .post(url)
+            .header("Content-Type", "application/json")
+            .header("Authorization", format!("Bearer {token}"))
+            .json(body)
+            .send()
+            .map_err(|e| format!("POST {url}: {e}"))?;
+        let bytes = resp.body().map_err(|e| format!("POST {url} body: {e}"))?;
+        String::from_utf8(bytes).map_err(|e| format!("POST {url} utf8: {e}"))
     }
 
     fn emit(action: PluginAction, outcome: PluginOutcome, message: &str, detail: Option<&str>) {

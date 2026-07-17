@@ -17,6 +17,11 @@ base64 = "0.22"
 bs58 = "0.5"
 ureq = { version = "2", optional = true }
 
+# wasi:http client — only compiled for the wasm component, never on the host.
+# `waki` is a blocking HTTP client on top of wasi:http/outgoing-handler.
+[target.'cfg(target_family = "wasm")'.dependencies]
+waki = { version = "0.5.1", features = ["json"] }
+
 [features]
 e2e = ["ureq"]
 
@@ -24,8 +29,6 @@ e2e = ["ureq"]
 name = "e2e-swap"
 path = "src/bin/e2e_swap.rs"
 required-features = ["e2e"]
-
-# no solana-sdk — hand-rolled instruction encoding for wasm32-wasip2 compatibility
 
 [profile.release]
 opt-level = "s"

@@ -527,7 +527,6 @@ pub fn compact_u32_at(buf: &[u8], pos: usize) -> Result<(usize, usize), String> 
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 /// Detect transaction version from first byte.
 pub fn tx_version(tx_bytes: &[u8]) -> u8 {
     tx_bytes.first().copied().unwrap_or(0xFF)
