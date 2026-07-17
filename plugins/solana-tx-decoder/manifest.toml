@@ -1,0 +1,7 @@
+name = "solana-tx-decoder"
+version = "0.1.0"
+description = "Decode Solana transactions into human-readable summaries for agents"
+author = "Rockey011"
+wasm_path = "solana_tx_decoder.wasm"
+capabilities = ["tool"]
+permissions = ["http_client"]
