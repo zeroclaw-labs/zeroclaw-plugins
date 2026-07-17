@@ -8,6 +8,9 @@ const LEGACY_TOKEN_PROGRAM: &str = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
 const TOKEN_2022_PROGRAM: &str = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb";
 const CONCENTRATION_THRESHOLD_BPS: u128 = 5_000;
 const MAX_REASONS: usize = 12;
+const MAX_ERROR_TEXT_CHARS: usize = 160;
+const MAX_EXTENSION_NAME_CHARS: usize = 32;
+const MAX_SERIALIZED_REPORT_BYTES: usize = 8 * 1024;
 
 pub const ACCOUNT_REQUEST_ID: u64 = 1;
 pub const LARGEST_ACCOUNTS_REQUEST_ID: u64 = 2;
@@ -26,6 +29,7 @@ pub enum RiskError {
     ResponseIdMismatch,
     InvalidAuthority,
     UnsupportedTokenProgram,
+    InvalidExecuteArgs,
 }
 
 impl fmt::Display for RiskError {
@@ -47,11 +51,32 @@ impl fmt::Display for RiskError {
             Self::UnsupportedTokenProgram => {
                 f.write_str("mint owner is not a supported token program")
             }
+            Self::InvalidExecuteArgs => f.write_str("tool arguments are invalid"),
         }
     }
 }
 
 impl std::error::Error for RiskError {}
+
+impl RiskError {
+    pub fn code(self) -> &'static str {
+        match self {
+            Self::InvalidMint => "INVALID_MINT",
+            Self::InvalidRpcUrl => "INVALID_RPC_URL",
+            Self::MalformedRpcResponse => "MALFORMED_RPC_RESPONSE",
+            Self::JsonRpcError => "JSON_RPC_ERROR",
+            Self::NullAccount => "NULL_ACCOUNT",
+            Self::ZeroSupply => "ZERO_SUPPLY",
+            Self::InvalidLargestAccount => "INVALID_LARGEST_ACCOUNT",
+            Self::InconsistentSupply => "INCONSISTENT_SUPPLY",
+            Self::InconsistentSlots => "INCONSISTENT_SLOTS",
+            Self::ResponseIdMismatch => "RESPONSE_ID_MISMATCH",
+            Self::InvalidAuthority => "INVALID_AUTHORITY",
+            Self::UnsupportedTokenProgram => "UNSUPPORTED_TOKEN_PROGRAM",
+            Self::InvalidExecuteArgs => "INVALID_EXECUTE_ARGS",
+        }
+    }
+}
 
 pub fn validate_mint(mint: &str) -> Result<(), RiskError> {
     let decoded = bs58::decode(mint)
@@ -75,6 +100,28 @@ pub fn validate_rpc_url(raw: &str) -> Result<String, RiskError> {
         return Err(RiskError::InvalidRpcUrl);
     }
     Ok(url.to_string())
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExecuteArgs {
+    pub mint: String,
+    #[serde(rename = "__config")]
+    pub config: ExecuteConfig,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExecuteConfig {
+    pub rpc_url: String,
+}
+
+pub fn parse_execute_args(raw: &str) -> Result<ExecuteArgs, RiskError> {
+    let mut args: ExecuteArgs =
+        serde_json::from_str(raw).map_err(|_| RiskError::InvalidExecuteArgs)?;
+    validate_mint(&args.mint)?;
+    args.config.rpc_url = validate_rpc_url(&args.config.rpc_url)?;
+    Ok(args)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -115,6 +162,51 @@ pub struct RiskReport {
     pub evidence: Evidence,
     pub limitations: Vec<String>,
     pub slots: Slots,
+}
+
+pub fn unknown_report(code: &str, message: &str) -> RiskReport {
+    RiskReport {
+        verdict: Verdict::Unknown,
+        reasons: vec![Reason {
+            code: truncate_chars(code, MAX_ERROR_TEXT_CHARS),
+            message: truncate_chars(message, MAX_ERROR_TEXT_CHARS),
+        }],
+        evidence: Evidence {
+            token_program: "unknown".to_owned(),
+            supply: "unknown".to_owned(),
+            decimals: 0,
+            mint_authority_revoked: false,
+            freeze_authority_revoked: false,
+            top_account_bps: None,
+        },
+        limitations: vec!["EVIDENCE_UNAVAILABLE".to_owned()],
+        slots: Slots {
+            account: 0,
+            largest_accounts: 0,
+        },
+    }
+}
+
+pub fn serialize_report(report: &RiskReport) -> String {
+    if report.reasons.len() > MAX_REASONS {
+        return serialize_minimal_unknown();
+    }
+
+    match serde_json::to_string(report) {
+        Ok(output) if output.len() <= MAX_SERIALIZED_REPORT_BYTES => output,
+        Ok(_) | Err(_) => serialize_minimal_unknown(),
+    }
+}
+
+fn serialize_minimal_unknown() -> String {
+    let fallback = unknown_report("OUTPUT_TOO_LARGE", "Risk report exceeded output size limit");
+    serde_json::to_string(&fallback).unwrap_or_else(|_| {
+        "{\"verdict\":\"unknown\",\"reasons\":[],\"evidence\":{\"token_program\":\"unknown\",\"supply\":\"unknown\",\"decimals\":0,\"mint_authority_revoked\":false,\"freeze_authority_revoked\":false,\"top_account_bps\":null},\"limitations\":[\"EVIDENCE_UNAVAILABLE\"],\"slots\":{\"account\":0,\"largest_accounts\":0}}".to_owned()
+    })
+}
+
+fn truncate_chars(value: &str, max_chars: usize) -> String {
+    value.chars().take(max_chars).collect()
 }
 
 pub fn assess(mint: &str, account_json: &str, largest_json: &str) -> Result<RiskReport, RiskError> {
@@ -331,7 +423,10 @@ fn token_2022_extension_rules(extensions: &[TokenExtension]) -> Result<Vec<Rule>
                 severity: RuleSeverity::Amber,
                 reason: Reason {
                     code: "UNKNOWN_EXTENSION".to_owned(),
-                    message: format!("Unrecognized Token-2022 extension: {}", extension.extension),
+                    message: format!(
+                        "Unrecognized Token-2022 extension: {}",
+                        truncate_chars(&extension.extension, MAX_EXTENSION_NAME_CHARS)
+                    ),
                 },
             })),
         })

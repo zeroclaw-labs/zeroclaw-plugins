@@ -1,4 +1,7 @@
-use token_risk_check::risk::{assess, validate_mint, validate_rpc_url, RiskError, Verdict};
+use token_risk_check::risk::{
+    assess, parse_execute_args, serialize_report, unknown_report, validate_mint, validate_rpc_url,
+    Evidence, Reason, RiskError, RiskReport, Slots, Verdict,
+};
 
 const SAFE_MINT: &str = "So11111111111111111111111111111111111111112";
 const TOKEN_2022_MINT: &str = "So11111111111111111111111111111111111111112";
@@ -360,4 +363,165 @@ fn rejects_invalid_default_account_state_strings() {
             "{account_state}"
         );
     }
+}
+
+#[test]
+fn never_reports_green_when_required_evidence_is_invalid_or_missing() {
+    let unsupported_owner = include_str!("fixtures/legacy-safe-account.json").replace(
+        "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
+        "11111111111111111111111111111111",
+    );
+    let missing_slot = include_str!("fixtures/legacy-safe-account.json")
+        .replace("\"context\": { \"slot\": 347119291 },\n    ", "");
+    let null_account = r#"{
+  "jsonrpc": "2.0",
+  "result": {
+    "context": { "slot": 347119291 },
+    "value": null
+  },
+  "id": 1
+}"#;
+    let supply_mismatch =
+        include_str!("fixtures/dispersed-largest.json").replace("\"190000\"", "\"1000001\"");
+
+    let cases = [
+        (
+            "empty response",
+            "{}",
+            include_str!("fixtures/dispersed-largest.json"),
+        ),
+        (
+            "malformed JSON",
+            "not-json",
+            include_str!("fixtures/dispersed-largest.json"),
+        ),
+        (
+            "JSON-RPC error",
+            include_str!("fixtures/rpc-error.json"),
+            include_str!("fixtures/dispersed-largest.json"),
+        ),
+        (
+            "malformed account",
+            include_str!("fixtures/malformed-account.json"),
+            include_str!("fixtures/dispersed-largest.json"),
+        ),
+        (
+            "missing slot",
+            &missing_slot,
+            include_str!("fixtures/dispersed-largest.json"),
+        ),
+        (
+            "null account",
+            &null_account,
+            include_str!("fixtures/dispersed-largest.json"),
+        ),
+        (
+            "unsupported owner",
+            &unsupported_owner,
+            include_str!("fixtures/dispersed-largest.json"),
+        ),
+        (
+            "supply mismatch",
+            include_str!("fixtures/legacy-safe-account.json"),
+            &supply_mismatch,
+        ),
+    ];
+
+    for (label, account, largest) in cases {
+        let report = assess(SAFE_MINT, account, largest)
+            .unwrap_or_else(|error| unknown_report(error.code(), &error.to_string()));
+        assert_eq!(report.verdict, Verdict::Unknown, "{label}");
+        assert_ne!(report.verdict, Verdict::Green, "{label}");
+    }
+}
+
+#[test]
+fn unknown_reports_use_typed_codes_and_bound_error_messages() {
+    let report = unknown_report("MALFORMED_RPC_RESPONSE", &"x".repeat(200));
+
+    assert_eq!(report.verdict, Verdict::Unknown);
+    assert_eq!(report.reasons[0].code, "MALFORMED_RPC_RESPONSE");
+    assert_eq!(report.reasons[0].message.chars().count(), 160);
+    assert!(report
+        .limitations
+        .iter()
+        .any(|limitation| limitation == "EVIDENCE_UNAVAILABLE"));
+    assert_eq!(RiskError::NullAccount.code(), "NULL_ACCOUNT");
+}
+
+#[test]
+fn execute_args_allow_only_mint_and_host_config() {
+    let args = parse_execute_args(&format!(
+        r#"{{"mint":"{SAFE_MINT}","__config":{{"rpc_url":"https://rpc.example.com"}}}}"#
+    ))
+    .unwrap();
+    assert_eq!(args.mint, SAFE_MINT);
+    assert_eq!(args.config.rpc_url, "https://rpc.example.com/");
+
+    for injected in [
+        r#""rpc_url":"https://evil.example""#,
+        r#""threshold":0"#,
+        r#""method":"getBalance""#,
+    ] {
+        let args = format!(
+            r#"{{"mint":"{SAFE_MINT}","__config":{{"rpc_url":"https://rpc.example.com"}},{injected}}}"#
+        );
+        assert!(parse_execute_args(&args).is_err(), "{injected}");
+    }
+
+    assert!(parse_execute_args(&format!(
+        r#"{{"mint":"{SAFE_MINT}","__config":{{"rpc_url":"https://rpc.example.com","method":"getBalance"}}}}"#
+    ))
+    .is_err());
+}
+
+#[test]
+fn unknown_extension_names_are_capped_at_32_characters() {
+    let extension_name = "x".repeat(80);
+    let account = include_str!("fixtures/token-2022-unknown-extensions.json")
+        .replace("futureExtension01", &extension_name);
+    let report = assess(
+        TOKEN_2022_MINT,
+        &account,
+        include_str!("fixtures/dispersed-largest.json"),
+    )
+    .unwrap();
+
+    let extension = report.reasons[0]
+        .message
+        .strip_prefix("Unrecognized Token-2022 extension: ")
+        .unwrap();
+    assert_eq!(extension.chars().count(), 32);
+}
+
+#[test]
+fn serialization_is_valid_json_below_the_cap_or_minimal_unknown() {
+    let oversized = RiskReport {
+        verdict: Verdict::Green,
+        reasons: (0..13)
+            .map(|_| Reason {
+                code: "X".repeat(1_000),
+                message: "Y".repeat(1_000),
+            })
+            .collect(),
+        evidence: Evidence {
+            token_program: "Z".repeat(1_000),
+            supply: "9".repeat(1_000),
+            decimals: 255,
+            mint_authority_revoked: false,
+            freeze_authority_revoked: false,
+            top_account_bps: Some(10_000),
+        },
+        limitations: vec!["L".repeat(1_000); 12],
+        slots: Slots {
+            account: u64::MAX,
+            largest_accounts: u64::MAX,
+        },
+    };
+
+    let output = serialize_report(&oversized);
+    assert!(output.len() <= 8 * 1024);
+    let value: serde_json::Value = serde_json::from_str(&output).unwrap();
+    assert_eq!(value["verdict"], "unknown");
+    assert_eq!(value["reasons"][0]["code"], "OUTPUT_TOO_LARGE");
 }
