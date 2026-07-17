@@ -1,3 +1,4 @@
+pub mod liquidity;
 pub mod risk;
 
 pub use risk::{owner_accounts_request_body, OWNER_ACCOUNTS_REQUEST_ID};
@@ -247,6 +248,7 @@ mod component {
                 &account_body,
                 &largest_body,
                 &owner_accounts_body,
+                "[]",
             ) {
                 Ok(report) => {
                     let verdict = verdict_code(report.verdict);

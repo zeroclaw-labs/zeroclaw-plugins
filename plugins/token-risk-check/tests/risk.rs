@@ -1,7 +1,8 @@
+use token_risk_check::liquidity::{assess_liquidity, liquidity_url, LiquidityStatus};
 use token_risk_check::risk::{
-    assess as assess_with_owner, owner_accounts_request_body, parse_execute_args, serialize_report,
-    unknown_report, validate_mint, validate_rpc_url, Evidence, Reason, RiskError, RiskReport,
-    Slots, Verdict, OWNER_ACCOUNTS_REQUEST_ID,
+    assess as assess_with_evidence, owner_accounts_request_body, parse_execute_args,
+    serialize_report, unknown_report, validate_mint, validate_rpc_url, Evidence, Reason, RiskError,
+    RiskReport, Slots, Verdict, OWNER_ACCOUNTS_REQUEST_ID,
 };
 use token_risk_check::{
     bounded_response_body, parameters_schema, rpc_request_bodies, Deadline, HttpTimeouts,
@@ -55,11 +56,175 @@ fn assess(mint: &str, account: &str, largest: &str) -> Result<RiskReport, RiskEr
         }
     }
 
-    assess_with_owner(mint, account, largest, &owners.to_string())
+    assess_with_evidence(
+        mint,
+        account,
+        largest,
+        &owners.to_string(),
+        include_str!("fixtures/liquidity-empty.json"),
+    )
+}
+
+fn assess_with_owner(
+    mint: &str,
+    account: &str,
+    largest: &str,
+    owners: &str,
+) -> Result<RiskReport, RiskError> {
+    assess_with_evidence(
+        mint,
+        account,
+        largest,
+        owners,
+        include_str!("fixtures/liquidity-empty.json"),
+    )
 }
 
 fn owner_fixture() -> serde_json::Value {
     serde_json::from_str(include_str!("fixtures/owners-dispersed.json")).unwrap()
+}
+
+fn liquidity_fixture() -> serde_json::Value {
+    serde_json::from_str(include_str!("fixtures/liquidity-observed.json")).unwrap()
+}
+
+#[test]
+fn liquidity_url_is_fixed_and_rejects_mint_injection() {
+    assert_eq!(
+        liquidity_url(SAFE_MINT),
+        Ok(format!(
+            "https://api.dexscreener.com/token-pairs/v1/solana/{SAFE_MINT}"
+        ))
+    );
+
+    for injected in [
+        "So11111111111111111111111111111111111111112?host=evil.example",
+        "So11111111111111111111111111111111111111112/path",
+        "https://evil.example",
+    ] {
+        assert_eq!(
+            liquidity_url(injected),
+            Err(RiskError::InvalidMint),
+            "{injected}"
+        );
+    }
+}
+
+#[test]
+fn liquidity_positive_solana_pair_is_observed() {
+    let evidence =
+        assess_liquidity(SAFE_MINT, include_str!("fixtures/liquidity-observed.json")).unwrap();
+
+    assert_eq!(evidence.status, LiquidityStatus::Observed);
+    assert_eq!(evidence.pair_count, 2);
+    assert_eq!(evidence.max_liquidity_usd.as_deref(), Some("125000.5"));
+    assert_eq!(evidence.source, "dexscreener");
+}
+
+#[test]
+fn liquidity_empty_and_zero_pairs_are_not_observed() {
+    let empty = assess_liquidity(SAFE_MINT, include_str!("fixtures/liquidity-empty.json")).unwrap();
+    assert_eq!(empty.status, LiquidityStatus::NotObserved);
+    assert_eq!(empty.pair_count, 0);
+    assert_eq!(empty.max_liquidity_usd, None);
+
+    let zero = include_str!("fixtures/liquidity-observed.json")
+        .replace("125000.5", "0")
+        .replace("2400", "0");
+    let zero = assess_liquidity(SAFE_MINT, &zero).unwrap();
+    assert_eq!(zero.status, LiquidityStatus::NotObserved);
+    assert_eq!(zero.pair_count, 2);
+    assert_eq!(zero.max_liquidity_usd.as_deref(), Some("0"));
+}
+
+#[test]
+fn liquidity_selects_the_maximum_deterministically() {
+    let body = include_str!("fixtures/liquidity-observed.json").replace("125000.5", "12.25");
+    let evidence = assess_liquidity(SAFE_MINT, &body).unwrap();
+
+    assert_eq!(evidence.status, LiquidityStatus::Observed);
+    assert_eq!(evidence.max_liquidity_usd.as_deref(), Some("2400"));
+}
+
+#[test]
+fn liquidity_rejects_malformed_vendor_evidence() {
+    let mut wrong_chain = liquidity_fixture();
+    wrong_chain[0]["chainId"] = serde_json::json!("ethereum");
+
+    let mut mint_mismatch = liquidity_fixture();
+    mint_mismatch[0]["baseToken"]["address"] =
+        serde_json::json!("11111111111111111111111111111111");
+
+    let mut missing_liquidity = liquidity_fixture();
+    missing_liquidity[0]
+        .as_object_mut()
+        .unwrap()
+        .remove("liquidity");
+
+    let mut negative = liquidity_fixture();
+    negative[0]["liquidity"]["usd"] = serde_json::json!(-1);
+
+    let non_finite = include_str!("fixtures/liquidity-observed.json").replace("125000.5", "1e9999");
+
+    let mut invalid_pair = liquidity_fixture();
+    invalid_pair[0]["pairAddress"] = serde_json::json!("not-a-public-key");
+
+    let mut oversized_string = liquidity_fixture();
+    oversized_string[0]["pairAddress"] = serde_json::json!("1".repeat(65));
+
+    let excessive_pairs = format!(
+        "[{}]",
+        std::iter::repeat_n(
+            include_str!("fixtures/liquidity-observed.json")
+                .trim()
+                .trim_matches(['[', ']']),
+            51,
+        )
+        .collect::<Vec<_>>()
+        .join(",")
+    );
+
+    for (label, body) in [
+        ("wrong chain", wrong_chain.to_string()),
+        ("mint mismatch", mint_mismatch.to_string()),
+        ("missing liquidity", missing_liquidity.to_string()),
+        ("negative liquidity", negative.to_string()),
+        ("non-finite liquidity", non_finite),
+        ("invalid pair address", invalid_pair.to_string()),
+        ("oversized pair address", oversized_string.to_string()),
+        ("excessive pair count", excessive_pairs),
+    ] {
+        assert_eq!(
+            assess_liquidity(SAFE_MINT, &body),
+            Err(RiskError::MalformedLiquidityResponse),
+            "{label}"
+        );
+    }
+}
+
+#[test]
+fn assess_uses_observed_liquidity_to_allow_green() {
+    let report = assess_with_evidence(
+        SAFE_MINT,
+        include_str!("fixtures/legacy-safe-account.json"),
+        include_str!("fixtures/dispersed-largest.json"),
+        include_str!("fixtures/owners-dispersed.json"),
+        include_str!("fixtures/liquidity-observed.json"),
+    )
+    .unwrap();
+
+    assert_eq!(report.verdict, Verdict::Green);
+    assert_eq!(report.evidence.liquidity_status, LiquidityStatus::Observed);
+    assert_eq!(report.evidence.liquidity_pair_count, 2);
+    assert_eq!(
+        report.evidence.max_liquidity_usd.as_deref(),
+        Some("125000.5")
+    );
+    assert_eq!(report.evidence.liquidity_source, "dexscreener");
+    assert!(report
+        .limitations
+        .iter()
+        .any(|limitation| limitation == "DEXSCREENER_COVERAGE_ONLY"));
 }
 
 #[test]
@@ -341,7 +506,7 @@ fn reports_amber_when_liquidity_is_not_observed() {
     assert!(report
         .limitations
         .iter()
-        .any(|limitation| limitation == "LIQUIDITY_NOT_OBSERVED"));
+        .any(|limitation| limitation == "DEXSCREENER_COVERAGE_ONLY"));
     assert_eq!(report.evidence.token_program, "spl-token");
     assert_eq!(report.evidence.top_account_bps, Some(1900));
 }
@@ -1105,6 +1270,10 @@ fn serialization_is_valid_json_below_the_cap_or_minimal_unknown() {
             freeze_authority_revoked: false,
             top_account_bps: Some(10_000),
             top_observed_owner_bps: Some(10_000),
+            liquidity_status: LiquidityStatus::Observed,
+            liquidity_pair_count: 100,
+            max_liquidity_usd: Some("9".repeat(1_000)),
+            liquidity_source: "dexscreener".to_owned(),
         },
         limitations: vec!["L".repeat(1_000); 12],
         slots: Slots {

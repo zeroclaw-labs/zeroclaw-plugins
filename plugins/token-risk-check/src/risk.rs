@@ -5,6 +5,8 @@ use serde::de::{DeserializeOwned, IgnoredAny};
 use serde::{Deserialize, Serialize};
 use url::Url;
 
+use crate::liquidity::{assess_liquidity, LiquidityStatus};
+
 const LEGACY_TOKEN_PROGRAM: &str = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
 const TOKEN_2022_PROGRAM: &str = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb";
 const CONCENTRATION_THRESHOLD_BPS: u128 = 5_000;
@@ -33,6 +35,7 @@ pub enum RiskError {
     InvalidAuthority,
     UnsupportedTokenProgram,
     InvalidExecuteArgs,
+    MalformedLiquidityResponse,
 }
 
 impl fmt::Display for RiskError {
@@ -59,6 +62,7 @@ impl fmt::Display for RiskError {
                 f.write_str("mint owner is not a supported token program")
             }
             Self::InvalidExecuteArgs => f.write_str("tool arguments are invalid"),
+            Self::MalformedLiquidityResponse => f.write_str("liquidity response is malformed"),
         }
     }
 }
@@ -81,6 +85,7 @@ impl RiskError {
             Self::InvalidAuthority => "INVALID_AUTHORITY",
             Self::UnsupportedTokenProgram => "UNSUPPORTED_TOKEN_PROGRAM",
             Self::InvalidExecuteArgs => "INVALID_EXECUTE_ARGS",
+            Self::MalformedLiquidityResponse => "MALFORMED_LIQUIDITY_RESPONSE",
         }
     }
 }
@@ -197,6 +202,10 @@ pub struct Evidence {
     pub freeze_authority_revoked: bool,
     pub top_account_bps: Option<u16>,
     pub top_observed_owner_bps: Option<u16>,
+    pub liquidity_status: LiquidityStatus,
+    pub liquidity_pair_count: usize,
+    pub max_liquidity_usd: Option<String>,
+    pub liquidity_source: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -230,6 +239,10 @@ pub fn unknown_report(code: &str, message: &str) -> RiskReport {
             freeze_authority_revoked: false,
             top_account_bps: None,
             top_observed_owner_bps: None,
+            liquidity_status: LiquidityStatus::NotObserved,
+            liquidity_pair_count: 0,
+            max_liquidity_usd: None,
+            liquidity_source: "unknown".to_owned(),
         },
         limitations: vec!["EVIDENCE_UNAVAILABLE".to_owned()],
         slots: Slots {
@@ -254,7 +267,7 @@ pub fn serialize_report(report: &RiskReport) -> String {
 fn serialize_minimal_unknown() -> String {
     let fallback = unknown_report("OUTPUT_TOO_LARGE", "Risk report exceeded output size limit");
     serde_json::to_string(&fallback).unwrap_or_else(|_| {
-        "{\"verdict\":\"unknown\",\"reasons\":[],\"evidence\":{\"token_program\":\"unknown\",\"supply\":\"unknown\",\"decimals\":0,\"mint_authority_revoked\":false,\"freeze_authority_revoked\":false,\"top_account_bps\":null,\"top_observed_owner_bps\":null},\"limitations\":[\"EVIDENCE_UNAVAILABLE\"],\"slots\":{\"account\":0,\"largest_accounts\":0,\"owner_accounts\":0}}".to_owned()
+        "{\"verdict\":\"unknown\",\"reasons\":[],\"evidence\":{\"token_program\":\"unknown\",\"supply\":\"unknown\",\"decimals\":0,\"mint_authority_revoked\":false,\"freeze_authority_revoked\":false,\"top_account_bps\":null,\"top_observed_owner_bps\":null,\"liquidity_status\":\"not_observed\",\"liquidity_pair_count\":0,\"max_liquidity_usd\":null,\"liquidity_source\":\"unknown\"},\"limitations\":[\"EVIDENCE_UNAVAILABLE\"],\"slots\":{\"account\":0,\"largest_accounts\":0,\"owner_accounts\":0}}".to_owned()
     })
 }
 
@@ -267,6 +280,7 @@ pub fn assess(
     account_json: &str,
     largest_json: &str,
     owner_accounts_json: &str,
+    liquidity_json: &str,
 ) -> Result<RiskReport, RiskError> {
     validate_mint(mint)?;
 
@@ -274,6 +288,7 @@ pub fn assess(
     let largest: LargestResult = decode_rpc(largest_json, LARGEST_ACCOUNTS_REQUEST_ID)?;
     let owner_accounts: OwnerAccountsResult =
         decode_rpc(owner_accounts_json, OWNER_ACCOUNTS_REQUEST_ID)?;
+    let liquidity = assess_liquidity(mint, liquidity_json)?;
     let account_value = account.value.ok_or(RiskError::NullAccount)?;
 
     let slot_skew = largest
@@ -345,11 +360,13 @@ pub fn assess(
     let freeze_authority_revoked = authority_is_revoked(&info.freeze_authority)?;
 
     let mut rules = Vec::new();
-    rules.push(rule(
-        RuleSeverity::Amber,
-        "LIQUIDITY_NOT_OBSERVED",
-        "No liquidity evidence is collected in this assessment",
-    ));
+    if liquidity.status == LiquidityStatus::NotObserved {
+        rules.push(rule(
+            RuleSeverity::Amber,
+            "LIQUIDITY_NOT_OBSERVED",
+            "No positive DEX liquidity was observed",
+        ));
+    }
     if slot_skew > 0 || owner_slot_skew > 0 {
         rules.push(rule(
             RuleSeverity::Amber,
@@ -394,7 +411,7 @@ pub fn assess(
 
     let (verdict, reasons, reasons_truncated) = finalize_rules(rules);
     let mut limitations = vec![
-        "LIQUIDITY_NOT_OBSERVED".to_owned(),
+        "DEXSCREENER_COVERAGE_ONLY".to_owned(),
         "LP_STATUS_NOT_CHECKED".to_owned(),
         "TOP_ACCOUNTS_ARE_NOT_UNIQUE_HOLDERS".to_owned(),
         "OWNER_CONCENTRATION_TOP_ACCOUNTS_ONLY".to_owned(),
@@ -422,6 +439,10 @@ pub fn assess(
                 u16::try_from(top_observed_owner_bps)
                     .map_err(|_| RiskError::InvalidLargestAccount)?,
             ),
+            liquidity_status: liquidity.status,
+            liquidity_pair_count: liquidity.pair_count,
+            max_liquidity_usd: liquidity.max_liquidity_usd,
+            liquidity_source: liquidity.source,
         },
         limitations,
         slots: Slots {
