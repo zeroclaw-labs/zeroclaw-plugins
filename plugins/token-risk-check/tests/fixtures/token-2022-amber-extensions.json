@@ -1,0 +1,40 @@
+{
+  "jsonrpc": "2.0",
+  "result": {
+    "context": { "slot": 347119291 },
+    "value": {
+      "owner": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
+      "data": {
+        "parsed": {
+          "info": {
+            "decimals": 6,
+            "extensions": [
+              {
+                "extension": "transferFeeConfig",
+                "state": {
+                  "newerTransferFee": {
+                    "epoch": 0,
+                    "maximumFee": 100,
+                    "transferFeeBasisPoints": 100
+                  }
+                }
+              },
+              {
+                "extension": "defaultAccountState",
+                "state": { "accountState": "frozen" }
+              }
+            ],
+            "freezeAuthority": null,
+            "isInitialized": true,
+            "mintAuthority": null,
+            "supply": "1000000"
+          },
+          "type": "mint"
+        },
+        "program": "spl-token-2022",
+        "space": 235
+      }
+    }
+  },
+  "id": 1
+}

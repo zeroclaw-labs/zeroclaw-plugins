@@ -1,0 +1,39 @@
+{
+  "jsonrpc": "2.0",
+  "result": {
+    "context": { "slot": 347119291 },
+    "value": {
+      "owner": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
+      "data": {
+        "parsed": {
+          "info": {
+            "decimals": 6,
+            "extensions": [
+              { "extension": "futureExtension01" },
+              { "extension": "futureExtension02" },
+              { "extension": "futureExtension03" },
+              { "extension": "futureExtension04" },
+              { "extension": "futureExtension05" },
+              { "extension": "futureExtension06" },
+              { "extension": "futureExtension07" },
+              { "extension": "futureExtension08" },
+              { "extension": "futureExtension09" },
+              { "extension": "futureExtension10" },
+              { "extension": "futureExtension11" },
+              { "extension": "futureExtension12" },
+              { "extension": "futureExtension13" }
+            ],
+            "freezeAuthority": null,
+            "isInitialized": true,
+            "mintAuthority": null,
+            "supply": "1000000"
+          },
+          "type": "mint"
+        },
+        "program": "spl-token-2022",
+        "space": 235
+      }
+    }
+  },
+  "id": 1
+}

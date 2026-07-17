@@ -1,0 +1,13 @@
+{
+  "jsonrpc": "2.0",
+  "result": {
+    "context": { "slot": 347119291 },
+    "value": [
+      { "amount": "500000" },
+      { "amount": "250000" },
+      { "amount": "150000" },
+      { "amount": "100000" }
+    ]
+  },
+  "id": 2
+}

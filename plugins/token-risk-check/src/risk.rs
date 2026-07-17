@@ -6,6 +6,8 @@ use url::Url;
 
 const LEGACY_TOKEN_PROGRAM: &str = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
 const TOKEN_2022_PROGRAM: &str = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb";
+const CONCENTRATION_THRESHOLD_BPS: u128 = 5_000;
+const MAX_REASONS: usize = 12;
 
 pub const ACCOUNT_REQUEST_ID: u64 = 1;
 pub const LARGEST_ACCOUNTS_REQUEST_ID: u64 = 2;
@@ -158,24 +160,58 @@ pub fn assess(mint: &str, account_json: &str, largest_json: &str) -> Result<Risk
         .checked_mul(10_000)
         .ok_or(RiskError::InvalidLargestAccount)?
         / supply;
+    let mint_authority_revoked = authority_is_revoked(&info.mint_authority)?;
+    let freeze_authority_revoked = authority_is_revoked(&info.freeze_authority)?;
+
+    let mut rules = Vec::new();
+    if !mint_authority_revoked {
+        rules.push(rule(
+            RuleSeverity::Amber,
+            "MINT_AUTHORITY_ACTIVE",
+            "Mint authority is active",
+        ));
+    }
+    if !freeze_authority_revoked {
+        rules.push(rule(
+            RuleSeverity::Amber,
+            "FREEZE_AUTHORITY_ACTIVE",
+            "Freeze authority is active",
+        ));
+    }
+    if top_account_bps >= CONCENTRATION_THRESHOLD_BPS {
+        rules.push(rule(
+            RuleSeverity::Amber,
+            "TOP_ACCOUNT_CONCENTRATED",
+            "Largest token account holds at least 50% of supply",
+        ));
+    }
+    if token_program == "token-2022" {
+        rules.extend(token_2022_extension_rules(&info.extensions));
+    }
+
+    let (verdict, reasons, reasons_truncated) = finalize_rules(rules);
+    let mut limitations = vec![
+        "LP_STATUS_NOT_CHECKED".to_owned(),
+        "TOP_ACCOUNTS_ARE_NOT_UNIQUE_HOLDERS".to_owned(),
+    ];
+    if reasons_truncated {
+        limitations.push("REASONS_TRUNCATED".to_owned());
+    }
 
     Ok(RiskReport {
-        verdict: Verdict::Green,
-        reasons: Vec::new(),
+        verdict,
+        reasons,
         evidence: Evidence {
             token_program: token_program.to_owned(),
             supply: info.supply,
             decimals: info.decimals,
-            mint_authority_revoked: authority_is_revoked(info.mint_authority)?,
-            freeze_authority_revoked: authority_is_revoked(info.freeze_authority)?,
+            mint_authority_revoked,
+            freeze_authority_revoked,
             top_account_bps: Some(
                 u16::try_from(top_account_bps).map_err(|_| RiskError::InvalidLargestAccount)?,
             ),
         },
-        limitations: vec![
-            "LP_STATUS_NOT_CHECKED".to_owned(),
-            "TOP_ACCOUNTS_ARE_NOT_UNIQUE_HOLDERS".to_owned(),
-        ],
+        limitations,
         slots: Slots {
             account: account.context.slot,
             largest_accounts: largest.context.slot,
@@ -210,15 +246,109 @@ fn parse_amount(raw: &str) -> Result<u128, RiskError> {
     raw.parse().map_err(|_| RiskError::InvalidLargestAccount)
 }
 
-fn authority_is_revoked(authority: Authority) -> Result<bool, RiskError> {
+fn authority_is_revoked(authority: &Authority) -> Result<bool, RiskError> {
     match authority {
         Authority::Missing => Err(RiskError::MalformedRpcResponse),
         Authority::Revoked => Ok(true),
         Authority::Active(authority) => {
-            validate_mint(&authority).map_err(|_| RiskError::InvalidAuthority)?;
+            validate_mint(authority).map_err(|_| RiskError::InvalidAuthority)?;
             Ok(false)
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum RuleSeverity {
+    Red,
+    Amber,
+}
+
+impl RuleSeverity {
+    fn verdict(self) -> Verdict {
+        match self {
+            Self::Red => Verdict::Red,
+            Self::Amber => Verdict::Amber,
+        }
+    }
+}
+
+struct Rule {
+    severity: RuleSeverity,
+    reason: Reason,
+}
+
+fn rule(severity: RuleSeverity, code: &str, message: &str) -> Rule {
+    Rule {
+        severity,
+        reason: Reason {
+            code: code.to_owned(),
+            message: message.to_owned(),
+        },
+    }
+}
+
+fn token_2022_extension_rules(extensions: &[TokenExtension]) -> Vec<Rule> {
+    extensions
+        .iter()
+        .filter_map(|extension| match extension.extension.as_str() {
+            "transferFeeConfig" => Some(rule(
+                RuleSeverity::Amber,
+                "TRANSFER_FEE",
+                "Token-2022 transfer fee is configured",
+            )),
+            "transferHook" => Some(rule(
+                RuleSeverity::Red,
+                "TRANSFER_HOOK",
+                "Token-2022 transfer hook is configured",
+            )),
+            "permanentDelegate" => Some(rule(
+                RuleSeverity::Red,
+                "PERMANENT_DELEGATE",
+                "Token-2022 permanent delegate is configured",
+            )),
+            "defaultAccountState" if extension.default_state_is_frozen() => Some(rule(
+                RuleSeverity::Amber,
+                "DEFAULT_FROZEN",
+                "Token-2022 default account state is frozen",
+            )),
+            "defaultAccountState" => None,
+            "confidentialTransferMint" => Some(rule(
+                RuleSeverity::Red,
+                "CONFIDENTIAL_TRANSFER",
+                "Token-2022 confidential transfer is configured",
+            )),
+            "nonTransferable" => Some(rule(
+                RuleSeverity::Red,
+                "NON_TRANSFERABLE",
+                "Token-2022 token is non-transferable",
+            )),
+            _ => Some(Rule {
+                severity: RuleSeverity::Amber,
+                reason: Reason {
+                    code: "UNKNOWN_EXTENSION".to_owned(),
+                    message: format!("Unrecognized Token-2022 extension: {}", extension.extension),
+                },
+            }),
+        })
+        .collect()
+}
+
+fn finalize_rules(mut rules: Vec<Rule>) -> (Verdict, Vec<Reason>, bool) {
+    rules.sort_by(|left, right| {
+        left.severity
+            .cmp(&right.severity)
+            .then_with(|| left.reason.code.cmp(&right.reason.code))
+    });
+
+    let verdict = rules
+        .first()
+        .map(|rule| rule.severity.verdict())
+        .unwrap_or(Verdict::Green);
+    let reasons_truncated = rules.len() > MAX_REASONS;
+    rules.truncate(MAX_REASONS);
+    let reasons = rules.into_iter().map(|rule| rule.reason).collect();
+
+    (verdict, reasons, reasons_truncated)
 }
 
 #[derive(Deserialize)]
@@ -278,8 +408,26 @@ struct MintInfo {
     mint_authority: Authority,
     supply: String,
     decimals: u8,
+    #[serde(default)]
+    extensions: Vec<TokenExtension>,
     #[serde(default, rename = "freezeAuthority")]
     freeze_authority: Authority,
+}
+
+#[derive(Deserialize)]
+struct TokenExtension {
+    extension: String,
+    #[serde(default)]
+    state: serde_json::Value,
+}
+
+impl TokenExtension {
+    fn default_state_is_frozen(&self) -> bool {
+        self.state
+            .get("accountState")
+            .and_then(serde_json::Value::as_str)
+            == Some("frozen")
+    }
 }
 
 #[derive(Deserialize)]

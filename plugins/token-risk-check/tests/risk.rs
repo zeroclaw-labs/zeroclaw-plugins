@@ -1,7 +1,16 @@
 use token_risk_check::risk::{assess, validate_mint, validate_rpc_url, Verdict};
 
 const SAFE_MINT: &str = "So11111111111111111111111111111111111111112";
+const TOKEN_2022_MINT: &str = "So11111111111111111111111111111111111111112";
 const TOKEN_2022_OWNER: &str = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb";
+
+fn reason_codes(report: &token_risk_check::risk::RiskReport) -> Vec<&str> {
+    report
+        .reasons
+        .iter()
+        .map(|reason| reason.code.as_str())
+        .collect()
+}
 
 #[test]
 fn validates_mint_and_rpc_endpoint() {
@@ -145,4 +154,125 @@ fn rejects_positive_supply_with_zero_largest_account_amount() {
         zero_largest,
     )
     .is_err());
+}
+
+#[test]
+fn marks_active_authorities_amber() {
+    let report = assess(
+        SAFE_MINT,
+        include_str!("fixtures/legacy-authorities.json"),
+        include_str!("fixtures/dispersed-largest.json"),
+    )
+    .unwrap();
+
+    assert_eq!(report.verdict, Verdict::Amber);
+    assert_eq!(
+        reason_codes(&report),
+        vec!["FREEZE_AUTHORITY_ACTIVE", "MINT_AUTHORITY_ACTIVE"]
+    );
+}
+
+#[test]
+fn marks_concentration_boundary_amber() {
+    let report = assess(
+        SAFE_MINT,
+        include_str!("fixtures/legacy-safe-account.json"),
+        include_str!("fixtures/concentrated-largest.json"),
+    )
+    .unwrap();
+
+    assert_eq!(report.verdict, Verdict::Amber);
+    assert_eq!(report.evidence.top_account_bps, Some(5_000));
+    assert_eq!(reason_codes(&report), vec!["TOP_ACCOUNT_CONCENTRATED"]);
+}
+
+#[test]
+fn marks_high_risk_token_2022_extensions_red() {
+    let report = assess(
+        TOKEN_2022_MINT,
+        include_str!("fixtures/token-2022-extensions.json"),
+        include_str!("fixtures/dispersed-largest.json"),
+    )
+    .unwrap();
+
+    assert_eq!(report.verdict, Verdict::Red);
+    assert_eq!(
+        reason_codes(&report),
+        vec![
+            "CONFIDENTIAL_TRANSFER",
+            "NON_TRANSFERABLE",
+            "PERMANENT_DELEGATE",
+            "TRANSFER_HOOK",
+        ]
+    );
+}
+
+#[test]
+fn marks_fee_and_default_frozen_extensions_amber() {
+    let report = assess(
+        TOKEN_2022_MINT,
+        include_str!("fixtures/token-2022-amber-extensions.json"),
+        include_str!("fixtures/dispersed-largest.json"),
+    )
+    .unwrap();
+
+    assert_eq!(report.verdict, Verdict::Amber);
+    assert_eq!(
+        reason_codes(&report),
+        vec!["DEFAULT_FROZEN", "TRANSFER_FEE"]
+    );
+}
+
+#[test]
+fn marks_unknown_extensions_amber_and_truncates_reasons() {
+    let report = assess(
+        TOKEN_2022_MINT,
+        include_str!("fixtures/token-2022-unknown-extensions.json"),
+        include_str!("fixtures/dispersed-largest.json"),
+    )
+    .unwrap();
+
+    assert_eq!(report.verdict, Verdict::Amber);
+    assert_eq!(report.reasons.len(), 12);
+    assert!(report
+        .reasons
+        .iter()
+        .all(|reason| reason.code == "UNKNOWN_EXTENSION"));
+    assert!(report
+        .limitations
+        .iter()
+        .any(|limitation| limitation == "REASONS_TRUNCATED"));
+}
+
+#[test]
+fn orders_red_reasons_before_amber_reasons_by_code() {
+    let account = include_str!("fixtures/token-2022-extensions.json")
+        .replace(
+            "\"freezeAuthority\": null",
+            "\"freezeAuthority\": \"So11111111111111111111111111111111111111112\"",
+        )
+        .replace(
+            "\"mintAuthority\": null",
+            "\"mintAuthority\": \"So11111111111111111111111111111111111111112\"",
+        );
+    let report = assess(
+        TOKEN_2022_MINT,
+        &account,
+        include_str!("fixtures/concentrated-largest.json"),
+    )
+    .unwrap();
+
+    assert_eq!(report.verdict, Verdict::Red);
+    assert_eq!(
+        reason_codes(&report),
+        vec![
+            "CONFIDENTIAL_TRANSFER",
+            "NON_TRANSFERABLE",
+            "PERMANENT_DELEGATE",
+            "TRANSFER_HOOK",
+            "FREEZE_AUTHORITY_ACTIVE",
+            "MINT_AUTHORITY_ACTIVE",
+            "TOP_ACCOUNT_CONCENTRATED",
+        ]
+    );
 }
