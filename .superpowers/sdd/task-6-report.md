@@ -59,14 +59,21 @@ done
 (cd plugins/token-risk-check && cargo clippy --target wasm32-wasip2 --all-targets -- -D warnings)
 (cd plugins/token-risk-check && cargo fmt --check)
 (cd plugins/token-risk-check && cargo build --target wasm32-wasip2 --release)
-python3 tools/build-registry.py --help >/dev/null
+tmp="$(mktemp -d)"
+mkdir -p "$tmp/staged/token-risk-check" "$tmp/out"
+cp plugins/token-risk-check/manifest.toml "$tmp/staged/token-risk-check/"
+cp plugins/token-risk-check/target/wasm32-wasip2/release/token_risk_check.wasm "$tmp/staged/token-risk-check/"
+python3 tools/build-registry.py --staged "$tmp/staged" \
+  --release-base https://example.invalid/releases --out "$tmp/out"
+test -s "$tmp/out/token-risk-check-0.1.0.zip"
+test -s "$tmp/out/registry.json"
 git diff --check
 if rg -n 'println!|eprintln!|dbg!' plugins/token-risk-check --glob '!target/**'; then
   exit 1
 fi
 ~~~
 
-The term check found all six terms. The explicit source-code list check found all 36 documented stable codes: `CODE_CROSSCHECK=PASS stable_codes=36`. Host tests passed with 34 integration tests and zero failures. Host and WASM all-target Clippy checks with warnings denied, format check, release WASM build, registry tool help check, diff check, and stdout scan completed with exit code 0. The release artifact was built at `plugins/token-risk-check/target/wasm32-wasip2/release/token_risk_check.wasm`; it remains an untracked build output and is not included in the Task 6 diff.
+The term check found all six terms. The explicit source-code list check found all 36 documented stable codes: `CODE_CROSSCHECK=PASS stable_codes=36`. Host tests passed with 34 integration tests and zero failures. Host and WASM all-target Clippy checks with warnings denied, format check, release WASM build, staged registry packaging, diff check, and stdout scan completed with exit code 0. The staged check produced a non-empty plugin zip and registry JSON containing `token-risk-check`. The release artifact was built at `plugins/token-risk-check/target/wasm32-wasip2/release/token_risk_check.wasm`; it remains an untracked build output and is not included in the Task 6 diff.
 
 ## Self-Review And Concerns
 
