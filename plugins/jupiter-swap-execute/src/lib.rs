@@ -323,55 +323,36 @@ mod component {
         let tx_data = extract_order_transaction(&order_parsed)?;
         let request_id = extract_request_id(&order_parsed)?;
 
-        // Step 3: Submit to OutLayer for custody-signed execution
-        // OutLayer signs the tx in TEE and submits via Jupiter /execute or its own pipeline.
-        let outlayer_url = format!("{}/wallet/v1/transfer", cfg.outlayer_api);
-        let transfer_body = build_outlayer_transfer_body(
-            "solana",
-            &args.input_mint,
-            "", // destination embedded in swap tx instructions
-            &args.amount.to_string(),
-            &tx_data,
-        );
+        // Step 3: Submit to OutLayer for TEE custody signing
+        // OutLayer signs the tx message with its ed25519 key in TEE.
+        // Caller (or plugin) assembles signature + broadcasts to Solana RPC.
+        let outlayer_url = format!("{}/wallet/v1/solana/sign-transaction", cfg.outlayer_api);
+        let sign_body = build_outlayer_solana_sign_body(&tx_data);
 
         let outlayer_response = http_post_json_with_auth(
             &outlayer_url,
-            &transfer_body,
+            &sign_body,
             &cfg.outlayer_api_key,
         )
-        .map_err(|e| format!("OutLayer submission failed: {e}"))?;
+        .map_err(|e| format!("OutLayer sign request failed: {e}"))?;
 
         // Step 4: Return result
         let out_parsed: serde_json::Value = serde_json::from_str(&outlayer_response)
             .unwrap_or_else(|_| serde_json::json!({ "raw": outlayer_response }));
 
-        let status = out_parsed
-            .get("status")
+        let signature = out_parsed
+            .get("signature")
             .and_then(|s| s.as_str())
-            .unwrap_or("unknown");
-        let request_id_out = out_parsed
-            .get("request_id")
-            .and_then(|r| r.as_str())
-            .unwrap_or(&request_id);
+            .unwrap_or("?");
+        let wallet_id = out_parsed
+            .get("wallet_id")
+            .and_then(|w| w.as_str())
+            .unwrap_or("?");
 
-        match status {
-            "completed" | "signed" => Ok(format!(
-                "Swap executed. {}. Transaction signed by OutLayer TEE. Request: {}",
-                order_summary, request_id_out
-            )),
-            "pending_approval" | "requires_approval" => Ok(format!(
-                "Swap pending approval. {} exceeds policy threshold — check OutLayer approval queue. Request: {}",
-                order_summary, request_id_out
-            )),
-            "rejected" => Err(format!(
-                "Swap rejected by OutLayer policy. {}. Request: {}",
-                order_summary, request_id_out
-            )),
-            _ => Ok(format!(
-                "Swap submitted to OutLayer. {} Status: {} Request: {}",
-                order_summary, status, request_id_out
-            )),
-        }
+        Ok(format!(
+            "Swap signed by OutLayer TEE. {}. Sig: {}. Wallet: {}. Request: {}",
+            order_summary, signature, wallet_id, request_id
+        ))
     }
 
     /// Handle "balance" action — read OutLayer wallet balance.
@@ -415,12 +396,12 @@ mod component {
         Err("HTTP not available in test mode".to_string())
     }
 
-    fn http_get_with_auth(url: &str, _token: &str) -> Result<String, String> {
+    fn http_get_with_auth(_url: &str, _token: &str) -> Result<String, String> {
         Err("HTTP not available in test mode".to_string())
     }
 
-    fn http_post_json(url: &str, body: &serde_json::Value) -> Result<String, String> {
-        let _ = (url, body);
+    #[allow(dead_code)]
+    fn http_post_json(_url: &str, _body: &serde_json::Value) -> Result<String, String> {
         Err("HTTP not available in test mode".to_string())
     }
 

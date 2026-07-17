@@ -161,22 +161,30 @@ pub fn build_outlayer_balance_url(cfg: &SwapConfig, mint: &str) -> String {
     )
 }
 
-/// Build OutLayer transfer request body for swap submission.
-/// POST {outlayer_api}/wallet/v1/transfer
-pub fn build_outlayer_transfer_body(
-    chain: &str,
-    token: &str,
-    to: &str,
-    amount: &str,
-    tx_data: &str,
-) -> serde_json::Value {
+/// Build OutLayer Solana sign-transaction request body.
+/// POST {outlayer_api}/wallet/v1/solana/sign-transaction
+///
+/// OutLayer signs the tx message (base64) with its TEE-held ed25519 key.
+/// Returns a base58 signature. Caller assembles + broadcasts.
+pub fn build_outlayer_solana_sign_body(unsigned_tx_base64: &str) -> serde_json::Value {
     serde_json::json!({
-        "chain": chain,
-        "token": token,
-        "to": to,
-        "amount": amount,
-        "tx_data": tx_data,
+        "chain": "solana",
+        "unsigned_tx": unsigned_tx_base64
     })
+}
+
+/// Shape an OutLayer Solana sign response into a compact string.
+/// Response: { signature: base58, chain: "solana", wallet_id: uuid }
+pub fn shape_outlayer_sign_response(raw: &serde_json::Value) -> String {
+    let signature = raw
+        .get("signature")
+        .and_then(|v| v.as_str())
+        .unwrap_or("?");
+    let wallet_id = raw
+        .get("wallet_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("?");
+    format!("Signed by OutLayer ({}). Sig: {}", wallet_id, signature)
 }
 
 // ── Output shaping ────────────────────────────────────────────────────
@@ -620,12 +628,24 @@ mod tests {
     }
 
     #[test]
-    fn outlayer_transfer_body_serializes() {
-        let body = build_outlayer_transfer_body("solana", "SOL", "dest", "1000000", "dGVzdA==");
+    fn outlayer_solana_sign_body_serializes() {
+        let body = build_outlayer_solana_sign_body("dGVzdA==");
         let serialized = serde_json::to_string(&body).unwrap();
-        assert!(serialized.contains("solana"));
-        assert!(serialized.contains("dGVzdA=="));
-        assert!(serialized.len() < 500);
+        assert!(serialized.contains("\"chain\":\"solana\""));
+        assert!(serialized.contains("\"unsigned_tx\":\"dGVzdA==\""));
+        assert!(serialized.len() < 200);
+    }
+
+    #[test]
+    fn outlayer_sign_response_shaping() {
+        let raw = serde_json::json!({
+            "signature": "5Kt8abc123sig",
+            "chain": "solana",
+            "wallet_id": "450290fb-a7ae-4744-8251-61e29ba12e15"
+        });
+        let out = shape_outlayer_sign_response(&raw);
+        assert!(out.contains("450290fb"));
+        assert!(out.contains("5Kt8abc123sig"));
     }
 
     // ── Helpers ──
