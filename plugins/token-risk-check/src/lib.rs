@@ -159,7 +159,10 @@ mod component {
         features: ["plugins-wit-v0"],
     });
 
-    use crate::risk::{assess, parse_execute_args, serialize_report, unknown_report, Verdict};
+    use crate::risk::{
+        assess, owner_accounts_request_body, parse_execute_args, serialize_report, unknown_report,
+        Verdict,
+    };
     use crate::{
         parameters_schema, rpc_request_bodies, Deadline, HttpTimeouts, ResponseBodyAccumulator,
         ShimError,
@@ -229,8 +232,22 @@ mod component {
                 Ok(body) => body,
                 Err(error) => return Ok(unknown_result(error.code())),
             };
+            let owner_accounts_request = match owner_accounts_request_body(&largest_body) {
+                Ok(request) => request,
+                Err(error) => return Ok(unknown_result(error.code())),
+            };
+            let owner_accounts_body =
+                match post_json(&parsed.config.rpc_url, &owner_accounts_request) {
+                    Ok(body) => body,
+                    Err(error) => return Ok(unknown_result(error.code())),
+                };
 
-            match assess(&parsed.mint, &account_body, &largest_body) {
+            match assess(
+                &parsed.mint,
+                &account_body,
+                &largest_body,
+                &owner_accounts_body,
+            ) {
                 Ok(report) => {
                     let verdict = verdict_code(report.verdict);
                     emit(

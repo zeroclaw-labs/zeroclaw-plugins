@@ -345,6 +345,11 @@ pub fn assess(
     let freeze_authority_revoked = authority_is_revoked(&info.freeze_authority)?;
 
     let mut rules = Vec::new();
+    rules.push(rule(
+        RuleSeverity::Amber,
+        "LIQUIDITY_NOT_OBSERVED",
+        "No liquidity evidence is collected in this assessment",
+    ));
     if slot_skew > 0 || owner_slot_skew > 0 {
         rules.push(rule(
             RuleSeverity::Amber,
@@ -389,6 +394,7 @@ pub fn assess(
 
     let (verdict, reasons, reasons_truncated) = finalize_rules(rules);
     let mut limitations = vec![
+        "LIQUIDITY_NOT_OBSERVED".to_owned(),
         "LP_STATUS_NOT_CHECKED".to_owned(),
         "TOP_ACCOUNTS_ARE_NOT_UNIQUE_HOLDERS".to_owned(),
         "OWNER_CONCENTRATION_TOP_ACCOUNTS_ONLY".to_owned(),

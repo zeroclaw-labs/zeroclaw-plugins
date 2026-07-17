@@ -329,15 +329,19 @@ fn deadline_expires_at_boundary_and_rejects_clock_overflow() {
 }
 
 #[test]
-fn reports_green_for_complete_low_risk_legacy_evidence() {
+fn reports_amber_when_liquidity_is_not_observed() {
     let report = assess(
         SAFE_MINT,
         include_str!("fixtures/legacy-safe-account.json"),
         include_str!("fixtures/dispersed-largest.json"),
     )
     .unwrap();
-    assert_eq!(report.verdict, Verdict::Green);
-    assert!(report.reasons.is_empty());
+    assert_eq!(report.verdict, Verdict::Amber);
+    assert_eq!(reason_codes(&report), vec!["LIQUIDITY_NOT_OBSERVED"]);
+    assert!(report
+        .limitations
+        .iter()
+        .any(|limitation| limitation == "LIQUIDITY_NOT_OBSERVED"));
     assert_eq!(report.evidence.token_program, "spl-token");
     assert_eq!(report.evidence.top_account_bps, Some(1900));
 }
@@ -370,7 +374,7 @@ fn shared_owner_at_half_supply_is_amber() {
 }
 
 #[test]
-fn distinct_observed_owners_remain_below_concentration_threshold() {
+fn distinct_observed_owners_remain_amber_without_liquidity_evidence() {
     let report = assess_with_owner(
         SAFE_MINT,
         include_str!("fixtures/legacy-safe-account.json"),
@@ -379,9 +383,10 @@ fn distinct_observed_owners_remain_below_concentration_threshold() {
     )
     .unwrap();
 
-    assert_eq!(report.verdict, Verdict::Green);
+    assert_eq!(report.verdict, Verdict::Amber);
     assert_eq!(report.evidence.top_observed_owner_bps, Some(1900));
     assert!(!reason_codes(&report).contains(&"TOP_OWNER_CONCENTRATED"));
+    assert!(reason_codes(&report).contains(&"LIQUIDITY_NOT_OBSERVED"));
 }
 
 #[test]
@@ -741,7 +746,11 @@ fn marks_active_authorities_amber() {
     assert_eq!(report.verdict, Verdict::Amber);
     assert_eq!(
         reason_codes(&report),
-        vec!["FREEZE_AUTHORITY_ACTIVE", "MINT_AUTHORITY_ACTIVE"]
+        vec![
+            "FREEZE_AUTHORITY_ACTIVE",
+            "LIQUIDITY_NOT_OBSERVED",
+            "MINT_AUTHORITY_ACTIVE"
+        ]
     );
 }
 
@@ -758,7 +767,11 @@ fn marks_concentration_boundary_amber() {
     assert_eq!(report.evidence.top_account_bps, Some(5_000));
     assert_eq!(
         reason_codes(&report),
-        vec!["TOP_ACCOUNT_CONCENTRATED", "TOP_OWNER_CONCENTRATED"]
+        vec![
+            "LIQUIDITY_NOT_OBSERVED",
+            "TOP_ACCOUNT_CONCENTRATED",
+            "TOP_OWNER_CONCENTRATED"
+        ]
     );
 }
 
@@ -779,6 +792,7 @@ fn marks_high_risk_token_2022_extensions_red() {
             "NON_TRANSFERABLE",
             "PERMANENT_DELEGATE",
             "TRANSFER_HOOK",
+            "LIQUIDITY_NOT_OBSERVED",
         ]
     );
 }
@@ -795,7 +809,7 @@ fn marks_fee_and_default_frozen_extensions_amber() {
     assert_eq!(report.verdict, Verdict::Amber);
     assert_eq!(
         reason_codes(&report),
-        vec!["DEFAULT_FROZEN", "TRANSFER_FEE"]
+        vec!["DEFAULT_FROZEN", "LIQUIDITY_NOT_OBSERVED", "TRANSFER_FEE"]
     );
 }
 
@@ -810,8 +824,8 @@ fn marks_unknown_extensions_amber_and_truncates_reasons() {
 
     assert_eq!(report.verdict, Verdict::Amber);
     assert_eq!(report.reasons.len(), 12);
-    assert!(report
-        .reasons
+    assert_eq!(report.reasons[0].code, "LIQUIDITY_NOT_OBSERVED");
+    assert!(report.reasons[1..]
         .iter()
         .all(|reason| reason.code == "UNKNOWN_EXTENSION"));
     assert!(report
@@ -847,6 +861,7 @@ fn orders_red_reasons_before_amber_reasons_by_code() {
             "PERMANENT_DELEGATE",
             "TRANSFER_HOOK",
             "FREEZE_AUTHORITY_ACTIVE",
+            "LIQUIDITY_NOT_OBSERVED",
             "MINT_AUTHORITY_ACTIVE",
             "TOP_ACCOUNT_CONCENTRATED",
             "TOP_OWNER_CONCENTRATED",
@@ -896,7 +911,7 @@ fn rejects_malformed_default_account_state_evidence() {
 }
 
 #[test]
-fn accepts_initialized_default_account_state_without_default_frozen_risk() {
+fn accepts_initialized_default_account_state_but_requires_liquidity_evidence() {
     let account = include_str!("fixtures/legacy-safe-account.json")
         .replace(
             "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
@@ -913,8 +928,8 @@ fn accepts_initialized_default_account_state_without_default_frozen_risk() {
     )
     .unwrap();
 
-    assert_eq!(report.verdict, Verdict::Green);
-    assert!(report.reasons.is_empty());
+    assert_eq!(report.verdict, Verdict::Amber);
+    assert_eq!(reason_codes(&report), vec!["LIQUIDITY_NOT_OBSERVED"]);
 }
 
 #[test]
@@ -1061,7 +1076,11 @@ fn unknown_extension_names_are_capped_at_32_characters() {
     )
     .unwrap();
 
-    let extension = report.reasons[0]
+    let extension = report
+        .reasons
+        .iter()
+        .find(|reason| reason.code == "UNKNOWN_EXTENSION")
+        .unwrap()
         .message
         .strip_prefix("Unrecognized Token-2022 extension: ")
         .unwrap();
