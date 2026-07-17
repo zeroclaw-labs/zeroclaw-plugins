@@ -39,9 +39,10 @@ The plugin follows the repository's pure-core/thin-shim pattern.
 
 ## Risk Rules
 
-- Red: invalid mint account, unsupported owner, active permanent delegate, transfer hook, non-transferable token, confidential transfer, or required evidence unavailable.
+- Red: invalid mint account, unsupported owner, active permanent delegate, transfer hook, non-transferable token, or confidential transfer.
 - Amber: active mint authority, active freeze authority, transfer fees, default frozen account state, top-holder concentration above the documented threshold, unknown extension, or partial evidence.
 - Green: required evidence is complete and no red or amber rule fires.
+- Unknown: required evidence is unavailable, malformed, contradictory, or cannot be evaluated under the supported RPC schema.
 
 The core returns `unknown` instead of green whenever required evidence is missing. Thresholds are constants documented in the README, not LLM-controlled arguments.
 
