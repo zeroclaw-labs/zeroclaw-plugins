@@ -1,0 +1,9 @@
+name = "solana-pay-request"
+version = "0.1.0"
+description = "Create validated Solana Pay transfer URLs without signing or moving funds"
+author = "Absamad Manturov"
+wasm_path = "solana_pay_request.wasm"
+capabilities = ["tool"]
+# Only this plugin's jailed configuration is readable. It has no network,
+# filesystem, environment, clock, process, or secret-store permissions.
+permissions = ["config_read"]
