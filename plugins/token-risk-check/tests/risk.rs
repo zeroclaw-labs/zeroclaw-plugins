@@ -1526,6 +1526,51 @@ fn readme_documents_complete_evidence_contract_and_stable_codes() {
 }
 
 #[test]
+fn readme_describes_transport_and_owner_binding_without_overclaiming() {
+    let readme = include_str!("../README.md");
+
+    assert!(
+        readme.contains("preceding HTTP request succeeds"),
+        "README must describe the actual request sequencing condition"
+    );
+    assert!(
+        !readme.contains("preceding evidence validates"),
+        "README must not claim every prior response is semantically validated before continuing"
+    );
+    assert!(
+        readme.contains("correspond by request order"),
+        "README must describe positional owner-response matching"
+    );
+    assert!(
+        readme.contains("does not echo the requested account addresses"),
+        "README must disclose that standard owner responses do not echo addresses"
+    );
+    assert!(
+        readme.contains("cannot independently bind each returned entry to an address"),
+        "README must disclose the positional binding limitation"
+    );
+}
+
+#[test]
+fn readme_stable_reason_table_includes_slot_skew() {
+    let readme = include_str!("../README.md");
+    let stable_reason_table = readme
+        .split("These are the stable reason codes produced by the assessment rules:")
+        .nth(1)
+        .and_then(|section| {
+            section
+                .split("Stable core and transport error codes are:")
+                .next()
+        })
+        .expect("stable reason table");
+
+    assert!(
+        stable_reason_table.contains("| EVIDENCE_SLOT_SKEW |"),
+        "EVIDENCE_SLOT_SKEW must be listed as a stable reason"
+    );
+}
+
+#[test]
 fn manifest_preserves_t0_permissions_and_describes_complete_evidence() {
     let manifest = include_str!("../manifest.toml");
 

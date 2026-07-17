@@ -13,7 +13,7 @@ The tool validates the mint as a 32-byte base58 public key, accepts only the leg
 - getMultipleAccounts with jsonParsed, JSON-RPC ID 3, for the exact largest token-account addresses;
 - GET https://api.dexscreener.com/token-pairs/v1/solana/{mint}.
 
-It requires `account.data.parsed.type` to be exactly `mint`, then checks initialization, supply, decimals, mint authority, freeze authority, the largest supplied token-account concentration, observed owner concentration, indexed USD liquidity, and supported Token-2022 extensions. The owner response must match the requested addresses, mint, token program, amounts, order, and bounded slots. Equal response slots can produce Green. A response up to 32 slots ahead is accepted only with an `EVIDENCE_SLOT_SKEW` Amber reason and limitation, so non-atomic evidence can never produce Green; reversed or larger gaps return Unknown. The exact request methods, IDs, DEX host, path, and thresholds are fixed in the component; the model cannot choose them.
+It requires `account.data.parsed.type` to be exactly `mint`, then checks initialization, supply, decimals, mint authority, freeze authority, the largest supplied token-account concentration, observed owner concentration, indexed USD liquidity, and supported Token-2022 extensions. Owner entries must correspond by request order and match the requested mint, token program, amounts, and bounded slots. Equal response slots can produce Green. A response up to 32 slots ahead is accepted only with an `EVIDENCE_SLOT_SKEW` Amber reason and limitation, so non-atomic evidence can never produce Green; reversed or larger gaps return Unknown. The exact request methods, IDs, DEX host, path, and thresholds are fixed in the component; the model cannot choose them.
 
 This is a bounded evidence check, not a safety guarantee, audit, investment recommendation, or proof that a token can be sold.
 
@@ -120,7 +120,7 @@ The following is a public-value, illustrative response where the largest token a
 
 T0 means the component has no custody or transaction authority. It accepts no secret key, signature, transaction, arbitrary RPC method, arbitrary endpoint, or caller-selected threshold. The only model-call parameter is mint; the host-injected __config object is outside the model-call schema and supplies the operator's rpc_url.
 
-The configured HTTPS RPC endpoint is the chain-data trust boundary. TLS protects the connection in transit, but the endpoint can misreport, omit, delay within enforced deadlines, or reorder evidence. The component binds the three RPC responses to fixed methods, IDs, account addresses, mint, token program, amounts, and slots, but the first two standard responses do not echo the queried mint, so this is not independent mint-identity proof.
+The configured HTTPS RPC endpoint is the chain-data trust boundary. TLS protects the connection in transit, but the endpoint can misreport, omit, delay within enforced deadlines, or reorder evidence. The component binds the three RPC responses to fixed methods, IDs, mint, token program, amounts, request order, and slots. The standard owner response does not echo the requested account addresses, so the component cannot independently bind each returned entry to an address; it relies on the RPC endpoint preserving request order. The first two standard responses also do not echo the queried mint, so this is not independent mint-identity proof.
 
 DEX Screener is an off-chain indexing boundary, not an on-chain oracle. A positive observation means only that DEX Screener indexed a qualifying pair at request time. Missing data cannot prove that liquidity does not exist. No retries, alternate providers, or caller-selected fallback endpoints are used.
 
@@ -143,7 +143,7 @@ violates the model-facing `additionalProperties: false` schema, which guides too
 
 ## Bounds and fail-closed behavior
 
-- At most four sequential HTTPS requests are attempted: three POSTs to the configured RPC endpoint, then one GET to the fixed DEX Screener endpoint. Each next request is sent only after the preceding evidence validates; there is no retry or fallback endpoint.
+- At most four sequential HTTPS requests are attempted: three POSTs to the configured RPC endpoint, then one GET to the fixed DEX Screener endpoint. Each next request is sent only after the preceding HTTP request succeeds; this sequencing does not claim that every preceding response has already received full semantic validation. There is no retry or fallback endpoint.
 - Each request sets WASI host transport options of 5 seconds for TCP connection, 10 seconds for the first response byte, and 5 seconds between response bytes. A separate 15-second guest monotonic deadline covers request-body writes where applicable and the complete wait for response headers, including HTTPS setup not covered by a host TCP timer.
 - After response headers arrive, each body-stream wait is limited to 5 seconds and the entire body must reach EOF within 15 seconds. A deadline returns unknown with `TIMEOUT`.
 - Each streamed response is capped at 1 MiB before JSON parsing. The component reads at most 64 KiB per chunk and rejects an empty read or invalid UTF-8.
@@ -162,6 +162,7 @@ These are the stable reason codes produced by the assessment rules:
 | TOP_ACCOUNT_CONCENTRATED | Largest supplied token account is at least 5,000 bps of supply. |
 | TOP_OWNER_CONCENTRATED | Top owner aggregated across observed largest token accounts is at least 5,000 bps of supply. |
 | LIQUIDITY_NOT_OBSERVED | DEX Screener returned no matching pair with positive USD liquidity. |
+| EVIDENCE_SLOT_SKEW | RPC evidence is recent but not from one atomic slot. |
 | TRANSFER_FEE | Token-2022 transfer fee is configured. |
 | TRANSFER_HOOK | Token-2022 transfer hook is configured. |
 | PERMANENT_DELEGATE | Token-2022 permanent delegate is configured. |
