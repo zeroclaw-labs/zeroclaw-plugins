@@ -437,7 +437,11 @@ impl TokenExtension {
             .get("accountState")
             .and_then(serde_json::Value::as_str)
             .ok_or(RiskError::MalformedRpcResponse)?;
-        Ok(account_state == "frozen")
+        match account_state {
+            "frozen" => Ok(true),
+            "initialized" => Ok(false),
+            _ => Err(RiskError::MalformedRpcResponse),
+        }
     }
 }
 

@@ -1,4 +1,4 @@
-use token_risk_check::risk::{assess, validate_mint, validate_rpc_url, Verdict};
+use token_risk_check::risk::{assess, validate_mint, validate_rpc_url, RiskError, Verdict};
 
 const SAFE_MINT: &str = "So11111111111111111111111111111111111111112";
 const TOKEN_2022_MINT: &str = "So11111111111111111111111111111111111111112";
@@ -338,4 +338,26 @@ fn accepts_initialized_default_account_state_without_default_frozen_risk() {
 
     assert_eq!(report.verdict, Verdict::Green);
     assert!(report.reasons.is_empty());
+}
+
+#[test]
+fn rejects_invalid_default_account_state_strings() {
+    for account_state in ["Frozen", "unknown"] {
+        let account = include_str!("fixtures/token-2022-amber-extensions.json").replace(
+            "\"accountState\": \"frozen\"",
+            &format!("\"accountState\": \"{account_state}\""),
+        );
+
+        assert!(
+            matches!(
+                assess(
+                    TOKEN_2022_MINT,
+                    &account,
+                    include_str!("fixtures/dispersed-largest.json"),
+                ),
+                Err(RiskError::MalformedRpcResponse)
+            ),
+            "{account_state}"
+        );
+    }
 }

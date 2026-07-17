@@ -162,3 +162,54 @@ Self-review: the strict check is reached only for the exact
 `defaultAccountState` extension, preserves existing extension severity and
 ordering, and does not alter legacy-token behavior. No additional concerns
 were identified for this finding.
+
+## Re-Review Fix
+
+Base commit: `2f49a2f`.
+
+Finding: the structural validator accepted every string `accountState` value
+and classified every value other than exact `frozen` as not frozen. Invalid
+enum strings such as `Frozen` and `unknown` could therefore avoid an evidence
+error.
+
+TDD RED evidence:
+
+```bash
+cd plugins/token-risk-check && cargo test rejects_invalid_default_account_state_strings
+```
+
+Result: exit `101`; 0 passed and 1 failed at the `Frozen` case because the
+assessment returned a report instead of `RiskError::MalformedRpcResponse`.
+
+Fix: account-state parsing now accepts only the documented jsonParsed values
+needed here: exact `frozen` returns the amber `DEFAULT_FROZEN` path and exact
+`initialized` returns the no-reason path. Every other string returns
+`RiskError::MalformedRpcResponse`.
+
+Focused GREEN verification:
+
+```bash
+cd plugins/token-risk-check && cargo test rejects_invalid_default_account_state_strings
+cd plugins/token-risk-check && cargo test default_account_state
+```
+
+Results: exit `0`; the invalid-string regression passed 1/1 and all
+default-account-state tests passed 3/3.
+
+Full verification:
+
+```bash
+cd plugins/token-risk-check && cargo test
+cd plugins/token-risk-check && cargo clippy --all-targets -- -D warnings
+cd plugins/token-risk-check && cargo fmt -- --check
+git diff --check
+```
+
+Results: exit `0`; 17 integration tests passed with 0 failures, doc tests had
+0 failures, Clippy emitted no warnings, formatting was clean, and the diff
+check was clean.
+
+Self-review: matching is case-sensitive and exhaustive for `frozen` and
+`initialized`; the existing malformed-structure checks still fail closed, and
+legacy-token and unrelated extension rules are unchanged. No Task 4 work was
+started.
