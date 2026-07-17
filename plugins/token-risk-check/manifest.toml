@@ -1,6 +1,6 @@
 name = "token-risk-check"
 version = "0.1.0"
-description = "Assess Solana mint risk from fixed JSON-RPC evidence"
+description = "Assess Solana mint risk from fixed owner and liquidity evidence"
 author = "ZeroClaw Labs"
 wasm_path = "token_risk_check.wasm"
 capabilities = ["tool"]

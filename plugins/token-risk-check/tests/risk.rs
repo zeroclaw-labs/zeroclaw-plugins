@@ -1399,3 +1399,139 @@ fn serialization_is_valid_json_below_the_cap_or_minimal_unknown() {
     assert_eq!(value["verdict"], "unknown");
     assert_eq!(value["reasons"][0]["code"], "OUTPUT_TOO_LARGE");
 }
+
+#[test]
+fn complete_evidence_report_has_stable_serialization() {
+    let report = assess_with_evidence(
+        SAFE_MINT,
+        include_str!("fixtures/legacy-safe-account.json"),
+        include_str!("fixtures/dispersed-largest.json"),
+        include_str!("fixtures/owners-dispersed.json"),
+        include_str!("fixtures/liquidity-observed.json"),
+    )
+    .unwrap();
+    let value: serde_json::Value = serde_json::from_str(&serialize_report(&report)).unwrap();
+
+    assert_eq!(
+        value,
+        serde_json::json!({
+            "verdict": "green",
+            "reasons": [],
+            "evidence": {
+                "token_program": "spl-token",
+                "supply": "1000000",
+                "decimals": 6,
+                "mint_authority_revoked": true,
+                "freeze_authority_revoked": true,
+                "top_account_bps": 1900,
+                "top_observed_owner_bps": 1900,
+                "liquidity_status": "observed",
+                "liquidity_pair_count": 2,
+                "max_liquidity_usd": "125000.5",
+                "liquidity_source": "dexscreener"
+            },
+            "limitations": [
+                "DEXSCREENER_COVERAGE_ONLY",
+                "LP_STATUS_NOT_CHECKED",
+                "TOP_ACCOUNTS_ARE_NOT_UNIQUE_HOLDERS",
+                "OWNER_CONCENTRATION_TOP_ACCOUNTS_ONLY"
+            ],
+            "slots": {
+                "account": 250000000,
+                "largest_accounts": 250000000,
+                "owner_accounts": 250000000
+            }
+        })
+    );
+}
+
+#[test]
+fn malformed_owner_or_liquidity_evidence_maps_to_stable_unknown() {
+    let malformed_cases = [
+        (
+            "owner",
+            assess_with_evidence(
+                SAFE_MINT,
+                include_str!("fixtures/legacy-safe-account.json"),
+                include_str!("fixtures/dispersed-largest.json"),
+                "{}",
+                include_str!("fixtures/liquidity-observed.json"),
+            ),
+            "MALFORMED_RPC_RESPONSE",
+        ),
+        (
+            "liquidity",
+            assess_with_evidence(
+                SAFE_MINT,
+                include_str!("fixtures/legacy-safe-account.json"),
+                include_str!("fixtures/dispersed-largest.json"),
+                include_str!("fixtures/owners-dispersed.json"),
+                "{}",
+            ),
+            "MALFORMED_LIQUIDITY_RESPONSE",
+        ),
+    ];
+
+    for (label, result, expected_code) in malformed_cases {
+        let error = result.expect_err(label);
+        let report = unknown_report(error.code(), &error.to_string());
+        assert_eq!(report.verdict, Verdict::Unknown, "{label}");
+        assert_eq!(reason_codes(&report), vec![expected_code], "{label}");
+        assert!(serialize_report(&report).len() <= 8 * 1024, "{label}");
+    }
+}
+
+#[test]
+fn prompt_injection_rejects_every_extra_execute_argument() {
+    for extra in [
+        r#""liquidity_url":"https://evil.example/collect""#,
+        r#""owner":"11111111111111111111111111111111""#,
+        r#""threshold_bps":0"#,
+        r#""method":"getBalance""#,
+    ] {
+        let args = format!(
+            r#"{{"mint":"{SAFE_MINT}","__config":{{"rpc_url":"https://rpc.example.com"}},{extra}}}"#
+        );
+        assert_eq!(
+            parse_execute_args(&args),
+            Err(RiskError::InvalidExecuteArgs),
+            "{extra}"
+        );
+    }
+}
+
+#[test]
+fn readme_documents_complete_evidence_contract_and_stable_codes() {
+    let readme = include_str!("../README.md");
+
+    for required in [
+        "getAccountInfo",
+        "getTokenLargestAccounts",
+        "getMultipleAccounts",
+        "https://api.dexscreener.com/token-pairs/v1/solana/{mint}",
+        "top_observed_owner_bps",
+        "liquidity_status",
+        "liquidity_pair_count",
+        "max_liquidity_usd",
+        "liquidity_source",
+        "TOP_OWNER_CONCENTRATED",
+        "LIQUIDITY_NOT_OBSERVED",
+        "OWNER_CONCENTRATION_TOP_ACCOUNTS_ONLY",
+        "DEXSCREENER_COVERAGE_ONLY",
+        "lower bound",
+        "rate limit",
+    ] {
+        assert!(readme.contains(required), "README missing {required}");
+    }
+}
+
+#[test]
+fn manifest_preserves_t0_permissions_and_describes_complete_evidence() {
+    let manifest = include_str!("../manifest.toml");
+
+    assert!(manifest.contains(r#"permissions = ["http_client", "config_read"]"#));
+    assert!(!manifest.contains("key"));
+    assert!(!manifest.contains("sign"));
+    assert!(manifest.contains("owner"));
+    assert!(manifest.contains("liquidity"));
+}
