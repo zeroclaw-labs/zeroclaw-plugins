@@ -319,18 +319,48 @@ mod component {
             .map_err(|e| format!("Failed to parse swap: {e}"))?;
         let swap_tx = extract_swap_transaction(&swap_parsed)?;
 
-        // Step 3: Extract message bytes → OutLayer sign
+        // Step 3: Extract message bytes
         let tx_bytes = crate::jupiter::decode_base64(&swap_tx)
             .map_err(|e| format!("Failed to decode swap tx: {e}"))?;
         let message_bytes = crate::jupiter::extract_message_from_tx(&tx_bytes)
             .map_err(|e| format!("Failed to extract message: {e}"))?;
-        if message_bytes.len() > 1232 {
+
+        // Step 4: Fetch fresh blockhash from Solana RPC and replace in message.
+        // Jupiter's blockhash may be stale by the time OutLayer signs + we broadcast.
+        let bh_rpc_body = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "getLatestBlockhash"
+        });
+        let bh_response = http_post_json(&cfg.solana_rpc, &bh_rpc_body)
+            .map_err(|e| format!("Failed to fetch blockhash: {e}"))?;
+        let bh_parsed: serde_json::Value = serde_json::from_str(&bh_response)
+            .map_err(|e| format!("Failed to parse blockhash: {e}"))?;
+        let bh_b58 = bh_parsed
+            .get("result")
+            .and_then(|r| r.get("value"))
+            .and_then(|v| v.get("blockhash"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        if bh_b58.is_empty() {
+            return Err("No blockhash in RPC response".to_string());
+        }
+        let bh_bytes = crate::jupiter::decode_base58(bh_b58)
+            .map_err(|e| format!("Failed to decode blockhash: {e}"))?;
+        let bh_array: [u8; 32] = bh_bytes
+            .try_into()
+            .map_err(|_| "blockhash not 32 bytes".to_string())?;
+        let fresh_message = crate::jupiter::replace_blockhash_in_message(&message_bytes, &bh_array)
+            .map_err(|e| format!("Failed to replace blockhash: {e}"))?;
+        if fresh_message.len() > 1232 {
             return Err(format!(
                 "Message ({} bytes) exceeds OutLayer 1232-byte limit. Use simpler route.",
-                message_bytes.len()
+                fresh_message.len()
             ));
         }
-        let message_b64 = crate::jupiter::encode_base64(&message_bytes);
+        let message_b64 = crate::jupiter::encode_base64(&fresh_message);
+
+        // Step 5: OutLayer custody sign
         let outlayer_url = format!("{}/wallet/v1/solana/sign-transaction", cfg.outlayer_api);
         let sign_body = build_outlayer_solana_sign_body(&message_b64);
         let outlayer_response =
@@ -340,11 +370,19 @@ mod component {
             .unwrap_or_else(|_| serde_json::json!({ "raw": outlayer_response }));
         let signature = out_parsed.get("signature").and_then(|s| s.as_str()).unwrap_or("?");
 
-        // Step 4: Assemble + broadcast
-        let signed_tx_bytes =
-            crate::jupiter::assemble_signed_tx(&tx_bytes, signature).map_err(|e| {
-                format!("Failed to assemble signed tx: {e}")
-            })?;
+        // Step 6: Assemble signed tx with fresh blockhash + signature
+        let mut signed_tx_bytes = crate::jupiter::assemble_signed_tx(&tx_bytes, signature)
+            .map_err(|e| format!("Failed to assemble signed tx: {e}"))?;
+        // Also replace blockhash in the full signed tx.
+        // The message starts at byte 66 in the signed tx (prefix + num_sigs + sig).
+        // We need the same offset within the message that replace_blockhash_in_message uses.
+        // Instead of duplicating the calculation, replace the message portion directly.
+        let msg_start = 66; // legacy tx: 1 prefix + 1 compact_u32 + 64 sig
+        if signed_tx_bytes.len() > msg_start + fresh_message.len() {
+            signed_tx_bytes[msg_start..msg_start + fresh_message.len()].copy_from_slice(&fresh_message);
+        }
+
+        // Step 7: Broadcast
         let signed_tx_b64 = crate::jupiter::encode_base64(&signed_tx_bytes);
         let broadcast_result = crate::jupiter::broadcast_tx(cfg, &signed_tx_b64);
         let wallet_id = out_parsed.get("wallet_id").and_then(|w| w.as_str()).unwrap_or("?");

@@ -436,7 +436,14 @@ pub fn decode_base64(s: &str) -> Result<Vec<u8>, String> {
     Ok(buf)
 }
 
-/// Encode bytes to standard base64.
+/// Decode base58 to bytes.
+pub fn decode_base58(s: &str) -> Result<Vec<u8>, String> {
+    bs58::decode(s)
+        .into_vec()
+        .map_err(|e| format!("base58 decode error: {e}"))
+}
+
+/// Encode bytes to base64.
 pub fn encode_base64(data: &[u8]) -> String {
     use base64::Engine;
     base64::engine::general_purpose::STANDARD.encode(data)
@@ -507,8 +514,61 @@ pub fn assemble_signed_tx(tx_bytes: &[u8], sig_base58: &str) -> Result<Vec<u8>, 
         ));
     }
 
-    // Replace bytes 2..66 (the 64-byte zero sig) with the real signature
+    // Replace bytes 2..66 (the 64-byte zero sig slot) with the real signature.
+    // Layout: [0x00 legacy prefix][compact_u32 num_sigs=0x01][64 bytes sig][message bytes]
     out[2..66].copy_from_slice(&sig_bytes);
+    Ok(out)
+}
+
+/// Replace blockhash in legacy Solana message bytes with a fresh one.
+///
+/// Legacy Message bincode layout:
+///   [0..2]  header (3 bytes: num_required_sigs, num_readonly_signed, num_readonly_unsigned)
+///   [2..]   compact_u32 num_account_keys
+///   [2+N..] 32 bytes per account key
+///   [2+N+32*num_keys..] 32 bytes recent_blockhash
+///
+/// The blockhash offset depends on compact_u32 encoding of num_keys.
+pub fn replace_blockhash_in_message(
+    message_bytes: &[u8],
+    new_blockhash: &[u8; 32],
+) -> Result<Vec<u8>, String> {
+    let mut out = message_bytes.to_vec();
+    if out.len() < 36 {
+        return Err("message too short to contain blockhash".to_string());
+    }
+
+    // Solana legacy Message bincode layout:
+    //   [0]      num_required_signatures (u8)
+    //   [1]      num_readonly_signed_accounts (u8)
+    //   [2]      num_readonly_unsigned_accounts (u8)
+    //   [3..]    compact_u32 num_account_keys
+    //   [3+N..]  32 bytes per account key
+    //   [3+N+32*num_keys..] 32 bytes recent_blockhash
+    //
+    // The compact_u32 encoding of num_keys starts at byte 3.
+    let (num_keys, num_keys_size) = if out[3] < 0x80 {
+        (out[3] as usize, 1)
+    } else if out.len() > 4 && (out[3] & 0x7f) < 0x80 {
+        (usize::from(out[3] & 0x7f) | (usize::from(out[4]) << 7), 2)
+    } else {
+        return Err("compact_u32 num_keys too large".to_string());
+    };
+
+    // keys_start = header(3) + compact_u32(num_keys_size)
+    let keys_start = 3 + num_keys_size;
+    // blockhash comes after all keys
+    let bh_offset = keys_start + num_keys * 32;
+    if out.len() < bh_offset + 32 {
+        return Err(format!(
+            "message too short for {} keys (need at least {} bytes, have {})",
+            num_keys,
+            bh_offset + 32,
+            out.len()
+        ));
+    }
+
+    out[bh_offset..bh_offset + 32].copy_from_slice(new_blockhash);
     Ok(out)
 }
 
@@ -756,6 +816,57 @@ mod tests {
         let out = shape_outlayer_sign_response(&raw);
         assert!(out.contains("450290fb"));
         assert!(out.contains("5Kt8abc123sig"));
+    }
+
+    // ── Blockhash replacement ──
+
+    #[test]
+    fn decode_base58_roundtrip() {
+        let original = vec![0x01, 0x02, 0x03, 0x04];
+        let encoded = bs58::encode(&original).into_string();
+        let decoded = decode_base58(&encoded).unwrap();
+        assert_eq!(decoded, original);
+    }
+
+    #[test]
+    fn replace_blockhash_small_keys() {
+        // Build a fake legacy message: 3-byte header + compact_u32(1) + 1 key + blockhash + some data
+        let mut msg = vec![0x01, 0x00, 0x00]; // header
+        msg.push(0x01); // compact_u32: 1 key
+        msg.extend_from_slice(&[0xAA; 32]); // key
+        let old_bh_pos = msg.len();
+        msg.extend_from_slice(&[0xBB; 32]); // old blockhash
+        msg.extend_from_slice(&[0xCC; 32]); // some ix data
+
+        let new_bh = [0xDD; 32];
+        let result = replace_blockhash_in_message(&msg, &new_bh).unwrap();
+        assert_eq!(&result[old_bh_pos..old_bh_pos + 32], &new_bh[..]);
+        // Other bytes unchanged
+        assert_eq!(&result[4..36], &[0xAA; 32]); // key unchanged
+    }
+
+    #[test]
+    fn replace_blockhash_many_keys() {
+        // compact_u32 for 22 keys = 0x16 (< 0x80, single byte)
+        let num_keys: u8 = 22;
+        let mut msg = vec![0x01, 0x00, 0x00]; // header
+        msg.push(num_keys);
+        for _ in 0..num_keys {
+            msg.extend_from_slice(&[0xAA; 32]);
+        }
+        let bh_offset = msg.len();
+        msg.extend_from_slice(&[0xBB; 32]); // old blockhash
+
+        let new_bh = [0xEE; 32];
+        let result = replace_blockhash_in_message(&msg, &new_bh).unwrap();
+        assert_eq!(&result[bh_offset..bh_offset + 32], &new_bh[..]);
+    }
+
+    #[test]
+    fn replace_blockhash_too_short() {
+        let msg = vec![0x01, 0x00];
+        let bh = [0u8; 32];
+        assert!(replace_blockhash_in_message(&msg, &bh).is_err());
     }
 
     // ── Helpers ──
