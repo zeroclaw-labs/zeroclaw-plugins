@@ -5,8 +5,8 @@ use token_risk_check::risk::{
     RiskReport, Slots, Verdict, OWNER_ACCOUNTS_REQUEST_ID,
 };
 use token_risk_check::{
-    bounded_response_body, parameters_schema, rpc_request_bodies, Deadline, HttpTimeouts,
-    ResponseBodyAccumulator, ShimError,
+    bounded_response_body, http_request_target, liquidity_get_request, parameters_schema,
+    rpc_request_bodies, Deadline, HttpMethod, HttpTimeouts, ResponseBodyAccumulator, ShimError,
 };
 
 const SAFE_MINT: &str = "So11111111111111111111111111111111111111112";
@@ -432,6 +432,36 @@ fn owner_request_binds_addresses_and_slot() {
     );
     assert_eq!(json["params"][1]["encoding"], "jsonParsed");
     assert_eq!(json["params"][1]["minContextSlot"], 250000000);
+}
+
+#[test]
+fn request_construction_binds_owner_post_and_fixed_liquidity_get() {
+    let owner_body = owner_accounts_request_body(include_str!("fixtures/dispersed-largest.json"))
+        .expect("owner request");
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&owner_body).unwrap()["id"],
+        OWNER_ACCOUNTS_REQUEST_ID
+    );
+
+    let owner_target = http_request_target(
+        HttpMethod::Post,
+        "https://rpc.example/v1?api-key=bounded-key",
+    )
+    .expect("owner target");
+    assert_eq!(owner_target.method, HttpMethod::Post);
+    assert_eq!(owner_target.authority, "rpc.example");
+    assert_eq!(owner_target.path_with_query, "/v1?api-key=bounded-key");
+
+    let liquidity_target = liquidity_get_request(SAFE_MINT).expect("liquidity target");
+    assert_eq!(liquidity_target.method, HttpMethod::Get);
+    assert_eq!(liquidity_target.scheme, "https");
+    assert_eq!(liquidity_target.authority, "api.dexscreener.com");
+    assert_eq!(
+        liquidity_target.path_with_query,
+        format!("/token-pairs/v1/solana/{SAFE_MINT}")
+    );
+    assert!(!liquidity_target.path_with_query.contains('?'));
+    assert!(liquidity_get_request(&format!("{SAFE_MINT}?host=evil.example")).is_err());
 }
 
 #[test]

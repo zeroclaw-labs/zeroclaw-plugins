@@ -3,10 +3,53 @@ pub mod risk;
 
 pub use risk::{owner_accounts_request_body, OWNER_ACCOUNTS_REQUEST_ID};
 
+use url::{Position, Url};
+
 use risk::{validate_mint, ACCOUNT_REQUEST_ID, LARGEST_ACCOUNTS_REQUEST_ID};
 
 const MAX_RESPONSE_BODY_BYTES: usize = 1024 * 1024;
 const MAX_RESPONSE_CHUNK_BYTES: usize = 64 * 1024;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HttpMethod {
+    Get,
+    Post,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HttpRequestTarget {
+    pub method: HttpMethod,
+    pub scheme: String,
+    pub authority: String,
+    pub path_with_query: String,
+}
+
+pub fn http_request_target(
+    method: HttpMethod,
+    endpoint: &str,
+) -> Result<HttpRequestTarget, ShimError> {
+    let url = Url::parse(endpoint).map_err(|_| ShimError::HttpTransport)?;
+    if url.scheme() != "https"
+        || url.host_str().is_none()
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.fragment().is_some()
+    {
+        return Err(ShimError::HttpTransport);
+    }
+
+    Ok(HttpRequestTarget {
+        method,
+        scheme: url.scheme().to_owned(),
+        authority: url[Position::BeforeHost..Position::AfterPort].to_owned(),
+        path_with_query: url[Position::BeforePath..Position::AfterQuery].to_owned(),
+    })
+}
+
+pub fn liquidity_get_request(mint: &str) -> Result<HttpRequestTarget, ShimError> {
+    let endpoint = liquidity::liquidity_url(mint).map_err(|_| ShimError::InvalidMint)?;
+    http_request_target(HttpMethod::Get, &endpoint)
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct HttpTimeouts {
@@ -165,12 +208,11 @@ mod component {
         Verdict,
     };
     use crate::{
-        parameters_schema, rpc_request_bodies, Deadline, HttpTimeouts, ResponseBodyAccumulator,
-        ShimError,
+        http_request_target, liquidity_get_request, parameters_schema, rpc_request_bodies,
+        Deadline, HttpMethod, HttpRequestTarget, HttpTimeouts, ResponseBodyAccumulator, ShimError,
     };
     use exports::zeroclaw::plugin::plugin_info::Guest as PluginInfo;
     use exports::zeroclaw::plugin::tool::{Guest as Tool, ToolResult};
-    use url::{Position, Url};
     use waki::bindings::wasi::clocks::monotonic_clock;
     use waki::bindings::wasi::http::{
         outgoing_handler,
@@ -242,13 +284,17 @@ mod component {
                     Ok(body) => body,
                     Err(error) => return Ok(unknown_result(error.code())),
                 };
+            let liquidity_body = match get_liquidity(&parsed.mint) {
+                Ok(body) => body,
+                Err(error) => return Ok(unknown_result(error.code())),
+            };
 
             match assess(
                 &parsed.mint,
                 &account_body,
                 &largest_body,
                 &owner_accounts_body,
-                "[]",
+                &liquidity_body,
             ) {
                 Ok(report) => {
                     let verdict = verdict_code(report.verdict);
@@ -270,54 +316,50 @@ mod component {
     }
 
     fn post_json(endpoint: &str, request: &str) -> Result<String, ShimError> {
-        let timeouts = HttpTimeouts::default();
-        let response = send_request(endpoint, request.as_bytes(), timeouts)?;
-        let status = response.status();
-        if !(200..300).contains(&status) {
-            return Err(ShimError::HttpStatus);
-        }
+        let target = http_request_target(HttpMethod::Post, endpoint)?;
+        send_request(&target, Some(request.as_bytes()))
+    }
 
-        let body = response.consume().map_err(|_| ShimError::BodyRead)?;
-        drop(response);
-        let stream = body.stream().map_err(|_| ShimError::BodyRead)?;
-        let mut accumulator = ResponseBodyAccumulator::new();
-        let read_deadline = Deadline::new(monotonic_clock::now(), timeouts.full_response_ns)?;
-        loop {
-            let idle_deadline = Deadline::new(monotonic_clock::now(), timeouts.between_bytes_ns)?;
-            wait_for_stream(&stream, read_deadline, idle_deadline)?;
-            match stream.read(accumulator.next_chunk_len()) {
-                Ok(chunk) if chunk.is_empty() => return Err(ShimError::BodyRead),
-                Ok(chunk) => accumulator.push_chunk(&chunk)?,
-                Err(StreamError::Closed) => break,
-                Err(error) => return Err(classify_stream_error(&error, ShimError::BodyRead)),
-            }
-        }
-        drop(stream);
-        drop(body);
-        accumulator.finish()
+    fn get_liquidity(mint: &str) -> Result<String, ShimError> {
+        let target = liquidity_get_request(mint)?;
+        send_request(&target, None)
     }
 
     fn send_request(
-        endpoint: &str,
-        request_body: &[u8],
-        timeouts: HttpTimeouts,
-    ) -> Result<IncomingResponse, ShimError> {
-        let url = Url::parse(endpoint).map_err(|_| ShimError::HttpTransport)?;
-        let headers =
-            Headers::from_list(&[("Content-Type".to_string(), b"application/json".to_vec())])
-                .map_err(|_| ShimError::HttpTransport)?;
+        target: &HttpRequestTarget,
+        request_body: Option<&[u8]>,
+    ) -> Result<String, ShimError> {
+        if !matches!(
+            (target.method, request_body),
+            (HttpMethod::Post, Some(_)) | (HttpMethod::Get, None)
+        ) {
+            return Err(ShimError::HttpTransport);
+        }
+
+        let timeouts = HttpTimeouts::default();
+        let headers = match request_body {
+            Some(_) => {
+                Headers::from_list(&[("Content-Type".to_string(), b"application/json".to_vec())])
+                    .map_err(|_| ShimError::HttpTransport)?
+            }
+            None => Headers::from_list(&[]).map_err(|_| ShimError::HttpTransport)?,
+        };
         let request = OutgoingRequest::new(headers);
+        let method = match target.method {
+            HttpMethod::Get => Method::Get,
+            HttpMethod::Post => Method::Post,
+        };
         request
-            .set_method(&Method::Post)
+            .set_method(&method)
             .map_err(|_| ShimError::HttpTransport)?;
         request
             .set_scheme(Some(&Scheme::Https))
             .map_err(|_| ShimError::HttpTransport)?;
         request
-            .set_authority(Some(&url[Position::BeforeHost..Position::AfterPort]))
+            .set_authority(Some(&target.authority))
             .map_err(|_| ShimError::HttpTransport)?;
         request
-            .set_path_with_query(Some(&url[Position::BeforePath..Position::AfterQuery]))
+            .set_path_with_query(Some(&target.path_with_query))
             .map_err(|_| ShimError::HttpTransport)?;
 
         let outgoing_body = request.body().map_err(|_| ShimError::HttpTransport)?;
@@ -341,9 +383,34 @@ mod component {
         )?;
         let future =
             outgoing_handler::handle(request, Some(options)).map_err(classify_http_error)?;
-        write_request_body(&outgoing_body, request_body, response_deadline)?;
+        if let Some(request_body) = request_body {
+            write_request_body(&outgoing_body, request_body, response_deadline)?;
+        }
         OutgoingBody::finish(outgoing_body, None).map_err(|_| ShimError::HttpTransport)?;
-        await_response(&future, response_deadline)
+        let response = await_response(&future, response_deadline)?;
+        let status = response.status();
+        if !(200..300).contains(&status) {
+            return Err(ShimError::HttpStatus);
+        }
+
+        let body = response.consume().map_err(|_| ShimError::BodyRead)?;
+        drop(response);
+        let stream = body.stream().map_err(|_| ShimError::BodyRead)?;
+        let mut accumulator = ResponseBodyAccumulator::new();
+        let read_deadline = Deadline::new(monotonic_clock::now(), timeouts.full_response_ns)?;
+        loop {
+            let idle_deadline = Deadline::new(monotonic_clock::now(), timeouts.between_bytes_ns)?;
+            wait_for_stream(&stream, read_deadline, idle_deadline)?;
+            match stream.read(accumulator.next_chunk_len()) {
+                Ok(chunk) if chunk.is_empty() => return Err(ShimError::BodyRead),
+                Ok(chunk) => accumulator.push_chunk(&chunk)?,
+                Err(StreamError::Closed) => break,
+                Err(error) => return Err(classify_stream_error(&error, ShimError::BodyRead)),
+            }
+        }
+        drop(stream);
+        drop(body);
+        accumulator.finish()
     }
 
     fn write_request_body(
