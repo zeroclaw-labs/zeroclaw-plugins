@@ -1,0 +1,39 @@
+package zeroclaw:plugin@0.1.0;
+
+interface logging {
+    debug: func(msg: string);
+    info: func(msg: string);
+    warn: func(msg: string);
+    error: func(msg: string);
+}
+
+interface types {
+    type json-string = string;
+}
+
+interface plugin-info {
+    name: func() -> string;
+    version: func() -> string;
+    description: func() -> string;
+}
+
+interface tool {
+    use types.{json-string};
+
+    record tool-result {
+        success: bool,
+        output: string,
+        error: option<string>,
+    }
+
+    name: func() -> string;
+    description: func() -> string;
+    parameters-schema: func() -> json-string;
+    execute: func(args: json-string) -> result<tool-result, string>;
+}
+
+world tool-plugin {
+    import logging;
+    export plugin-info;
+    export tool;
+}

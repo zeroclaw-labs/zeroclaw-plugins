@@ -1,0 +1,7 @@
+name = "solana-token-safety"
+version = "0.1.0"
+description = "SPL token safety scanner: mint/freeze authority, holder concentration, safety score"
+author = "Rockey011"
+wasm_path = "solana_token_safety.wasm"
+capabilities = ["tool"]
+permissions = ["http_client"]
