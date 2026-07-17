@@ -2,6 +2,7 @@ use token_risk_check::risk::{
     assess, parse_execute_args, serialize_report, unknown_report, validate_mint, validate_rpc_url,
     Evidence, Reason, RiskError, RiskReport, Slots, Verdict,
 };
+use token_risk_check::{bounded_response_body, parameters_schema, rpc_request_bodies, ShimError};
 
 const SAFE_MINT: &str = "So11111111111111111111111111111111111111112";
 const TOKEN_2022_MINT: &str = "So11111111111111111111111111111111111111112";
@@ -31,6 +32,78 @@ fn validates_mint_and_rpc_endpoint() {
     ] {
         assert!(validate_rpc_url(unsafe_url).is_err(), "{unsafe_url}");
     }
+}
+
+#[test]
+fn execute_arguments_reject_policy_and_network_overrides() {
+    for args in [
+        r#"{"mint":"So11111111111111111111111111111111111111112","rpc_url":"https://evil.example"}"#,
+        r#"{"mint":"So11111111111111111111111111111111111111112","threshold":0}"#,
+        r#"{"mint":"So11111111111111111111111111111111111111112","method":"getBalance"}"#,
+    ] {
+        assert!(parse_execute_args(args).is_err(), "{args}");
+    }
+
+    assert!(parse_execute_args(
+        r#"{"mint":"So11111111111111111111111111111111111111112","__config":{"rpc_url":"https://rpc.example"}}"#
+    )
+    .is_ok());
+}
+
+#[test]
+fn rpc_request_bodies_use_only_validated_mint_and_fixed_methods() {
+    let mint = "So11111111111111111111111111111111111111112";
+    let [account, largest] = rpc_request_bodies(mint).unwrap();
+
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&account).unwrap(),
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "getAccountInfo",
+            "params": [mint, {"encoding": "jsonParsed"}],
+        })
+    );
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&largest).unwrap(),
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "getTokenLargestAccounts",
+            "params": [mint],
+        })
+    );
+    assert!(rpc_request_bodies("not-a-mint").is_err());
+}
+
+#[test]
+fn parameters_schema_exposes_only_required_mint() {
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&parameters_schema()).unwrap(),
+        serde_json::json!({
+            "type": "object",
+            "properties": {"mint": {"type": "string"}},
+            "required": ["mint"],
+            "additionalProperties": false,
+        })
+    );
+}
+
+#[test]
+fn bounded_response_body_rejects_non_2xx_and_oversized_data_before_parsing() {
+    assert_eq!(
+        bounded_response_body(503, b"ignored".to_vec()),
+        Err(ShimError::HttpStatus)
+    );
+    assert_eq!(
+        bounded_response_body(200, vec![b'x'; 1024 * 1024 + 1]),
+        Err(ShimError::ResponseTooLarge)
+    );
+    assert_eq!(
+        bounded_response_body(200, vec![0xff]),
+        Err(ShimError::ResponseNotUtf8)
+    );
+    assert_eq!(bounded_response_body(204, b"{}".to_vec()).unwrap(), "{}");
 }
 
 #[test]
