@@ -32,7 +32,7 @@ The plugin follows the repository's pure-core/thin-shim pattern.
 
 1. Validate the mint as a base58 public key before any network call.
 2. Read `rpc_url` from `__config`; reject missing, non-HTTPS, credential-bearing, or malformed URLs.
-3. Call `getAccountInfo` with `jsonParsed` and `getTokenLargestAccounts` using fixed request bodies and response-size expectations.
+3. Call `getAccountInfo` with `jsonParsed` and `getTokenLargestAccounts` using the validated mint, fixed distinct JSON-RPC IDs, fixed request shapes, and response-size expectations.
 4. Parse only documented fields into internal evidence types. Unknown Token-2022 extensions are preserved as warnings.
 5. Apply deterministic rules and produce a bounded JSON result containing verdict, reasons, evidence, limitations, and RPC slot.
 6. Log only the action outcome and verdict. Never log the configured endpoint, raw response, or user-supplied text.
@@ -51,6 +51,8 @@ The core returns `unknown` instead of green whenever required evidence is missin
 This is custody tier T0. It accepts no secret key, signature, transaction, arbitrary RPC method, or arbitrary URL. Prompt text cannot change the RPC endpoint, thresholds, or rule set. The tool never labels a token safe solely because parsing failed.
 
 HTTP status errors, JSON-RPC errors, oversized or malformed responses, slot mismatches, and unsupported account structures return a structured unsuccessful result. Network retries are omitted in the first release to keep invocation latency and duplicate traffic predictable.
+
+The configured RPC endpoint is the trust boundary for chain data. Standard responses do not echo the queried mint, so the component binds each response to its exact request through the same HTTP invocation and distinct fixed JSON-RPC IDs; the pure parser validates those IDs but does not claim independent mint identity proof.
 
 ## Testing
 

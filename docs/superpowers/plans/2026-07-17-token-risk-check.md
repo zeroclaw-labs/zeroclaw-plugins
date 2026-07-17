@@ -12,6 +12,7 @@
 
 - Plugin name is `token-risk-check`; custody tier is T0 and it never accepts keys, signatures, transactions, arbitrary methods, or arbitrary endpoints.
 - `rpc_url` comes only from the plugin's jailed `__config` section and must be an HTTPS URL without userinfo, query, or fragment.
+- The configured RPC is the chain-data trust boundary; the shim binds exact mint requests to responses with distinct fixed JSON-RPC IDs, and the core rejects missing or mismatched IDs.
 - Supported token program owners are the legacy SPL Token program and Token-2022 program IDs.
 - Required account and largest-account evidence that is missing, malformed, contradictory, or unsupported produces `unknown`, never `green`.
 - Tests use fixtures and no live network; the final component must pass `cargo build --target wasm32-wasip2 --release`.
@@ -120,7 +121,7 @@ Expected: compilation fails because report types and assessment logic are missin
 
 - [ ] **Step 3: Implement parsed response decoding and green report**
 
-Deserialize only `jsonrpc`, `result.context.slot`, `result.value.owner`, `result.value.data.parsed.info`, and largest-account `amount` fields. Use integer string arithmetic through `u128`; compute basis points as `largest * 10_000 / supply`. Reject JSON-RPC errors, null accounts, zero supply, inconsistent mint addresses, and unsupported owners as `RiskError` mapped to `unknown` by the shim.
+Deserialize only `jsonrpc`, `id`, `result.context.slot`, `result.value.owner`, `result.value.data.parsed.info`, and largest-account `amount` fields. Use distinct fixed IDs for account and largest-account responses, integer string arithmetic through `u128`, and compute basis points as `largest * 10_000 / supply`. Reject any present JSON-RPC `error` field, missing or mismatched IDs, null accounts, zero supply, malformed authority public keys, contradictory zero largest-account evidence, and unsupported owners as `RiskError` mapped to `unknown` by the shim.
 
 - [ ] **Step 4: Run all core tests and verify GREEN**
 
@@ -263,7 +264,7 @@ Expected: compilation fails because strict argument parsing is not implemented.
 
 - [ ] **Step 3: Implement the thin component shim**
 
-Generate the `tool-plugin` WIT world under `#[cfg(target_family = "wasm")]`. Use `waki` only in the WASM target, post fixed JSON bodies, require successful HTTP status, reject bodies above 1 MiB before JSON parsing, and call the pure core. Emit only verdict and stable outcome codes through `log-record`; never log mint, endpoint, response, or arguments.
+Generate the `tool-plugin` WIT world under `#[cfg(target_family = "wasm")]`. Use `waki` only in the WASM target, post fixed JSON bodies containing the validated mint and the core's distinct request IDs, require successful HTTP status, reject bodies above 1 MiB before JSON parsing, and call the pure core. Emit only verdict and stable outcome codes through `log-record`; never log mint, endpoint, response, or arguments.
 
 - [ ] **Step 4: Verify host tests and WASM build**
 

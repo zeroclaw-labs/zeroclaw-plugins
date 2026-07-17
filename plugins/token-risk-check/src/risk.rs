@@ -7,6 +7,9 @@ use url::Url;
 const LEGACY_TOKEN_PROGRAM: &str = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
 const TOKEN_2022_PROGRAM: &str = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb";
 
+pub const ACCOUNT_REQUEST_ID: u64 = 1;
+pub const LARGEST_ACCOUNTS_REQUEST_ID: u64 = 2;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RiskError {
     InvalidMint,
@@ -18,6 +21,8 @@ pub enum RiskError {
     InvalidLargestAccount,
     InconsistentSupply,
     InconsistentSlots,
+    ResponseIdMismatch,
+    InvalidAuthority,
     UnsupportedTokenProgram,
 }
 
@@ -35,6 +40,8 @@ impl fmt::Display for RiskError {
             Self::InvalidLargestAccount => f.write_str("largest account amount is invalid"),
             Self::InconsistentSupply => f.write_str("largest account amounts exceed mint supply"),
             Self::InconsistentSlots => f.write_str("RPC evidence slots do not match"),
+            Self::ResponseIdMismatch => f.write_str("RPC response ID does not match its request"),
+            Self::InvalidAuthority => f.write_str("authority must be a 32-byte base58 public key"),
             Self::UnsupportedTokenProgram => {
                 f.write_str("mint owner is not a supported token program")
             }
@@ -111,8 +118,8 @@ pub struct RiskReport {
 pub fn assess(mint: &str, account_json: &str, largest_json: &str) -> Result<RiskReport, RiskError> {
     validate_mint(mint)?;
 
-    let account: AccountResult = decode_rpc(account_json)?;
-    let largest: LargestResult = decode_rpc(largest_json)?;
+    let account: AccountResult = decode_rpc(account_json, ACCOUNT_REQUEST_ID)?;
+    let largest: LargestResult = decode_rpc(largest_json, LARGEST_ACCOUNTS_REQUEST_ID)?;
     let account_value = account.value.ok_or(RiskError::NullAccount)?;
 
     if account.context.slot != largest.context.slot {
@@ -141,6 +148,9 @@ pub fn assess(mint: &str, account_json: &str, largest_json: &str) -> Result<Risk
             .checked_add(amount)
             .ok_or(RiskError::InconsistentSupply)
     })?;
+    if top_amount == 0 {
+        return Err(RiskError::InvalidLargestAccount);
+    }
     if top_amount > supply || total_largest > supply {
         return Err(RiskError::InconsistentSupply);
     }
@@ -173,14 +183,17 @@ pub fn assess(mint: &str, account_json: &str, largest_json: &str) -> Result<Risk
     })
 }
 
-fn decode_rpc<T: DeserializeOwned>(body: &str) -> Result<T, RiskError> {
+fn decode_rpc<T: DeserializeOwned>(body: &str, expected_id: u64) -> Result<T, RiskError> {
     let response: RpcResponse<T> =
         serde_json::from_str(body).map_err(|_| RiskError::MalformedRpcResponse)?;
     if response.jsonrpc != "2.0" {
         return Err(RiskError::MalformedRpcResponse);
     }
-    if response.error.is_some() {
+    if response.error_present {
         return Err(RiskError::JsonRpcError);
+    }
+    if response.id != Some(expected_id) {
+        return Err(RiskError::ResponseIdMismatch);
     }
     response.result.ok_or(RiskError::MalformedRpcResponse)
 }
@@ -201,7 +214,10 @@ fn authority_is_revoked(authority: Authority) -> Result<bool, RiskError> {
     match authority {
         Authority::Missing => Err(RiskError::MalformedRpcResponse),
         Authority::Revoked => Ok(true),
-        Authority::Active => Ok(false),
+        Authority::Active(authority) => {
+            validate_mint(&authority).map_err(|_| RiskError::InvalidAuthority)?;
+            Ok(false)
+        }
     }
 }
 
@@ -209,8 +225,18 @@ fn authority_is_revoked(authority: Authority) -> Result<bool, RiskError> {
 struct RpcResponse<T> {
     jsonrpc: String,
     #[serde(default)]
-    error: Option<IgnoredAny>,
+    id: Option<u64>,
+    #[serde(default, rename = "error", deserialize_with = "error_is_present")]
+    error_present: bool,
     result: Option<T>,
+}
+
+fn error_is_present<'de, D>(deserializer: D) -> Result<bool, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    IgnoredAny::deserialize(deserializer)?;
+    Ok(true)
 }
 
 #[derive(Deserialize)]
@@ -266,7 +292,7 @@ enum Authority {
     #[default]
     Missing,
     Revoked,
-    Active,
+    Active(String),
 }
 
 impl<'de> Deserialize<'de> for Authority {
@@ -275,7 +301,7 @@ impl<'de> Deserialize<'de> for Authority {
         D: serde::Deserializer<'de>,
     {
         Option::<String>::deserialize(deserializer).map(|authority| match authority {
-            Some(_) => Self::Active,
+            Some(authority) => Self::Active(authority),
             None => Self::Revoked,
         })
     }
