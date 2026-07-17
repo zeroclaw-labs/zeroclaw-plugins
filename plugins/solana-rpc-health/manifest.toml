@@ -1,0 +1,7 @@
+name = "solana-rpc-health"
+version = "0.1.0"
+description = "Check Solana RPC node health, version, current slot, and epoch info"
+author = "Rockey011"
+wasm_path = "solana_rpc_health.wasm"
+capabilities = ["tool"]
+permissions = ["http_client"]
