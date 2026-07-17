@@ -1,0 +1,81 @@
+{
+  "jsonrpc": "2.0",
+  "result": {
+    "context": {
+      "slot": 250000000
+    },
+    "value": [
+      {
+        "owner": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
+        "data": {
+          "parsed": {
+            "info": {
+              "mint": "So11111111111111111111111111111111111111112",
+              "owner": "11111111111111111111111111111111",
+              "state": "initialized",
+              "tokenAmount": { "amount": "190000" }
+            },
+            "type": "account"
+          }
+        }
+      },
+      {
+        "owner": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
+        "data": {
+          "parsed": {
+            "info": {
+              "mint": "So11111111111111111111111111111111111111112",
+              "owner": "So11111111111111111111111111111111111111112",
+              "state": "initialized",
+              "tokenAmount": { "amount": "180000" }
+            },
+            "type": "account"
+          }
+        }
+      },
+      {
+        "owner": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
+        "data": {
+          "parsed": {
+            "info": {
+              "mint": "So11111111111111111111111111111111111111112",
+              "owner": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
+              "state": "initialized",
+              "tokenAmount": { "amount": "170000" }
+            },
+            "type": "account"
+          }
+        }
+      },
+      {
+        "owner": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
+        "data": {
+          "parsed": {
+            "info": {
+              "mint": "So11111111111111111111111111111111111111112",
+              "owner": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
+              "state": "initialized",
+              "tokenAmount": { "amount": "160000" }
+            },
+            "type": "account"
+          }
+        }
+      },
+      {
+        "owner": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
+        "data": {
+          "parsed": {
+            "info": {
+              "mint": "So11111111111111111111111111111111111111112",
+              "owner": "Stake11111111111111111111111111111111111111",
+              "state": "initialized",
+              "tokenAmount": { "amount": "150000" }
+            },
+            "type": "account"
+          }
+        }
+      }
+    ]
+  },
+  "id": 3
+}

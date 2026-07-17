@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::fmt;
 
 use serde::de::{DeserializeOwned, IgnoredAny};
@@ -196,12 +196,14 @@ pub struct Evidence {
     pub mint_authority_revoked: bool,
     pub freeze_authority_revoked: bool,
     pub top_account_bps: Option<u16>,
+    pub top_observed_owner_bps: Option<u16>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Slots {
     pub account: u64,
     pub largest_accounts: u64,
+    pub owner_accounts: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -227,11 +229,13 @@ pub fn unknown_report(code: &str, message: &str) -> RiskReport {
             mint_authority_revoked: false,
             freeze_authority_revoked: false,
             top_account_bps: None,
+            top_observed_owner_bps: None,
         },
         limitations: vec!["EVIDENCE_UNAVAILABLE".to_owned()],
         slots: Slots {
             account: 0,
             largest_accounts: 0,
+            owner_accounts: 0,
         },
     }
 }
@@ -250,7 +254,7 @@ pub fn serialize_report(report: &RiskReport) -> String {
 fn serialize_minimal_unknown() -> String {
     let fallback = unknown_report("OUTPUT_TOO_LARGE", "Risk report exceeded output size limit");
     serde_json::to_string(&fallback).unwrap_or_else(|_| {
-        "{\"verdict\":\"unknown\",\"reasons\":[],\"evidence\":{\"token_program\":\"unknown\",\"supply\":\"unknown\",\"decimals\":0,\"mint_authority_revoked\":false,\"freeze_authority_revoked\":false,\"top_account_bps\":null},\"limitations\":[\"EVIDENCE_UNAVAILABLE\"],\"slots\":{\"account\":0,\"largest_accounts\":0}}".to_owned()
+        "{\"verdict\":\"unknown\",\"reasons\":[],\"evidence\":{\"token_program\":\"unknown\",\"supply\":\"unknown\",\"decimals\":0,\"mint_authority_revoked\":false,\"freeze_authority_revoked\":false,\"top_account_bps\":null,\"top_observed_owner_bps\":null},\"limitations\":[\"EVIDENCE_UNAVAILABLE\"],\"slots\":{\"account\":0,\"largest_accounts\":0,\"owner_accounts\":0}}".to_owned()
     })
 }
 
@@ -258,11 +262,18 @@ fn truncate_chars(value: &str, max_chars: usize) -> String {
     value.chars().take(max_chars).collect()
 }
 
-pub fn assess(mint: &str, account_json: &str, largest_json: &str) -> Result<RiskReport, RiskError> {
+pub fn assess(
+    mint: &str,
+    account_json: &str,
+    largest_json: &str,
+    owner_accounts_json: &str,
+) -> Result<RiskReport, RiskError> {
     validate_mint(mint)?;
 
     let account: AccountResult = decode_rpc(account_json, ACCOUNT_REQUEST_ID)?;
     let largest: LargestResult = decode_rpc(largest_json, LARGEST_ACCOUNTS_REQUEST_ID)?;
+    let owner_accounts: OwnerAccountsResult =
+        decode_rpc(owner_accounts_json, OWNER_ACCOUNTS_REQUEST_ID)?;
     let account_value = account.value.ok_or(RiskError::NullAccount)?;
 
     let slot_skew = largest
@@ -271,8 +282,15 @@ pub fn assess(mint: &str, account_json: &str, largest_json: &str) -> Result<Risk
         .checked_sub(account.context.slot)
         .filter(|skew| *skew <= MAX_FORWARD_SLOT_SKEW)
         .ok_or(RiskError::InconsistentSlots)?;
+    let owner_slot_skew = owner_accounts
+        .context
+        .slot
+        .checked_sub(largest.context.slot)
+        .filter(|skew| *skew <= MAX_FORWARD_SLOT_SKEW)
+        .ok_or(RiskError::InconsistentSlots)?;
 
-    let token_program = token_program_name(&account_value.owner)?;
+    let expected_token_program = account_value.owner;
+    let token_program = token_program_name(&expected_token_program)?;
     let parsed = account_value.data.parsed;
     if parsed.account_type != "mint" {
         return Err(RiskError::MalformedRpcResponse);
@@ -286,6 +304,7 @@ pub fn assess(mint: &str, account_json: &str, largest_json: &str) -> Result<Risk
         return Err(RiskError::ZeroSupply);
     }
 
+    validate_largest_account_addresses(&largest.value)?;
     let amounts = largest
         .value
         .iter()
@@ -296,9 +315,9 @@ pub fn assess(mint: &str, account_json: &str, largest_json: &str) -> Result<Risk
         .copied()
         .max()
         .ok_or(RiskError::InvalidLargestAccount)?;
-    let total_largest = amounts.into_iter().try_fold(0_u128, |total, amount| {
+    let total_largest = amounts.iter().try_fold(0_u128, |total, amount| {
         total
-            .checked_add(amount)
+            .checked_add(*amount)
             .ok_or(RiskError::InconsistentSupply)
     })?;
     if top_amount == 0 {
@@ -311,11 +330,22 @@ pub fn assess(mint: &str, account_json: &str, largest_json: &str) -> Result<Risk
         .checked_mul(10_000)
         .ok_or(RiskError::InvalidLargestAccount)?
         / supply;
+    let top_observed_owner_amount = aggregate_observed_owner_balances(
+        mint,
+        &expected_token_program,
+        &largest.value,
+        &amounts,
+        &owner_accounts.value,
+    )?;
+    let top_observed_owner_bps = top_observed_owner_amount
+        .checked_mul(10_000)
+        .ok_or(RiskError::InvalidLargestAccount)?
+        / supply;
     let mint_authority_revoked = authority_is_revoked(&info.mint_authority)?;
     let freeze_authority_revoked = authority_is_revoked(&info.freeze_authority)?;
 
     let mut rules = Vec::new();
-    if slot_skew > 0 {
+    if slot_skew > 0 || owner_slot_skew > 0 {
         rules.push(rule(
             RuleSeverity::Amber,
             "EVIDENCE_SLOT_SKEW",
@@ -343,6 +373,13 @@ pub fn assess(mint: &str, account_json: &str, largest_json: &str) -> Result<Risk
             "Largest token account holds at least 50% of supply",
         ));
     }
+    if top_observed_owner_bps >= CONCENTRATION_THRESHOLD_BPS {
+        rules.push(rule(
+            RuleSeverity::Amber,
+            "TOP_OWNER_CONCENTRATED",
+            "Top observed owner holds at least 50% of supply",
+        ));
+    }
     if token_program == "token-2022" {
         let ExtensionsEvidence::Present(extensions) = &info.extensions else {
             return Err(RiskError::MalformedRpcResponse);
@@ -354,8 +391,9 @@ pub fn assess(mint: &str, account_json: &str, largest_json: &str) -> Result<Risk
     let mut limitations = vec![
         "LP_STATUS_NOT_CHECKED".to_owned(),
         "TOP_ACCOUNTS_ARE_NOT_UNIQUE_HOLDERS".to_owned(),
+        "OWNER_CONCENTRATION_TOP_ACCOUNTS_ONLY".to_owned(),
     ];
-    if slot_skew > 0 {
+    if slot_skew > 0 || owner_slot_skew > 0 {
         limitations.push("EVIDENCE_SLOT_SKEW".to_owned());
     }
     if reasons_truncated {
@@ -374,13 +412,81 @@ pub fn assess(mint: &str, account_json: &str, largest_json: &str) -> Result<Risk
             top_account_bps: Some(
                 u16::try_from(top_account_bps).map_err(|_| RiskError::InvalidLargestAccount)?,
             ),
+            top_observed_owner_bps: Some(
+                u16::try_from(top_observed_owner_bps)
+                    .map_err(|_| RiskError::InvalidLargestAccount)?,
+            ),
         },
         limitations,
         slots: Slots {
             account: account.context.slot,
             largest_accounts: largest.context.slot,
+            owner_accounts: owner_accounts.context.slot,
         },
     })
+}
+
+fn validate_largest_account_addresses(accounts: &[LargestAccount]) -> Result<(), RiskError> {
+    if !(1..=20).contains(&accounts.len()) {
+        return Err(RiskError::InvalidLargestAccount);
+    }
+
+    let mut seen = HashSet::with_capacity(accounts.len());
+    for account in accounts {
+        validate_mint(&account.address).map_err(|_| RiskError::InvalidLargestAccount)?;
+        if !seen.insert(&account.address) {
+            return Err(RiskError::InvalidLargestAccount);
+        }
+    }
+    Ok(())
+}
+
+fn aggregate_observed_owner_balances(
+    mint: &str,
+    expected_token_program: &str,
+    largest_accounts: &[LargestAccount],
+    largest_amounts: &[u128],
+    owner_accounts: &[Option<TokenAccountValue>],
+) -> Result<u128, RiskError> {
+    if owner_accounts.len() != largest_accounts.len()
+        || largest_amounts.len() != largest_accounts.len()
+    {
+        return Err(RiskError::MalformedRpcResponse);
+    }
+
+    let mut balances = BTreeMap::<String, u128>::new();
+    for ((expected_amount, _), owner_account) in largest_amounts
+        .iter()
+        .zip(largest_accounts)
+        .zip(owner_accounts)
+    {
+        let owner_account = owner_account
+            .as_ref()
+            .ok_or(RiskError::MalformedRpcResponse)?;
+        if owner_account.owner != expected_token_program {
+            return Err(RiskError::MalformedRpcResponse);
+        }
+        let parsed = &owner_account.data.parsed;
+        if parsed.account_type != "account"
+            || parsed.info.mint != mint
+            || parsed.info.state != "initialized"
+            || parse_amount(&parsed.info.token_amount.amount)? != *expected_amount
+        {
+            return Err(RiskError::MalformedRpcResponse);
+        }
+        validate_mint(&parsed.info.owner).map_err(|_| RiskError::MalformedRpcResponse)?;
+
+        let balance = balances.entry(parsed.info.owner.clone()).or_default();
+        *balance = balance
+            .checked_add(*expected_amount)
+            .ok_or(RiskError::MalformedRpcResponse)?;
+    }
+
+    balances
+        .values()
+        .copied()
+        .max()
+        .ok_or(RiskError::MalformedRpcResponse)
 }
 
 fn decode_rpc<T: DeserializeOwned>(body: &str, expected_id: u64) -> Result<T, RiskError> {
@@ -555,6 +661,12 @@ struct LargestResult {
 }
 
 #[derive(Deserialize)]
+struct OwnerAccountsResult {
+    context: RpcContext,
+    value: Vec<Option<TokenAccountValue>>,
+}
+
+#[derive(Deserialize)]
 struct RpcContext {
     slot: u64,
 }
@@ -566,13 +678,31 @@ struct AccountValue {
 }
 
 #[derive(Deserialize)]
+struct TokenAccountValue {
+    owner: String,
+    data: TokenAccountData,
+}
+
+#[derive(Deserialize)]
 struct ParsedData {
     parsed: ParsedAccount,
 }
 
 #[derive(Deserialize)]
+struct TokenAccountData {
+    parsed: ParsedTokenAccount,
+}
+
+#[derive(Deserialize)]
 struct ParsedAccount {
     info: MintInfo,
+    #[serde(rename = "type")]
+    account_type: String,
+}
+
+#[derive(Deserialize)]
+struct ParsedTokenAccount {
+    info: TokenAccountInfo,
     #[serde(rename = "type")]
     account_type: String,
 }
@@ -589,6 +719,20 @@ struct MintInfo {
     extensions: ExtensionsEvidence,
     #[serde(default, rename = "freezeAuthority")]
     freeze_authority: Authority,
+}
+
+#[derive(Deserialize)]
+struct TokenAccountInfo {
+    mint: String,
+    owner: String,
+    state: String,
+    #[serde(rename = "tokenAmount")]
+    token_amount: TokenAmount,
+}
+
+#[derive(Deserialize)]
+struct TokenAmount {
+    amount: String,
 }
 
 #[derive(Deserialize)]

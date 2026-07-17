@@ -1,7 +1,7 @@
 use token_risk_check::risk::{
-    assess, owner_accounts_request_body, parse_execute_args, serialize_report, unknown_report,
-    validate_mint, validate_rpc_url, Evidence, Reason, RiskError, RiskReport, Slots, Verdict,
-    OWNER_ACCOUNTS_REQUEST_ID,
+    assess as assess_with_owner, owner_accounts_request_body, parse_execute_args, serialize_report,
+    unknown_report, validate_mint, validate_rpc_url, Evidence, Reason, RiskError, RiskReport,
+    Slots, Verdict, OWNER_ACCOUNTS_REQUEST_ID,
 };
 use token_risk_check::{
     bounded_response_body, parameters_schema, rpc_request_bodies, Deadline, HttpTimeouts,
@@ -18,6 +18,48 @@ fn reason_codes(report: &token_risk_check::risk::RiskReport) -> Vec<&str> {
         .iter()
         .map(|reason| reason.code.as_str())
         .collect()
+}
+
+fn assess(mint: &str, account: &str, largest: &str) -> Result<RiskReport, RiskError> {
+    let mut owners: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/owners-dispersed.json")).unwrap();
+    let owner_values = owners["result"]["value"].as_array_mut().unwrap();
+
+    if let Some(largest_values) = serde_json::from_str::<serde_json::Value>(largest)
+        .ok()
+        .and_then(|value| value["result"]["value"].as_array().cloned())
+    {
+        owner_values.truncate(largest_values.len());
+        let program = serde_json::from_str::<serde_json::Value>(account)
+            .ok()
+            .and_then(|value| {
+                value["result"]["value"]["owner"]
+                    .as_str()
+                    .map(str::to_owned)
+            });
+        let slot = serde_json::from_str::<serde_json::Value>(largest)
+            .ok()
+            .and_then(|value| value["result"]["context"]["slot"].as_u64());
+
+        for (owner, largest) in owner_values.iter_mut().zip(largest_values) {
+            if let Some(program) = &program {
+                owner["owner"] = serde_json::Value::String(program.clone());
+            }
+            if let Some(amount) = largest["amount"].as_str() {
+                owner["data"]["parsed"]["info"]["tokenAmount"]["amount"] =
+                    serde_json::Value::String(amount.to_owned());
+            }
+        }
+        if let Some(slot) = slot {
+            owners["result"]["context"]["slot"] = serde_json::json!(slot);
+        }
+    }
+
+    assess_with_owner(mint, account, largest, &owners.to_string())
+}
+
+fn owner_fixture() -> serde_json::Value {
+    serde_json::from_str(include_str!("fixtures/owners-dispersed.json")).unwrap()
 }
 
 #[test]
@@ -301,6 +343,174 @@ fn reports_green_for_complete_low_risk_legacy_evidence() {
 }
 
 #[test]
+fn shared_owner_at_half_supply_is_amber() {
+    let largest = include_str!("fixtures/dispersed-largest.json")
+        .replace("\"190000\"", "\"250000\"")
+        .replace("\"180000\"", "\"250000\"");
+    let owners = include_str!("fixtures/owners-shared.json")
+        .replace("\"190000\"", "\"250000\"")
+        .replace("\"180000\"", "\"250000\"");
+    let report = assess_with_owner(
+        SAFE_MINT,
+        include_str!("fixtures/legacy-safe-account.json"),
+        &largest,
+        &owners,
+    )
+    .unwrap();
+
+    assert_eq!(report.verdict, Verdict::Amber);
+    assert_eq!(report.evidence.top_account_bps, Some(2500));
+    assert_eq!(report.evidence.top_observed_owner_bps, Some(5000));
+    assert!(reason_codes(&report).contains(&"TOP_OWNER_CONCENTRATED"));
+    assert!(report
+        .limitations
+        .iter()
+        .any(|limitation| limitation == "OWNER_CONCENTRATION_TOP_ACCOUNTS_ONLY"));
+    assert_eq!(report.slots.owner_accounts, 250000000);
+}
+
+#[test]
+fn distinct_observed_owners_remain_below_concentration_threshold() {
+    let report = assess_with_owner(
+        SAFE_MINT,
+        include_str!("fixtures/legacy-safe-account.json"),
+        include_str!("fixtures/dispersed-largest.json"),
+        include_str!("fixtures/owners-dispersed.json"),
+    )
+    .unwrap();
+
+    assert_eq!(report.verdict, Verdict::Green);
+    assert_eq!(report.evidence.top_observed_owner_bps, Some(1900));
+    assert!(!reason_codes(&report).contains(&"TOP_OWNER_CONCENTRATED"));
+}
+
+#[test]
+fn rejects_malformed_owner_account_evidence() {
+    let mut null_entry = owner_fixture();
+    null_entry["result"]["value"][0] = serde_json::Value::Null;
+
+    let mut wrong_count = owner_fixture();
+    wrong_count["result"]["value"].as_array_mut().unwrap().pop();
+
+    let mut wrong_order = owner_fixture();
+    wrong_order["result"]["value"]
+        .as_array_mut()
+        .unwrap()
+        .swap(0, 1);
+
+    let mut wrong_mint = owner_fixture();
+    wrong_mint["result"]["value"][0]["data"]["parsed"]["info"]["mint"] =
+        serde_json::json!("11111111111111111111111111111111");
+
+    let mut wrong_program = owner_fixture();
+    wrong_program["result"]["value"][0]["owner"] =
+        serde_json::json!("11111111111111111111111111111111");
+
+    let mut wrong_amount = owner_fixture();
+    wrong_amount["result"]["value"][0]["data"]["parsed"]["info"]["tokenAmount"]["amount"] =
+        serde_json::json!("1");
+
+    let mut invalid_owner = owner_fixture();
+    invalid_owner["result"]["value"][0]["data"]["parsed"]["info"]["owner"] =
+        serde_json::json!("not-a-public-key");
+
+    let mut uninitialized = owner_fixture();
+    uninitialized["result"]["value"][0]["data"]["parsed"]["info"]["state"] =
+        serde_json::json!("frozen");
+
+    for (label, owners) in [
+        ("null entry", null_entry),
+        ("wrong count", wrong_count),
+        ("wrong order", wrong_order),
+        ("wrong mint", wrong_mint),
+        ("wrong token program", wrong_program),
+        ("wrong amount", wrong_amount),
+        ("invalid owner", invalid_owner),
+        ("non-initialized account", uninitialized),
+    ] {
+        assert_eq!(
+            assess_with_owner(
+                SAFE_MINT,
+                include_str!("fixtures/legacy-safe-account.json"),
+                include_str!("fixtures/dispersed-largest.json"),
+                &owners.to_string(),
+            ),
+            Err(RiskError::MalformedRpcResponse),
+            "{label}"
+        );
+    }
+}
+
+#[test]
+fn rejects_owner_evidence_with_invalid_slot_or_response_id() {
+    for slot in [249999999_u64, 250000033_u64] {
+        let mut owners = owner_fixture();
+        owners["result"]["context"]["slot"] = serde_json::json!(slot);
+        assert_eq!(
+            assess_with_owner(
+                SAFE_MINT,
+                include_str!("fixtures/legacy-safe-account.json"),
+                include_str!("fixtures/dispersed-largest.json"),
+                &owners.to_string(),
+            ),
+            Err(RiskError::InconsistentSlots),
+            "slot {slot}"
+        );
+    }
+
+    let mut owners = owner_fixture();
+    owners["id"] = serde_json::json!(2);
+    assert_eq!(
+        assess_with_owner(
+            SAFE_MINT,
+            include_str!("fixtures/legacy-safe-account.json"),
+            include_str!("fixtures/dispersed-largest.json"),
+            &owners.to_string(),
+        ),
+        Err(RiskError::ResponseIdMismatch)
+    );
+}
+
+#[test]
+fn bounded_owner_slot_skew_never_reports_green() {
+    let mut owners = owner_fixture();
+    owners["result"]["context"]["slot"] = serde_json::json!(250000002_u64);
+    let report = assess_with_owner(
+        SAFE_MINT,
+        include_str!("fixtures/legacy-safe-account.json"),
+        include_str!("fixtures/dispersed-largest.json"),
+        &owners.to_string(),
+    )
+    .unwrap();
+
+    assert_eq!(report.verdict, Verdict::Amber);
+    assert!(reason_codes(&report).contains(&"EVIDENCE_SLOT_SKEW"));
+    assert!(report
+        .limitations
+        .iter()
+        .any(|limitation| limitation == "EVIDENCE_SLOT_SKEW"));
+    assert_eq!(report.slots.owner_accounts, 250000002);
+}
+
+#[test]
+fn rejects_duplicate_largest_account_addresses_during_owner_binding() {
+    let mut largest: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/dispersed-largest.json")).unwrap();
+    let duplicate = largest["result"]["value"][0]["address"].clone();
+    largest["result"]["value"][1]["address"] = duplicate;
+
+    assert_eq!(
+        assess_with_owner(
+            SAFE_MINT,
+            include_str!("fixtures/legacy-safe-account.json"),
+            &largest.to_string(),
+            include_str!("fixtures/owners-dispersed.json"),
+        ),
+        Err(RiskError::InvalidLargestAccount)
+    );
+}
+
+#[test]
 fn rejects_non_mint_parsed_account_type() {
     let account = include_str!("fixtures/legacy-safe-account.json")
         .replace("\"type\": \"mint\"", "\"type\": \"account\"");
@@ -546,7 +756,10 @@ fn marks_concentration_boundary_amber() {
 
     assert_eq!(report.verdict, Verdict::Amber);
     assert_eq!(report.evidence.top_account_bps, Some(5_000));
-    assert_eq!(reason_codes(&report), vec!["TOP_ACCOUNT_CONCENTRATED"]);
+    assert_eq!(
+        reason_codes(&report),
+        vec!["TOP_ACCOUNT_CONCENTRATED", "TOP_OWNER_CONCENTRATED"]
+    );
 }
 
 #[test]
@@ -636,6 +849,7 @@ fn orders_red_reasons_before_amber_reasons_by_code() {
             "FREEZE_AUTHORITY_ACTIVE",
             "MINT_AUTHORITY_ACTIVE",
             "TOP_ACCOUNT_CONCENTRATED",
+            "TOP_OWNER_CONCENTRATED",
         ]
     );
 }
@@ -871,11 +1085,13 @@ fn serialization_is_valid_json_below_the_cap_or_minimal_unknown() {
             mint_authority_revoked: false,
             freeze_authority_revoked: false,
             top_account_bps: Some(10_000),
+            top_observed_owner_bps: Some(10_000),
         },
         limitations: vec!["L".repeat(1_000); 12],
         slots: Slots {
             account: u64::MAX,
             largest_accounts: u64::MAX,
+            owner_accounts: u64::MAX,
         },
     };
 
