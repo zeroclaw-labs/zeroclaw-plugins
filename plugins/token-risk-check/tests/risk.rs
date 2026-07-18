@@ -75,6 +75,16 @@ impl HttpTransport for MockRpc {
 
 /// Serialized mint data; supply 1_000_000 units of a 6-decimal token.
 fn mint_data(mint_authority: bool, freeze_authority: bool, tlv: &[(u16, Vec<u8>)]) -> Vec<u8> {
+    mint_data_dec(mint_authority, freeze_authority, 6, tlv)
+}
+
+/// Same, with a caller-chosen `decimals` byte (to exercise hostile values).
+fn mint_data_dec(
+    mint_authority: bool,
+    freeze_authority: bool,
+    decimals: u8,
+    tlv: &[(u16, Vec<u8>)],
+) -> Vec<u8> {
     let mut data = Vec::new();
     if mint_authority {
         data.extend_from_slice(&1u32.to_le_bytes());
@@ -83,7 +93,7 @@ fn mint_data(mint_authority: bool, freeze_authority: bool, tlv: &[(u16, Vec<u8>)
         data.extend_from_slice(&[0u8; 36]);
     }
     data.extend_from_slice(&1_000_000_000_000u64.to_le_bytes());
-    data.push(6);
+    data.push(decimals);
     data.push(1);
     if freeze_authority {
         data.extend_from_slice(&1u32.to_le_bytes());
@@ -250,6 +260,19 @@ fn report_never_floods_the_context_window() {
         report.text.len(),
         report.text
     );
+}
+
+#[test]
+fn hostile_decimals_do_not_crash_the_report() {
+    // A mint account can carry any decimals byte (0..=255); 10^decimals
+    // overflows u64 well before that. The tool whose job is inspecting
+    // untrusted mints must never trap — this is the exact release-wasm
+    // divide-by-zero a hostile RPC could otherwise trigger.
+    for decimals in [9u8, 19, 64, 200, 255] {
+        let rpc = MockRpc::new(&token_program(), mint_data_dec(true, false, decimals, &[]));
+        let report = assess(&rpc);
+        assert!(report.text.contains(&format!("{decimals} decimals")));
+    }
 }
 
 #[test]

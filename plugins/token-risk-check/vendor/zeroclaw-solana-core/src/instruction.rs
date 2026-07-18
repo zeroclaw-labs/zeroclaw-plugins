@@ -2,7 +2,10 @@
 //! programs agent plugins compose: system transfers, SPL Token / Token-2022
 //! `TransferChecked`, associated-token-account creation, memos, and durable
 //! nonce advancement. Instruction data layouts follow the on-chain programs
-//! byte for byte; each builder's encoding is pinned by a host test.
+//! byte for byte. The full compiled messages are pinned against the SDK in
+//! `tests/differential.rs`; each instruction's own data/account layout is
+//! asserted field-by-field in the consuming plugins' tests (e.g.
+//! `spl-transfer-build/tests/transfer.rs`).
 
 use crate::pubkey::{ata_program, memo_program, recent_blockhashes_sysvar, Pubkey, SYSTEM_PROGRAM};
 

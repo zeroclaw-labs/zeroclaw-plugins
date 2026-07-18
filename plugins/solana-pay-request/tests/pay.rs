@@ -187,6 +187,23 @@ fn injection_cannot_smuggle_params_through_amount() {
 }
 
 #[test]
+fn injection_cannot_flood_output_through_display_fields() {
+    // Display fields are the only part of the output that scales with caller
+    // input; an oversized label/message/memo must be refused, not embedded.
+    let mut a = args("5");
+    a.message = Some("A".repeat(5000));
+    let err = build_request(&a, &pinned_cfg()).unwrap_err();
+    assert!(err.contains("refused"), "must refuse, got: {err}");
+    assert!(err.contains("message"));
+
+    // A reasonable label still works, and the whole URL stays small.
+    let mut ok = args("5");
+    ok.label = Some("Table 4".to_string());
+    let req = build_request(&ok, &pinned_cfg()).unwrap();
+    assert!(req.url.len() < 512);
+}
+
+#[test]
 fn injection_cannot_smuggle_urls_through_display_fields() {
     // label/message/memo are percent-encoded, so a crafted value cannot
     // terminate the query string or inject new params.

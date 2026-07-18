@@ -194,10 +194,30 @@ fn percent_encode(s: &str) -> String {
 
 /// Build a Solana Pay transfer request under the configured policy.
 /// Every guardrail failure is an `Err` — the tool never "corrects" a request.
+/// Cap on each caller-supplied display field. Solana Pay wallets render these
+/// in tight UI; anything longer is a flood/injection attempt, not a real
+/// label. Bounding here keeps `execute` output size independent of caller
+/// input — the URL is the one part that scales with these fields.
+const MAX_DISPLAY_FIELD_CHARS: usize = 128;
+
 pub fn build_request(args: &PayArgs, cfg: &PayConfig) -> Result<PayRequest, String> {
     validate_decimal(&args.amount)?;
     if !args.amount.chars().any(|c| c.is_ascii_digit() && c != '0') {
         return Err("refused: amount must be greater than zero".to_string());
+    }
+    for (name, value) in [
+        ("label", args.label.as_deref()),
+        ("message", args.message.as_deref()),
+        ("memo", args.memo.as_deref()),
+        ("invoice_id", args.invoice_id.as_deref()),
+    ] {
+        if let Some(v) = value {
+            if v.chars().count() > MAX_DISPLAY_FIELD_CHARS {
+                return Err(format!(
+                    "refused: {name} exceeds {MAX_DISPLAY_FIELD_CHARS} characters"
+                ));
+            }
+        }
     }
 
     let symbol = args

@@ -54,7 +54,22 @@ pub fn format_base_units(amount: u64, decimals: u8) -> String {
     if decimals == 0 {
         return amount.to_string();
     }
-    let scale = 10u64.pow(decimals as u32);
+    // `decimals` can come straight from an untrusted mint account (a u8, so up
+    // to 255), where `10^decimals` overflows u64. Never panic on hostile data:
+    // any u64 amount is entirely fractional once the scale exceeds it, so
+    // render "0.<amount>" with the reported precision instead of trapping.
+    let scale = match 10u64.checked_pow(decimals as u32) {
+        Some(s) => s,
+        None => {
+            let frac = format!("{amount:0>width$}", width = decimals as usize);
+            let frac = frac.trim_end_matches('0');
+            return if frac.is_empty() {
+                "0".to_string()
+            } else {
+                format!("0.{frac}")
+            };
+        }
+    };
     let whole = amount / scale;
     let frac = amount % scale;
     if frac == 0 {
@@ -95,6 +110,21 @@ mod tests {
         assert_eq!(format_base_units(25_500_000, 6), "25.5");
         assert_eq!(format_base_units(1, 6), "0.000001");
         assert_eq!(format_base_units(7, 0), "7");
+    }
+
+    #[test]
+    fn format_never_panics_on_hostile_decimals() {
+        // `decimals` from an untrusted mint account can be anything up to 255.
+        // 10^decimals overflows u64 for decimals >= 20; formatting must not
+        // trap (the exact crash a hostile mint could trigger in
+        // token-risk-check). For those, any u64 is wholly fractional.
+        for decimals in [20u8, 40, 64, 128, 255] {
+            let out = format_base_units(u64::MAX, decimals);
+            assert!(out.starts_with("0."), "decimals={decimals} → {out}");
+        }
+        // decimals=19 does NOT overflow (10^19 < u64::MAX) — real division.
+        assert!(format_base_units(u64::MAX, 19).starts_with("1."));
+        assert_eq!(format_base_units(0, 255), "0");
     }
 
     #[test]
