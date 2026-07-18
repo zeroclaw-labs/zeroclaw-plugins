@@ -22,6 +22,9 @@ WARN: freeze authority active: any holder's account can be frozen
 Top holders: #1 holds 7.6%, top 5 hold 19.2% of supply.
 ```
 
+_(Illustrative: the verdict/format are exact, but supply and holder
+percentages are live-chain values that change every block.)_
+
 This plugin exists to make every *other* plugin safer: call it before
 quoting, holding, or building a transfer for an unfamiliar mint. It is the
 suggested first tool in any Solana SOP.
