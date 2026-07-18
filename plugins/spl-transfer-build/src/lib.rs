@@ -74,11 +74,15 @@ mod component {
                     "verification and simulation passed",
                 );
             } else {
+                let message = format!(
+                    "refusal category: {}",
+                    result.category.unwrap_or("internal_failure")
+                );
                 emit(
                     LogLevel::Warn,
                     PluginAction::Reject,
                     Some(PluginOutcome::Failure),
-                    "transfer build refused",
+                    &message,
                 );
             }
             Ok(ToolResult {

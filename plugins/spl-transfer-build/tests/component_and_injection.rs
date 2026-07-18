@@ -99,6 +99,7 @@ fn reproducible_combined_injection_transcript_is_a_deterministic_refusal() {
     assert!(!first.success);
     assert_eq!(first.output, "");
     assert_eq!(first.error.as_deref(), Some("invalid tool arguments"));
+    assert_eq!(first.category, Some("invalid_arguments"));
     assert!(transport.calls.borrow().is_empty());
     for _ in 0..16 {
         assert_eq!(

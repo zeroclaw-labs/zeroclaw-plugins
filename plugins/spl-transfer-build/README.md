@@ -47,6 +47,13 @@ There are no filesystem, shell, process, environment, channel, or secret-store
 permissions. `config_read` supplies only this plugin's jailed flat config map.
 `http_client` is used only for the three documented JSON-RPC methods.
 
+The transaction is intentionally load-bearing tool output. Operators should
+set ZeroClaw's host-level `observability.log_tool_io = "off"` if their selected
+runtime/log level would otherwise persist tool results. The component's own
+structured logs contain only bounded phase and refusal-category labels; they
+never contain arguments, memo text, RPC URLs, account bytes, transaction bytes,
+RPC bodies, or simulation logs.
+
 ## Configuration
 
 Create the plugin entry once, then set its flat string map through ZeroClaw's
@@ -208,7 +215,8 @@ The operator chooses the endpoint. The plugin embeds no keyed URL, makes one
 request per phase with no retry, accepts HTTP 200 only, follows no redirect,
 caps the body before JSON parsing, requires JSON-RPC 2.0 with the matching
 numeric ID, and rejects errors or malformed envelopes. It never logs or returns
-the URL, account bytes, transaction, response body, or logs.
+the URL, account bytes, response body, or simulation logs. The only transaction
+material it returns is the required verified `transaction_base64` field.
 
 RPC remains a trust boundary: a dishonest endpoint can lie about mint state or
 blockhash freshness. Mint ownership/layout checks, strict parsing, final-byte

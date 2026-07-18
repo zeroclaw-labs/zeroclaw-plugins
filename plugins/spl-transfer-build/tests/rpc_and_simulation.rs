@@ -96,6 +96,10 @@ fn malformed_rpc_envelopes_and_transport_failures_are_bounded_refusals() {
             execute_component_input(&host_inject(valid_args(), &valid_config()), &transport);
         assert!(!result.success);
         assert!(result.output.is_empty());
+        assert!(matches!(
+            result.category,
+            Some("rpc_failure" | "invalid_mint_state")
+        ));
         assert!(result
             .error
             .as_ref()

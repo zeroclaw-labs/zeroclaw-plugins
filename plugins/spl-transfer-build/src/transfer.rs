@@ -85,6 +85,9 @@ pub struct ToolResponse {
     pub success: bool,
     pub output: String,
     pub error: Option<String>,
+    /// Bounded refusal taxonomy for structured component logging. This is not
+    /// included in the WIT tool result returned to the model.
+    pub category: Option<&'static str>,
 }
 
 impl ToolResponse {
@@ -93,14 +96,17 @@ impl ToolResponse {
             success: true,
             output,
             error: None,
+            category: None,
         }
     }
 
-    fn refusal(error: impl fmt::Display) -> Self {
+    fn refusal(error: TransferError) -> Self {
+        let category = error.code();
         Self {
             success: false,
             output: String::new(),
             error: Some(single_line(&error.to_string(), MAX_ERROR_CHARS)),
+            category: Some(category),
         }
     }
 }
