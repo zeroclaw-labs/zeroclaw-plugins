@@ -238,4 +238,3 @@ of this plugin.
 - An upstream maintainer must approve the first fork-originated Actions run on
   draft PR 54. The same exact workflow is already green in the fork.
 - `spl-transfer-build` and every M3 concern remain unstarted.
-
