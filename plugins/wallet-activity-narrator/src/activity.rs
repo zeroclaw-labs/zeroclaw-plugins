@@ -244,8 +244,7 @@ fn classify(failed: bool, sol_change: f64, fee_sol: f64, tokens: &[TokenChange])
     let positive_token = tokens.iter().any(|change| change.amount > 0.0);
     let negative_token = tokens.iter().any(|change| change.amount < 0.0);
     let meaningful_sol = sol_change.abs() > fee_sol + 0.000_001;
-    if (positive_token && negative_token)
-        || (positive_token && sol_change < -(fee_sol + 0.000_001))
+    if (positive_token && (negative_token || sol_change < -(fee_sol + 0.000_001)))
         || (negative_token && sol_change > 0.000_001)
     {
         "swap".to_string()

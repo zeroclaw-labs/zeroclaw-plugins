@@ -27,8 +27,23 @@ amount, or signing request. It cannot move funds.
 ## Configuration
 
 ```toml
-[plugins.wallet-activity-narrator.config]
+[plugins]
+enabled = true
+auto_discover = true
+
+[[plugins.entries]]
+name = "wallet-activity-narrator"
+
+[plugins.entries.config]
 rpc_url = "https://api.mainnet-beta.solana.com"
+```
+
+Current ZeroClaw seeds the `[[plugins.entries]]` block when this directory is
+installed with `zeroclaw plugin install .`. Set a different endpoint afterward
+with:
+
+```powershell
+zeroclaw config set plugins.entries.wallet-activity-narrator.config.rpc_url https://api.mainnet-beta.solana.com
 ```
 
 `rpc_url` must use HTTPS. If omitted, the public Solana mainnet endpoint is used.
@@ -109,6 +124,21 @@ Get-Content .\get-transaction.json -Raw |
   cargo run --example narrate_stdin -- <wallet> <signature>
 ```
 
+## Install and run in ZeroClaw
+
+1. Build the release component and copy
+   `target\wasm32-wasip2\release\wallet_activity_narrator.wasm` to
+   `wallet_activity_narrator.wasm` beside `manifest.toml`.
+2. From the complete `wallet-activity-narrator` directory, run
+   `zeroclaw plugin install .`. This copies the plugin into ZeroClaw's
+   configured `plugins_dir` and seeds its `[[plugins.entries]]` record.
+3. Run `zeroclaw plugin list`, configure `rpc_url` if needed, and make sure the
+   plugin system is enabled.
+4. Start the configured ZeroClaw agent and channels with `zeroclaw daemon`, or
+   test from the CLI with `zeroclaw agent -a <alias>`.
+5. Ask the agent to explain recent activity for a Solana wallet address and
+   confirm that it invokes `wallet-activity-narrator` and returns Solscan links.
+
 ## Prompt-injection check
 
 Input:
@@ -145,6 +175,30 @@ tool schema exposes no transaction-building or signing operation.
 - Public RPC endpoints can rate-limit requests. Operators can configure their
   own HTTPS Solana RPC endpoint.
 - This is an activity explanation tool, not tax, security, or financial advice.
+
+## What fought me on wasm32-wasip2
+
+The main friction was keeping native tests independent from the WIT component
+and WASI HTTP stack. The working pattern is a plain Rust parsing and narration
+core, with `wit-bindgen` and `waki` isolated behind
+`#[cfg(target_family = "wasm")]`. That keeps `cargo test` fast on the host while
+the release component still uses ZeroClaw's real `wasi:http` capability.
+
+I also avoided the full Solana client stack inside the component. The plugin
+uses bounded JSON-RPC calls through `waki` and parses only the fields needed for
+the summary. A successful `wasm32-wasip2` build was not treated as sufficient
+proof on its own, so the release component was separately instantiated and
+executed through ZeroClaw's Wasmtime/Cranelift plugin host.
+
+## What I would build next
+
+The next iteration would add deterministic, evidence-backed labels for common
+Jupiter routes and Token-2022 activity, plus more golden fixtures for versioned
+transactions and loaded addresses. I would keep those additions T0 and
+read-only, preserve the five-transaction cap, and return program IDs whenever a
+protocol cannot be identified safely. A separate companion component could
+turn the same summaries into SOP-friendly wallet alerts without adding signing
+or transaction permissions to this tool.
 
 ## License
 
