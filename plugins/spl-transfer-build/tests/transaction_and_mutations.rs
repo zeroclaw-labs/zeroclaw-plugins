@@ -134,9 +134,19 @@ fn final_byte_mutations_are_all_rejected_instead_of_reusing_the_original_summary
             }),
         ),
         (
-            "appended instruction",
+            "appended duplicate instruction",
             Box::new(|tx| {
                 let extra = tx.message.instructions[2].clone();
+                tx.message.instructions.push(extra);
+            }),
+        ),
+        (
+            "appended unknown instruction",
+            Box::new(|tx| {
+                let mut extra = tx.message.instructions[2].clone();
+                extra.program_id_index = 0;
+                extra.account_indexes.clear();
+                extra.data = vec![0xde, 0xad];
                 tx.message.instructions.push(extra);
             }),
         ),
