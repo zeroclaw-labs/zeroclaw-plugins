@@ -112,8 +112,8 @@ mod component {
                     return Ok(fail(format!("invalid arguments: {e}")));
                 }
             };
-            // Bound the domain before it can be echoed into an error; a .sol
-            // label is at most 32 chars, and normalization enforces it too.
+            // Bound the domain before it can be echoed into an error;
+            // normalization enforces a tighter label bound afterward.
             if parsed.domain.len() > 64 {
                 emit(
                     PluginAction::Fail,

@@ -65,7 +65,9 @@ pub fn derive_domain_key(label: &str) -> Result<Pubkey, String> {
 /// The registry header: parent(32) · owner(32) · class(32), then record data.
 pub const NAME_HEADER_LEN: usize = 96;
 
-/// Extract the domain owner from a name registry account's data.
+/// Extract the domain owner from a name registry account's data. A registered
+/// domain always has a non-zero owner; an all-zero owner means the record is
+/// closed or malformed and must not be reported as a payable wallet.
 pub fn parse_registry_owner(data: &[u8]) -> Result<Pubkey, String> {
     if data.len() < NAME_HEADER_LEN {
         return Err(format!(
@@ -75,6 +77,9 @@ pub fn parse_registry_owner(data: &[u8]) -> Result<Pubkey, String> {
     }
     let mut owner = [0u8; 32];
     owner.copy_from_slice(&data[32..64]);
+    if owner == [0u8; 32] {
+        return Err("name registry has no owner (closed or malformed)".to_string());
+    }
     Ok(Pubkey(owner))
 }
 
@@ -120,6 +125,9 @@ mod tests {
         data[32..64].copy_from_slice(&[7u8; 32]);
         assert_eq!(parse_registry_owner(&data).unwrap().0, [7u8; 32]);
         assert!(parse_registry_owner(&[0u8; 10]).is_err());
+        // All-zero owner (closed/malformed record) is rejected, not reported
+        // as the system-program address.
+        assert!(parse_registry_owner(&vec![0u8; NAME_HEADER_LEN]).is_err());
     }
 
     #[test]

@@ -42,6 +42,7 @@ fn builds_usdc_request_with_pinned_recipient() {
     let mut a = args("25");
     a.message = Some("Table 4".to_string());
     a.memo = Some("invoice #412".to_string());
+    a.invoice_id = Some("412".to_string());
     let req = build_request(&a, &pinned_cfg()).unwrap();
     assert!(req.url.starts_with(&format!("solana:{MERCHANT}?amount=25")));
     assert!(req.url.contains(&format!("spl-token={USDC_MINT}")));
@@ -50,6 +51,12 @@ fn builds_usdc_request_with_pinned_recipient() {
     assert!(req.url.contains("label=Cafe%20ZeroClaw"));
     assert!(req.url.contains(&format!("reference={}", req.reference)));
     assert!(req.summary.contains("25 USDC"));
+    // Lock the exact reference shown in the README worked example, so the
+    // headline demo can never drift from what the code produces.
+    assert_eq!(
+        req.reference,
+        "FnzCexSWPmir2PtvXKYVQk4PqFxpJfXrJWpiZvcH3my8"
+    );
 }
 
 #[test]

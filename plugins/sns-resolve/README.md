@@ -59,9 +59,9 @@ funds:
 - **Derived-address collision** — a derived registry key that happens to exist
   but is *not* owned by the Name Service program is rejected, not reported as a
   resolution.
-- **Malformed input** — empty, over-long (>32-char label), subdomains
-  (`a.b.sol`), and non-`[a-z0-9-]` characters fail closed with short errors;
-  the domain arg is length-bounded before it can be echoed.
+- **Malformed input** — empty, absurdly long, subdomains (`a.b.sol`), and
+  non-`[a-z0-9-]` characters fail closed with short errors; the domain arg is
+  length-bounded before it can be echoed.
 - **Context flooding** — output is two addresses; the shim hard-clamps the
   `ToolResult` to 512 chars regardless.
 - **Prompt injection** — there is nothing to bypass: the only input is a

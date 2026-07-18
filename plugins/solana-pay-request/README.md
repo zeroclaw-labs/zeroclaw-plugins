@@ -9,9 +9,13 @@ other channel. The customer's own wallet signs; this tool never touches a key.
 > charge table 4 for 25 USDC, invoice 412
 
 Solana Pay request: 25 USDC to EPjF…Dt1v. Scan as QR or open with any
-Solana Pay wallet. Track payment by reference 8Yti…P2Ma.
-solana:EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v?amount=25&spl-token=EPjF…&reference=8Yti…&label=Cafe%20ZeroClaw&message=Table%204&memo=invoice%20%23412
+Solana Pay wallet. Track payment by reference FnzC…3my8.
+solana:EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v?amount=25&spl-token=EPjF…&reference=FnzC…3my8&label=Cafe%20ZeroClaw&message=Table%204&memo=invoice%20%23412
 ```
+
+_(The reference is `sha256(recipient, amount, mint, invoice_id)` in base58 —
+deterministic, so this exact value is reproduced by the host tests, not a
+placeholder.)_
 
 ## Custody tier: T1 (Build), zero secrets
 
