@@ -1,0 +1,9 @@
+name = "token-largest-accounts"
+version = "0.1.0"
+description = "List the largest public token accounts for an SPL mint."
+author = "Mateo Rojas"
+wasm_path = "token_largest_accounts.wasm"
+capabilities = ["tool"]
+# http_client: one read-only getTokenLargestAccounts request.
+# config_read: reads only rpc_url and commitment.
+permissions = ["http_client", "config_read"]
