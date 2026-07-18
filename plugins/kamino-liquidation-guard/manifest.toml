@@ -1,0 +1,9 @@
+name = "kamino-liquidation-guard"
+version = "0.1.0"
+description = "Fail-closed Kamino lending health and liquidation-risk monitor"
+author = "m00nxx"
+wasm_path = "kamino_liquidation_guard.wasm"
+capabilities = ["tool"]
+# http_client: operator-configured mainnet RPC POSTs plus fixed Kamino GETs.
+# config_read: operator-owned health thresholds and freshness policy.
+permissions = ["http_client", "config_read"]
