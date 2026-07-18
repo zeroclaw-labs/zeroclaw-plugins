@@ -28,4 +28,5 @@ pub mod message;
 pub mod nonce;
 pub mod pubkey;
 pub mod rpc;
+pub mod sns;
 pub mod token;

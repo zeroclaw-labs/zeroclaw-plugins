@@ -215,8 +215,11 @@ pub fn build_request(args: &PayArgs, cfg: &PayConfig) -> Result<PayRequest, Stri
         ("message", args.message.as_deref()),
         ("memo", args.memo.as_deref()),
         ("invoice_id", args.invoice_id.as_deref()),
-        // token is echoed in the allowlist-refusal error, so bound it too.
+        // token and recipient are echoed in refusal errors, so bound them too
+        // here in the pure core — the output is independent of caller input at
+        // this layer, not only at the wasm shim's final clamp.
         ("token", args.token.as_deref()),
+        ("recipient", args.recipient.as_deref()),
     ] {
         if let Some(v) = value {
             if v.chars().count() > MAX_DISPLAY_FIELD_CHARS {

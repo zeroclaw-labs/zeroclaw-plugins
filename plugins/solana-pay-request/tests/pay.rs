@@ -218,6 +218,18 @@ fn injection_cannot_flood_output_through_a_giant_amount() {
     assert!(build_request(&a, &pinned_cfg())
         .unwrap_err()
         .contains("exceeds"));
+
+    // A long recipient (echoed in the pinned-mismatch error) is bounded in
+    // the pure core itself, so the core error stays short — not only clamped
+    // by the shim.
+    let mut r = args("5");
+    r.recipient = Some("Z".repeat(5000));
+    let err = build_request(&r, &pinned_cfg()).unwrap_err();
+    assert!(
+        err.len() < 200,
+        "core error must stay short, got {} chars",
+        err.len()
+    );
 }
 
 #[test]

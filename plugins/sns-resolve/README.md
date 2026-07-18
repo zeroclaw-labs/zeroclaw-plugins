@@ -1,0 +1,90 @@
+# sns-resolve
+
+Resolve a Solana Name Service (`.sol`) domain to the wallet address that owns
+it — so an agent asked to "pay lucas.sol" derives and **verifies** the real
+address on-chain instead of hallucinating one. This is the safety primitive
+that makes the payment tools trustworthy with human-readable names.
+
+```
+> who is bonfida.sol?
+
+bonfida.sol resolves to <owner wallet from the registry account>
+(registry account Crf8hzfthWGbGbLTVCiqRqV5MVnbpHB1L9KQMd6gsinb)
+```
+
+The registry account above is the real, derived key for `bonfida.sol` (locked
+in a host test); the owner wallet is whatever that account currently reports
+on-chain, filled in live from the RPC read.
+
+## Custody tier: T0 (Read)
+
+One JSON-RPC read. No keys, no state, no writes. **Secrets held: at most an
+RPC API key inside `rpc_url`** — read from config, never hardcoded, never
+echoed into output or logs.
+
+## How it works
+
+Derivation follows `@bonfida/spl-name-service` exactly and is implemented in
+the shared core ([`crates/solana-core/src/sns.rs`](../../crates/solana-core/src/sns.rs)):
+
+1. `hashed = sha256("SPL Name Service" + label)`
+2. registry account = `find_program_address([hashed, class(32×0), sol_tld], NAME_PROGRAM)`
+3. fetch it; require it is owned by the SPL Name Service program (guards
+   against a derived-address collision with an unrelated account)
+4. the owner wallet is bytes `[32..64]` of the registry header
+
+The derivation is regression-locked against the real `bonfida.sol` registry
+key in a host test, so any drift from the on-chain algorithm fails CI.
+
+## Config
+
+```toml
+[plugins.entries.sns-resolve]
+# Optional. Defaults to the public mainnet endpoint; bring your own for rate
+# limits. SNS lives on mainnet, so a devnet endpoint will resolve nothing.
+rpc_url = "https://your-rpc.example.com"
+```
+
+### Tool arguments
+
+`domain` (required) — `"lucas.sol"` or bare `"lucas"`; case-insensitive.
+
+## Threat model
+
+Read-only, so the risk is *returning a wrong or oversized answer*, not moving
+funds:
+
+- **Address hallucination** — the whole point: the agent gets a
+  cryptographically-derived, on-chain-verified address, never a guessed one.
+- **Derived-address collision** — a derived registry key that happens to exist
+  but is *not* owned by the Name Service program is rejected, not reported as a
+  resolution.
+- **Malformed input** — empty, over-long (>32-char label), subdomains
+  (`a.b.sol`), and non-`[a-z0-9-]` characters fail closed with short errors;
+  the domain arg is length-bounded before it can be echoed.
+- **Context flooding** — output is two addresses; the shim hard-clamps the
+  `ToolResult` to 512 chars regardless.
+- **Prompt injection** — there is nothing to bypass: the only input is a
+  domain string, and the address is computed from on-chain bytes.
+
+### Composes with the payment tools
+
+Point your agent's SOP at `sns-resolve` → `token-risk-check` →
+`spl-transfer-build`: resolve the name, vet the token, build the transfer. The
+resolved address flows between tools as a plain base58 string; no tool ever
+trusts a name it did not derive.
+
+## Build & test
+
+```bash
+cargo test                                        # mock RPC, no network, no wasm
+rustup target add wasm32-wasip2
+cargo build --locked --target wasm32-wasip2 --release
+```
+
+Built on [`zeroclaw-solana-core`](../../crates/solana-core), including its
+`sns` derivation module.
+
+## License
+
+MIT

@@ -86,10 +86,16 @@ pub fn get_latest_blockhash<T: HttpTransport>(
     Ok((decode_hash(hash_str)?, height))
 }
 
-/// Decode a base58 32-byte hash (blockhash / durable nonce value).
+/// Decode a base58 32-byte hash (blockhash / durable nonce value). The input
+/// comes from an RPC response, so it is bounded before being echoed into any
+/// error (a base58 32-byte value is at most 44 chars).
 pub fn decode_hash(s: &str) -> Result<[u8; 32], String> {
+    let s = s.trim();
+    if s.len() > 44 {
+        return Err("invalid base58 hash: too long".to_string());
+    }
     let mut buf = [0u8; 32];
-    let len = bs58::decode(s.trim())
+    let len = bs58::decode(s)
         .onto(&mut buf)
         .map_err(|_| format!("invalid base58 hash: {s:?}"))?;
     if len != 32 {
