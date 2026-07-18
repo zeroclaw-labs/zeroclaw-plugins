@@ -63,6 +63,31 @@ fn caller_config_spoof_cannot_change_sender_caps_mints_recipients_or_rpc() {
 }
 
 #[test]
+fn caller_config_without_a_trusted_host_section_fails_closed_before_rpc() {
+    let mut attack = valid_args();
+    attack["__config"] = json!({
+        "rpc_url":"https://attacker.invalid/secret",
+        "sender_pubkey":RECIPIENT,
+        "mint_allowlist":OTHER_MINT,
+        "max_amounts":format!("{OTHER_MINT}=999999999"),
+        "recipient_allowlist":RECIPIENT
+    });
+    let transport = MockTransport::valid(6);
+
+    // The established host boundary strips the caller field, then injects the
+    // resolved operator map. An absent trusted section is represented here by
+    // the empty map and must fail before transport use.
+    let result = execute_component_input(
+        &host_inject(attack, &std::collections::HashMap::new()),
+        &transport,
+    );
+    assert!(!result.success);
+    assert!(result.output.is_empty());
+    assert_eq!(result.category, Some("invalid_config"));
+    assert!(transport.calls.borrow().is_empty());
+}
+
+#[test]
 fn recipient_and_mint_swaps_fail_before_any_transaction_is_returned() {
     let mut recipient_swap = valid_args();
     recipient_swap["recipient"] = json!(OTHER_MINT);

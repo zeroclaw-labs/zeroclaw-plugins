@@ -28,6 +28,36 @@ impl fmt::Display for TransportError {
 
 impl std::error::Error for TransportError {}
 
+/// Validate one HTTP response and collect its chunks without exceeding the
+/// caller-supplied aggregate byte limit. Exactly HTTP 200 is accepted, so a
+/// redirect is returned as an error rather than followed.
+pub fn collect_http_response<I>(
+    status: u16,
+    chunks: I,
+    maximum_bytes: usize,
+) -> Result<String, TransportError>
+where
+    I: IntoIterator<Item = Result<Vec<u8>, TransportError>>,
+{
+    if status != 200 {
+        return Err(TransportError::HttpStatus(status));
+    }
+
+    let mut body = Vec::new();
+    for chunk in chunks {
+        let chunk = chunk?;
+        let next_length = body
+            .len()
+            .checked_add(chunk.len())
+            .ok_or(TransportError::ResponseTooLarge)?;
+        if next_length > maximum_bytes {
+            return Err(TransportError::ResponseTooLarge);
+        }
+        body.extend_from_slice(&chunk);
+    }
+    String::from_utf8(body).map_err(|_| TransportError::InvalidUtf8)
+}
+
 pub trait RpcTransport {
     /// POST one JSON-RPC request. Implementations must not follow redirects and
     /// must enforce `maximum_bytes` before returning a UTF-8 response.
@@ -63,28 +93,25 @@ impl RpcTransport for WakiTransport {
 
         // Waki performs one outgoing request and exposes 3xx as responses; it
         // does not implement a redirect-following loop. Accept exactly 200.
-        if response.status_code() != 200 {
-            return Err(TransportError::HttpStatus(response.status_code()));
-        }
-
-        let mut body = Vec::new();
-        loop {
-            let remaining = maximum_bytes.saturating_sub(body.len());
-            let requested = u64::try_from(remaining.saturating_add(1)).unwrap_or(u64::MAX);
-            let Some(mut chunk) = response
-                .chunk(requested)
-                .map_err(|_| TransportError::Unavailable)?
-            else {
-                break;
-            };
-            if chunk.is_empty() {
-                continue;
+        let status = response.status_code();
+        let requested = u64::try_from(maximum_bytes.saturating_add(1)).unwrap_or(u64::MAX);
+        let mut finished = false;
+        let chunks = std::iter::from_fn(|| {
+            if finished {
+                return None;
             }
-            if chunk.len() > remaining {
-                return Err(TransportError::ResponseTooLarge);
+            match response.chunk(requested) {
+                Ok(Some(chunk)) => Some(Ok(chunk)),
+                Ok(None) => {
+                    finished = true;
+                    None
+                }
+                Err(_) => {
+                    finished = true;
+                    Some(Err(TransportError::Unavailable))
+                }
             }
-            body.append(&mut chunk);
-        }
-        String::from_utf8(body).map_err(|_| TransportError::InvalidUtf8)
+        });
+        collect_http_response(status, chunks, maximum_bytes)
     }
 }

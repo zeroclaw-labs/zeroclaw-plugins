@@ -818,6 +818,11 @@ fn approval_summary(
         summary.push_str(" · reference ");
         summary.push_str(&reference.to_string());
     }
+    if transfer.token_program == TokenProgram::Token2022 {
+        summary.push_str(
+            " · Token-2022: displayed amount is the transfer amount; net received may depend on mint extensions as reported by the configured RPC.",
+        );
+    }
     summary.push_str(&format!(
         " · recent blockhash valid through block height {last_valid_block_height} · UNSIGNED: external approval and signing required; not submitted"
     ));

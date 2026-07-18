@@ -1,5 +1,11 @@
 # solana-pay-request
 
+## Operator utility
+
+An operator can ask a ZeroClaw agent to create a Solana payment request. The
+plugin returns a wallet-compatible URL and the identical QR payload. It never
+signs or sends funds, and it requires no network access.
+
 `solana-pay-request` is a ZeroClaw tool component that creates deterministic
 [Solana Pay transfer-request](https://github.com/solana-foundation/solana-pay/blob/master/SPEC.md#specification-transfer-request)
 URLs. It returns the URL, the identical QR encoding payload, a concise summary,
@@ -34,6 +40,15 @@ and `reference`. `url` and `qr_payload` are byte-for-byte identical.
 
 The manifest grants only `config_read`. ZeroClaw strips any caller-supplied
 `__config` and injects this plugin's operator-owned flat string map.
+
+This stripping is a hard security dependency on ZeroClaw's current
+`inject_config` host boundary. The component's JSON envelope cannot by itself
+authenticate whether a same-named field came from the caller or the host.
+Defense-in-depth tests reproduce the host operation explicitly: remove caller
+`__config`, then insert only the resolved operator section. With no trusted
+section, an attacker-supplied alias or recipient policy is not honored. Direct
+public-key requests remain available by documented design when operator config
+is empty.
 
 | Key | Default | Meaning |
 |---|---|---|
@@ -100,7 +115,13 @@ Request: 25.01 USDC to 7xKX…gAsU · invoice '412'
 ```
 
 The returned URL uses the Solana Pay field order and encoding implemented by
-the official `@solana/pay` encoder. The URL itself is the QR payload.
+the official `@solana/pay` encoder. The URL itself is the QR payload. Golden
+vectors were executed using `@solana/pay` version `1.0.22` built from
+`solana-foundation/solana-pay` commit
+`9b0f8ec70c509c946c387633ae4f1e3115ea4958`; that version is present in the
+commit's package metadata but was not published to npm. The fixtures cover
+minimal native SOL, an SPL request without display text, and reserved/Unicode
+label, message, and memo values. JavaScript is not used at plugin runtime.
 
 ## Threat model
 
@@ -162,12 +183,16 @@ cargo build --locked --target wasm32-wasip2 --release
 The component artifact is
 `target/wasm32-wasip2/release/solana_pay_request.wasm`. Installation copies it
 next to `manifest.toml` under the manifest name `solana_pay_request.wasm`.
+The WASM artifact is rebuilt by CI and is not committed. A reported SHA-256
+identifies the tested build environment; Cargo artifact hashes can differ when
+absolute source paths differ. Semantic golden vectors and byte-level component
+tests are the primary reproducibility guarantees.
 
 ## Provisional shared-core dependency
 
 This draft consumes `nanosol` from
-`Fianko-codes/zeroclaw-solana` at the immutable M1 commit
-`961ad7b8a10e1a4df8a2090aa1092b943ed4a35e`. The Git revision replaces the
+`Fianko-codes/zeroclaw-solana` at the immutable M3 commit
+`989cd0d3bd25ce6a2d796f72c0dc6a4ae56d989f`. The Git revision replaces the
 standalone checkout's local path dependency so a clean upstream-layout clone
 is reproducible. It is intentionally provisional: maintainers can choose an
 accepted shared-crate location, a deliberately published crate, or a minimal

@@ -53,6 +53,87 @@ fn token_request_matches_official_url_encoding_and_golden_reference() {
     );
 }
 
+// These three vectors were executed against @solana/pay 1.0.22 built from
+// solana-foundation/solana-pay commit
+// 9b0f8ec70c509c946c387633ae4f1e3115ea4958. The version exists in that
+// commit's package metadata but was not published to the npm registry.
+
+#[test]
+fn official_encoder_vector_native_sol_with_minimal_optional_fields() {
+    let args = RequestArgs {
+        recipient: RECIPIENT.to_string(),
+        amount: "0.000000001".to_string(),
+        spl_token: None,
+        invoice_id: "native-minimal".to_string(),
+        label: None,
+        message: None,
+        memo: None,
+    };
+    let output = build_request(args, &config(&[])).expect("native request");
+    assert_eq!(
+        output.reference,
+        "DHCFLQhCbvgeTcEyT3W1dHsWUs5CBctiFVcGKeM8uvfF"
+    );
+    assert_eq!(
+        output.url,
+        format!(
+            "solana:{RECIPIENT}?amount=0.000000001&reference=DHCFLQhCbvgeTcEyT3W1dHsWUs5CBctiFVcGKeM8uvfF"
+        )
+    );
+}
+
+#[test]
+fn official_encoder_vector_spl_token_without_display_text() {
+    let args = RequestArgs {
+        recipient: RECIPIENT.to_string(),
+        amount: "1".to_string(),
+        spl_token: Some(USDC.to_string()),
+        invoice_id: "spl-no-display".to_string(),
+        label: None,
+        message: None,
+        memo: None,
+    };
+    let output = build_request(args, &config(&[])).expect("SPL request");
+    assert_eq!(
+        output.reference,
+        "3j5zDAAzj2JyFd5acUoebBzUPhQfVoFLf4pcDyYJcJZ6"
+    );
+    assert_eq!(
+        output.url,
+        format!(
+            "solana:{RECIPIENT}?amount=1&spl-token={USDC}&reference=3j5zDAAzj2JyFd5acUoebBzUPhQfVoFLf4pcDyYJcJZ6"
+        )
+    );
+}
+
+#[test]
+fn official_encoder_vector_reserved_and_unicode_display_text() {
+    let args = RequestArgs {
+        recipient: RECIPIENT.to_string(),
+        amount: "2.5".to_string(),
+        spl_token: Some(USDC.to_string()),
+        invoice_id: "unicode-reserved".to_string(),
+        label: Some("零售 & Café/東京?".to_string()),
+        message: Some("Lunch + tea = 5€ #42".to_string()),
+        memo: Some("订单/№42 & paid?".to_string()),
+    };
+    let output = build_request(args, &config(&[])).expect("Unicode request");
+    assert_eq!(
+        output.reference,
+        "321DJEUiLJ2sYEqqdimnbzYvMFxgQ9sheyTtPdv5oQs1"
+    );
+    assert_eq!(
+        output.url,
+        format!(
+            "solana:{RECIPIENT}?amount=2.5&spl-token={USDC}\
+             &reference=321DJEUiLJ2sYEqqdimnbzYvMFxgQ9sheyTtPdv5oQs1\
+             &label=%E9%9B%B6%E5%94%AE+%26+Caf%C3%A9%2F%E6%9D%B1%E4%BA%AC%3F\
+             &message=Lunch+%2B+tea+%3D+5%E2%82%AC+%2342\
+             &memo=%E8%AE%A2%E5%8D%95%2F%E2%84%9642+%26+paid%3F"
+        )
+    );
+}
+
 #[test]
 fn golden_reference_has_independent_sha256_fixture() {
     let recipient = Pubkey::from_str(RECIPIENT).expect("recipient fixture");

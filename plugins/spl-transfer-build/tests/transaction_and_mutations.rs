@@ -44,6 +44,23 @@ fn mutated_transaction(bytes: &[u8], mutate: impl FnOnce(&mut Transaction)) -> O
     transaction.serialize().ok()
 }
 
+fn remap_index(index: &mut u8, first: u8, second: u8) {
+    if *index == first {
+        *index = second;
+    } else if *index == second {
+        *index = first;
+    }
+}
+
+fn remap_all_instruction_indexes(transaction: &mut Transaction, first: u8, second: u8) {
+    for instruction in &mut transaction.message.instructions {
+        remap_index(&mut instruction.program_id_index, first, second);
+        for index in &mut instruction.account_indexes {
+            remap_index(index, first, second);
+        }
+    }
+}
+
 #[test]
 fn supported_transaction_has_exact_v0_unsigned_static_shape() {
     let policy = policy();
@@ -188,6 +205,137 @@ fn final_byte_mutations_are_all_rejected_instead_of_reusing_the_original_summary
     let mut trailing = bytes;
     trailing.push(0);
     assert!(verify_final_bytes(&trailing, &policy).is_err());
+}
+
+#[test]
+fn audit_mutation_unreferenced_extra_static_key_is_rejected() {
+    let policy = policy();
+    let bytes = build_unsigned_bytes(&policy).expect("transaction");
+    let mutated = mutated_transaction(&bytes, |transaction| {
+        transaction
+            .message
+            .account_keys
+            .push(Pubkey::new([201; 32]));
+        transaction.message.header.num_readonly_unsigned_accounts += 1;
+    })
+    .expect("serializable unused-key mutation");
+    assert!(verify_final_bytes(&mutated, &policy).is_err());
+}
+
+#[test]
+fn audit_mutation_six_account_transfer_checked_is_rejected() {
+    let policy = policy();
+    let bytes = build_unsigned_bytes(&policy).expect("transaction");
+    let mutated = mutated_transaction(&bytes, |transaction| {
+        let extra_index =
+            u8::try_from(transaction.message.account_keys.len()).expect("fixture index");
+        transaction
+            .message
+            .account_keys
+            .push(Pubkey::new([202; 32]));
+        transaction.message.header.num_readonly_unsigned_accounts += 1;
+        transaction.message.instructions[1]
+            .account_indexes
+            .push(extra_index);
+    })
+    .expect("serializable six-account mutation");
+    assert_eq!(
+        Transaction::deserialize(&mutated)
+            .expect("wire-decodable mutation")
+            .message
+            .instructions[1]
+            .account_indexes
+            .len(),
+        6
+    );
+    assert!(verify_final_bytes(&mutated, &policy).is_err());
+}
+
+#[test]
+fn audit_mutation_reference_direction_mismatches_are_rejected() {
+    let with_reference_policy = policy();
+    let bytes_with_reference =
+        build_unsigned_bytes(&with_reference_policy).expect("referenced transaction");
+    let mut expects_none = with_reference_policy.clone();
+    expects_none.reference = None;
+    assert!(verify_final_bytes(&bytes_with_reference, &expects_none).is_err());
+
+    let mut without_reference_policy = policy();
+    without_reference_policy.reference = None;
+    let bytes_without_reference =
+        build_unsigned_bytes(&without_reference_policy).expect("unreferenced transaction");
+    assert!(verify_final_bytes(&bytes_without_reference, &with_reference_policy).is_err());
+}
+
+#[test]
+fn audit_mutation_noncanonical_static_key_order_with_remapped_indexes_is_rejected() {
+    let policy = policy();
+    let bytes = build_unsigned_bytes(&policy).expect("transaction");
+    let mutated = mutated_transaction(&bytes, |transaction| {
+        let key_count = transaction.message.account_keys.len();
+        let readonly_count = usize::from(transaction.message.header.num_readonly_unsigned_accounts);
+        assert!(
+            readonly_count >= 2,
+            "fixture has two readonly unsigned keys"
+        );
+        let first = key_count - readonly_count;
+        let second = first + 1;
+        transaction.message.account_keys.swap(first, second);
+        remap_all_instruction_indexes(
+            transaction,
+            u8::try_from(first).expect("first fixture index"),
+            u8::try_from(second).expect("second fixture index"),
+        );
+    })
+    .expect("serializable canonical-order mutation");
+
+    let decoded = Transaction::deserialize(&mutated).expect("wire-decodable mutation");
+    assert_eq!(
+        decode_transfer_checked(&decoded.message, 1)
+            .expect("semantically decodable transfer")
+            .amount,
+        policy.raw_amount
+    );
+    assert!(verify_final_bytes(&mutated, &policy).is_err());
+}
+
+#[test]
+fn audit_mutation_separate_readonly_signer_authority_is_rejected() {
+    let policy = policy();
+    let bytes = build_unsigned_bytes(&policy).expect("transaction");
+    let separate_authority = Pubkey::new([203; 32]);
+    let mutated = mutated_transaction(&bytes, |transaction| {
+        transaction
+            .message
+            .account_keys
+            .insert(1, separate_authority);
+        transaction.message.header.num_required_signatures = 2;
+        transaction.message.header.num_readonly_signed_accounts = 1;
+        transaction.signatures.push([0; 64]);
+        for instruction in &mut transaction.message.instructions {
+            if instruction.program_id_index >= 1 {
+                instruction.program_id_index += 1;
+            }
+            for index in &mut instruction.account_indexes {
+                if *index >= 1 {
+                    *index += 1;
+                }
+            }
+        }
+        transaction.message.instructions[1].account_indexes[3] = 1;
+    })
+    .expect("serializable signer mutation");
+
+    let decoded = Transaction::deserialize(&mutated).expect("wire-decodable mutation");
+    assert_eq!(decoded.message.header.num_required_signatures, 2);
+    assert_eq!(decoded.message.header.num_readonly_signed_accounts, 1);
+    assert_eq!(
+        decode_transfer_checked(&decoded.message, 1)
+            .expect("semantically decodable transfer")
+            .authority,
+        separate_authority
+    );
+    assert!(verify_final_bytes(&mutated, &policy).is_err());
 }
 
 #[test]

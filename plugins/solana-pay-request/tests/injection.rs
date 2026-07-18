@@ -59,6 +59,28 @@ fn caller_supplied_config_cannot_swap_the_operator_allowlist() {
 }
 
 #[test]
+fn caller_config_without_a_trusted_host_section_cannot_create_an_alias_request() {
+    let input = json!({
+        "recipient": ATTACKER,
+        "amount": "999999999",
+        "spl_token": "EVIL",
+        "invoice_id": "host-contract",
+        "__config": {
+            "allowed_recipients": ATTACKER,
+            "mint_aliases": format!("EVIL={USDC}"),
+            "mint_decimals": "EVIL=6"
+        }
+    });
+
+    // With no resolved operator section, the host still removes the caller's
+    // reserved field before invoking the component core.
+    let result = execute_component_input(&host_inject(input, &HashMap::new()));
+    assert!(!result.success);
+    assert!(result.output.is_empty());
+    assert_eq!(result.error.as_deref(), Some("unknown mint alias 'EVIL'"));
+}
+
+#[test]
 fn recipient_swap_and_unknown_alias_are_refused() {
     let mut swapped = legitimate_args();
     swapped["recipient"] = json!(ATTACKER);

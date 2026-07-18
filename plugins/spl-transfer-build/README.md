@@ -1,5 +1,12 @@
 # `spl-transfer-build`
 
+## Operator utility
+
+An operator can ask a ZeroClaw agent to prepare a guarded token transfer.
+Allowlists and per-mint limits are enforced in Rust, and the plugin returns an
+unsigned transaction whose approval summary is derived from the final bytes.
+A human or external wallet must approve, sign, and submit it.
+
 `spl-transfer-build` exposes the ZeroClaw tool `spl_transfer_build`. It reads a
 verified mint account and a recent blockhash from an operator-selected Solana
 RPC endpoint, builds one unsigned SPL-token transfer, decodes and verifies the
@@ -101,6 +108,14 @@ cannot supply these values in tool arguments. ZeroClaw removes a caller's
 reserved `__config` before injecting the operator section, and the public JSON
 Schema does not expose `__config`.
 
+That removal is a hard security dependency on ZeroClaw's current
+`inject_config` boundary. The component JSON format cannot independently
+authenticate whether a same-named field came from a caller or the host. Tests
+reproduce the host operation explicitly and prove that, when no trusted
+operator section is available, required config validation fails before any RPC
+call. This is a documented host contract, not a claim that the component can
+distinguish the two sources on its own.
+
 This plugin is stateless. A per-call maximum is enforced exactly; it makes no
 per-day cap claim and cannot enforce one without trusted external state.
 
@@ -194,8 +209,18 @@ Permanent Delegate, Default Account State, NonTransferable, confidential
 transfer/fee/mint-burn, and Pausable—and every unknown extension fails closed.
 Malformed, duplicate, conflicting, or account-only TLV entries also fail.
 
-This narrow policy avoids claiming that the requested amount is the amount the
-recipient receives when extension semantics could differ.
+When the decoded and verified final transaction uses the Token-2022 program,
+the model-visible approval summary includes this qualifier:
+
+```text
+Token-2022: displayed amount is the transfer amount; net received may depend on mint extensions as reported by the configured RPC.
+```
+
+The qualifier comes from the final transaction's decoded token program, not
+from the request argument. It is absent for legacy SPL Token. It does not imply
+that a fee exists or that the configured RPC is trustworthy: a dishonest RPC
+can still misreport extension state, so independent mint-state verification is
+appropriate at the signing boundary.
 
 ## Recent blockhash and simulation
 
@@ -217,6 +242,9 @@ caps the body before JSON parsing, requires JSON-RPC 2.0 with the matching
 numeric ID, and rejects errors or malformed envelopes. It never logs or returns
 the URL, account bytes, response body, or simulation logs. The only transaction
 material it returns is the required verified `transaction_base64` field.
+The response-size boundary is inclusive: a body exactly at the configured
+maximum is accepted, while one byte beyond it—or small chunks whose aggregate
+crosses it—is refused before JSON parsing.
 
 RPC remains a trust boundary: a dishonest endpoint can lie about mint state or
 blockhash freshness. Mint ownership/layout checks, strict parsing, final-byte
@@ -284,6 +312,16 @@ The tests cover strict config/injection, exact amounts at 0/2/6/9 decimals,
 RPC envelope failures, response limits, legacy and Token-2022 policy, exact
 instruction/ATA/message shape, deterministic references, simulation, output
 budget, and independent final-byte mutations of every security-relevant field.
+The official packed Token-2022 fixture is generated at host-test time with
+`spl-token-2022-interface 3.1.1` from source commit
+`e18f9c6f9bf6044b934f48e3090e8e59e4820f02`; official extension machinery
+writes the account type and TransferFeeConfig TLV before `nanosol` parses it
+and plugin policy refuses it. Official Solana crates are dev-dependencies only.
+
+The WASM artifact is rebuilt by CI and is not committed. A reported SHA-256
+identifies the tested build environment; Cargo artifact hashes can differ when
+absolute source paths differ. Semantic oracle tests and byte-level transaction
+and component tests are the primary reproducibility guarantees.
 
 ## Devnet worked example
 
