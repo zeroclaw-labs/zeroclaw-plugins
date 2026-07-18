@@ -10,6 +10,8 @@ This component is intentionally complementary to `token-risk-check`: the agent w
 
 This is custody tier T0. The manifest requests only `http_client` and `config_read`; it has no signer, wallet, transaction, transfer, filesystem-write, or socket code. It does not send funds and never treats a returned address as authorization for a payment.
 
+See `README.md` for the full threat model and a prompt-injection test transcript.
+
 Malformed names, unsupported subdomains, missing names, and unknown provider response shapes fail closed. API base URL override is config-only; no key or endpoint is hardcoded as a secret.
 
 ## Structure and tests
@@ -17,7 +19,7 @@ Malformed names, unsupported subdomains, missing names, and unknown provider res
 - `src/resolve.rs`: pure Rust domain normalization, provider-response parsing, and compact formatting core.
 - `src/lib.rs`: thin wasm-only WIT/waki/logging shim.
 - `tests/resolve.rs`: host-run mock fixtures for success, not found, malformed input, subdomain rejection, malformed provider data, and output length.
-- `cargo test --locked`
+- `cargo test --locked` (6/6 passing)
 - `cargo build --locked --target wasm32-wasip2 --release`
 - `test-results-live.md`: read-only live SNS proxy results for `bonfida.sol`, `jupiter.sol`, and a non-existent domain.
 
