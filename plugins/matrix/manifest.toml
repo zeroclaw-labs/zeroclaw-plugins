@@ -1,9 +1,10 @@
 name = "matrix"
-version = "0.1.0"
+version = "0.2.0"
 description = "Matrix channel plugin for ZeroClaw: Client-Server sync + text send over wasi:http."
 author = "JordanTheJet"
 wasm_path = "matrix.wasm"
 capabilities = ["channel"]
+sender_match = "case_insensitive"
 # http_client: Matrix Client-Server API sync, whoami, room alias resolution,
 # and text sends. TLS is performed host-side.
 # config_read: read [channels.matrix.*] when loaded as a mirror plugin.

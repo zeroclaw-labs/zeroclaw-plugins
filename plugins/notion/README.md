@@ -16,8 +16,8 @@ zeroclaw plugin install notion \
 
 ## Configuration
 
-The token and settings come from the plugin's config section (requires the
-`config_read` permission). Fields (snake_case, mirroring the built-in channel):
+The token and settings come from the `[[plugins.entries]]` record named
+`notion` (requires the `config_read` permission). Fields are snake_case:
 
 - `api_key` (required) — a Notion internal-integration token. Sent as
   `Authorization: Bearer`.
@@ -36,12 +36,11 @@ The token and settings come from the plugin's config section (requires the
   Default `4`.
 - `recover_stale` — on load, reset rows stranded in `running` by a prior crash
   back to `pending`. Default `true`.
-- `enabled` — parsed for parity with the native section; the plugin activates on
-  credentials, not this flag.
-
-On a host with the `provides` feature this plugin **mirrors** the built-in
-`notion` channel and reads `[channels.notion.<alias>]`; on older hosts it loads
-as a novel channel configured from `[[plugins.entries.notion]].config`.
+Notion is a novel channel because current ZeroClaw has no canonical
+`channels.notion` config family. Configure it under
+`[[plugins.entries]].config` and bind `plugin.notion` to the owning agent; the
+package intentionally omits `provides` so the host does not reject it as an
+unknown mirror.
 
 ## Permissions
 

@@ -3,7 +3,7 @@
 # cargo test. `waki` provides blocking wasi:http only in the WASM component.
 [package]
 name = "matrix"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 description = "Matrix channel plugin for ZeroClaw: Client-Server sync + text send over wasi:http."

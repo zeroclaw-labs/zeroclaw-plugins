@@ -5,8 +5,9 @@
 //! `parse-webhook` (with the request line surfaced via the reserved
 //! `x-webhook-method` / `x-webhook-query` headers). The plugin owns the payload
 //! shape and the authenticity check: it verifies the Lark **verification token**
-//! over the body and returns `err(reason)` to make the gateway reply 401/400 and
-//! enqueue nothing. The URL-verification handshake is answered inline by
+//! over the body and returns a typed unauthorized or bad-request rejection so
+//! the gateway replies 401 or 400 and enqueues nothing. The URL-verification
+//! handshake is answered inline by
 //! returning a single reserved `__webhook_reply__` message whose `content` the
 //! host echoes back verbatim (Lark expects the `{"challenge": …}` JSON).
 //!
@@ -38,14 +39,15 @@ mod component {
     use serde_json::Value;
 
     use crate::lark::{
-        build_send_body, build_token_request_body, extract_tenant_token, handle_webhook,
-        is_invalid_token, response_code, split_text_chunks, Inbound, LarkConfig, WebhookOutcome,
-        LARK_TEXT_MAX_BYTES, WEBHOOK_REPLY_CHANNEL,
+        authenticate_webhook, build_send_body, build_token_request_body, decode_webhook,
+        extract_tenant_token, is_invalid_token, parse_webhook_body, response_code,
+        split_text_chunks, Inbound, LarkConfig, WebhookOutcome, LARK_TEXT_MAX_BYTES,
+        WEBHOOK_REPLY_CHANNEL,
     };
 
     use exports::zeroclaw::plugin::channel::{
         ApprovalRequest, ApprovalResponse, ChannelCapabilities, Guest as Channel, InboundMessage,
-        SendMessage,
+        SendMessage, WebhookRejection,
     };
     use exports::zeroclaw::plugin::plugin_info::Guest as PluginInfo;
 
@@ -265,14 +267,20 @@ mod component {
         fn parse_webhook(
             headers: Vec<(String, String)>,
             body: Vec<u8>,
-        ) -> Result<Vec<InboundMessage>, String> {
+        ) -> Result<Vec<InboundMessage>, WebhookRejection> {
             let cfg = CONFIG.with(|c| c.borrow().clone());
             // The host passes the request line via reserved lower-cased headers.
             // Default to POST (Lark's event delivery method) when absent.
             let method = header(&headers, HEADER_METHOD).unwrap_or("POST");
-            let query = header(&headers, HEADER_QUERY).unwrap_or("");
+            let _query = header(&headers, HEADER_QUERY).unwrap_or("");
+            let Some(payload) =
+                parse_webhook_body(method, &body).map_err(WebhookRejection::BadRequest)?
+            else {
+                return Ok(vec![reply_message("ok".to_string())]);
+            };
+            authenticate_webhook(&cfg, &payload).map_err(WebhookRejection::Unauthorized)?;
 
-            match handle_webhook(&cfg, method, query, &body)? {
+            match decode_webhook(&cfg, &payload) {
                 WebhookOutcome::Reply(reply) => Ok(vec![reply_message(reply)]),
                 WebhookOutcome::Events(events) => Ok(events.into_iter().map(to_wit).collect()),
             }

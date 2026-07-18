@@ -232,7 +232,8 @@ fn extract_timestamp_ms(payload: &Value) -> u64 {
 
 /// Extract the `hub.challenge` from a raw GET query string, percent-decoded.
 /// WATI's verification handshake echoes this value with no token check (matching
-/// the native gateway). Returns `Err` when absent so the host replies 4xx.
+/// the native gateway). Returns `Err` when absent so the component emits a
+/// bad-request rejection.
 pub fn extract_challenge(raw_query: &str) -> Result<String, String> {
     match parse_query(raw_query).get("hub.challenge") {
         Some(ch) if !ch.is_empty() => Ok(ch.clone()),

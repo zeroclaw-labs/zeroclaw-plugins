@@ -7,15 +7,21 @@ package zeroclaw:plugin@0.1.0;
 /// A channel plugin runs in a WASI sandbox with no network and no sockets, so it
 /// cannot open a WebSocket itself. Exactly as the host runs a plugin's inbound
 /// listener and performs its `wasi:http` TLS, the host owns the socket here: it
-/// dials the `ws://`/`wss://` endpoint, performs the TLS handshake, and pumps
-/// frames, exposing each live connection to the plugin as an opaque `u64`
-/// handle. The plugin drives the application protocol — it sends text frames and
+/// dials the endpoint, performs the TLS handshake, and pumps frames, exposing
+/// each live connection to the plugin as an opaque `u64` handle. The secure
+/// default permits only `wss://` destinations whose complete DNS answer set is
+/// globally routable. The host pins the dial to those validated addresses so a
+/// second lookup cannot rebind the name. Private/non-global or plaintext
+/// destinations require an explicit host operator-policy exception; the guest
+/// cannot grant itself one.
+///
+/// The plugin drives the application protocol - it sends text frames and
 /// drains received frames — while the host stays protocol-agnostic. The host
 /// performs no app-level protocol work (identify, heartbeats, acks, resume);
 /// that all stays in the plugin, which owns the platform's framing and timing.
 /// Transport-level Ping/Pong is answered by the host automatically.
 ///
-/// Gated by the `websocket-client` permission: a plugin without it never gets a
+/// Gated by the `websocket_client` permission: a plugin without it never gets a
 /// connection registry, the import is not linked, and a guest that imports this
 /// interface fails closed at instantiation.
 @unstable(feature = plugins-wit-v0-websocket)
@@ -29,27 +35,38 @@ interface ws-client {
         /// exactly as it backs off on an empty `inbound-poll`.
         idle,
         /// The connection closed (server close frame, transport error, or
-        /// stream end); the string carries a human-readable reason. The handle
-        /// is spent — the plugin must `ws-connect` again to reconnect. Any text
-        /// frames buffered before the close are still delivered first.
+        /// stream end). For a server close frame the string is the numeric close
+        /// code, optionally followed by `": <reason>"` (e.g. `"4014: Disallowed
+        /// intent(s)."`); for a transport error or stream end it is a plain
+        /// human-readable reason with no leading code. A plugin can parse the
+        /// leading code to distinguish fatal protocol closes from transient ones.
+        /// Any text frames buffered before the close are still delivered first.
+        /// Returning `closed` retires the handle and both host pump tasks; a
+        /// later operation on that handle fails as unknown. The plugin must
+        /// `ws-connect` again to reconnect.
         closed(string),
     }
 
-    /// Open a WebSocket connection to `url` (`ws://` or `wss://`) sending the
-    /// given extra request headers on the upgrade (e.g. `authorization`).
-    /// Returns an opaque connection handle on success, or an error string when
-    /// the URL, a header, or the dial/handshake fails.
+    /// Open a WebSocket connection to `url`, sending extra request headers on
+    /// the upgrade (e.g. `authorization`). At most 32 headers totaling 16 KiB
+    /// of names plus values are accepted. The host permits at most 16 live
+    /// handles per plugin store and gives resolution plus dial/handshake a
+    /// 30-second deadline. Returns an opaque handle on success or an error when
+    /// policy, validation, capacity, resolution, or the handshake rejects it.
     ws-connect: func(url: string, headers: list<tuple<string, string>>) -> result<u64, string>;
 
-    /// Send a text frame on the connection. Errors if the handle is unknown or
-    /// the outbound buffer is full; a full buffer signals the plugin is
-    /// producing faster than the socket drains.
+    /// Send a text frame on the connection. A message is limited to 1 MiB; the
+    /// outbound queue is limited to 256 messages and 2 MiB total. Errors if the
+    /// handle is unknown, the message is oversized, or either queue bound is
+    /// reached.
     ws-send-text: func(handle: u64, text: string) -> result<_, string>;
 
     /// Drain the next event from the connection without blocking. Returns
     /// `idle` immediately when no frame is queued, or `closed` once the
     /// connection has ended and its buffered frames are exhausted. Errors only
-    /// if the handle is unknown.
+    /// if the handle is unknown. The transport accepts at most 1 MiB per
+    /// assembled inbound message and 256 KiB per frame. The inbound queue is
+    /// limited to 1,024 messages and 4 MiB total.
     ws-receive: func(handle: u64) -> result<ws-event, string>;
 
     /// Number of text frames currently buffered for the connection, so the

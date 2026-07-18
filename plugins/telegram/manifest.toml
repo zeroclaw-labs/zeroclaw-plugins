@@ -1,9 +1,10 @@
 name = "telegram"
-version = "0.1.0"
+version = "0.2.0"
 description = "Telegram channel plugin for ZeroClaw: getUpdates long-poll + sendMessage over wasi:http."
 author = "JordanTheJet"
 wasm_path = "telegram.wasm"
 capabilities = ["channel"]
+sender_match = "handle"
 # http_client: outbound calls to api.telegram.org (TLS is performed host-side).
 # config_read: read the bot token + settings from this channel's config section.
 permissions = ["http_client", "config_read"]

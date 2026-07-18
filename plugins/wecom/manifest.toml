@@ -1,5 +1,5 @@
 name = "wecom"
-version = "0.1.0"
+version = "0.2.0"
 description = "Send-only WeCom Bot Webhook channel plugin for ZeroClaw over wasi:http."
 author = "JordanTheJet"
 wasm_path = "wecom.wasm"

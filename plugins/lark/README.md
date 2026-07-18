@@ -18,8 +18,8 @@ each request to the plugin's `parse-webhook`. The plugin:
 
 - **Owns its authenticity check.** Lark stamps the operator-set *verification
   token* into the URL-verification body and into every event's `header.token`.
-  The plugin verifies it against the configured `verification_token` and returns
-  an error (→ host replies 401/400, enqueues nothing) on mismatch.
+  The plugin verifies it against the configured `verification_token`; a
+  mismatch returns the typed unauthorized rejection (HTTP 401, nothing queued).
 - **Answers the verification handshake inline.** On the first
   `{"type":"url_verification","challenge":X,"token":T}` POST it echoes the
   `{"challenge":X}` JSON Lark expects — via the host's reserved

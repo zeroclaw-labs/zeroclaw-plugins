@@ -1,5 +1,5 @@
 name = "bluesky"
-version = "0.1.0"
+version = "0.2.0"
 description = "Bluesky (AT Protocol) channel plugin for ZeroClaw: notification poll + threaded post replies over wasi:http."
 author = "JordanTheJet"
 wasm_path = "bluesky.wasm"

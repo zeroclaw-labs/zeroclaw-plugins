@@ -36,8 +36,8 @@ plugin implements the **Events API webhook** path instead.
   it verifies `X-Slack-Signature = v0=<hex(HMAC-SHA256(signing_secret,
   "v0:" + X-Slack-Request-Timestamp + ":" + raw_body))>` and rejects a request
   whose timestamp is outside a 5-minute replay window or whose signature does
-  not match — returning an error so the gateway replies 401/400 and enqueues
-  nothing.
+  not match. Those failures return the typed unauthorized rejection (HTTP 401)
+  and enqueue nothing.
   - A `url_verification` request echoes its `challenge` back in the HTTP
     response body (the verification handshake).
   - An `event_callback` with a plain user message (`event.type == "message"`,

@@ -8,8 +8,21 @@
       "capabilities": [
         "channel"
       ],
+      "provides": "bluesky",
       "url": "https://github.com/zeroclaw-labs/zeroclaw-plugins/releases/download/plugins/bluesky-0.1.0.zip",
       "sha256": "695af4954c2577391af02f822569744fb1906bd3a8db05125684763c5e2a9e52"
+    },
+    {
+      "name": "bluesky",
+      "version": "0.2.0",
+      "description": "Bluesky (AT Protocol) channel plugin for ZeroClaw: notification poll + threaded post replies over wasi:http.",
+      "author": "JordanTheJet",
+      "capabilities": [
+        "channel"
+      ],
+      "provides": "bluesky",
+      "url": "https://github.com/zeroclaw-labs/zeroclaw-plugins/releases/download/plugins/bluesky-0.2.0.zip",
+      "sha256": "bf4f3c15abefcac93a79232ad0a76f1ddf0bfe6def136776a8ed667311cabc0e"
     },
     {
       "name": "gitea",
@@ -19,8 +32,22 @@
       "capabilities": [
         "channel"
       ],
+      "provides": "git",
       "url": "https://github.com/zeroclaw-labs/zeroclaw-plugins/releases/download/plugins/gitea-0.1.0.zip",
       "sha256": "4ae5e9439d987269b596ea9d5aac313e5ac9e7cabcfe36bffd2f9d9673db7664"
+    },
+    {
+      "name": "gitea",
+      "version": "0.2.0",
+      "description": "Gitea/Forgejo channel plugin for ZeroClaw: notifications long-poll + issue/PR comment replies over wasi:http.",
+      "author": "JordanTheJet",
+      "capabilities": [
+        "channel"
+      ],
+      "provides": "git",
+      "sender_match": "case_insensitive",
+      "url": "https://github.com/zeroclaw-labs/zeroclaw-plugins/releases/download/plugins/gitea-0.2.0.zip",
+      "sha256": "552b105a02020821eb234d4ef3ff5c93c8d98526a6e7d5ee510296d2b5323712"
     },
     {
       "name": "matrix",
@@ -30,8 +57,22 @@
       "capabilities": [
         "channel"
       ],
+      "provides": "matrix",
       "url": "https://github.com/zeroclaw-labs/zeroclaw-plugins/releases/download/plugins/matrix-0.1.0.zip",
       "sha256": "b9c535d250fd17c4b117b5151cb2a800ee165fed49c0c44e27ec56b0d9cf6ec6"
+    },
+    {
+      "name": "matrix",
+      "version": "0.2.0",
+      "description": "Matrix channel plugin for ZeroClaw: Client-Server sync + text send over wasi:http.",
+      "author": "JordanTheJet",
+      "capabilities": [
+        "channel"
+      ],
+      "provides": "matrix",
+      "sender_match": "case_insensitive",
+      "url": "https://github.com/zeroclaw-labs/zeroclaw-plugins/releases/download/plugins/matrix-0.2.0.zip",
+      "sha256": "b10fc1f0931e967d25e09a1b7ebcb3c3a2f68225eac980b974a7f054ef4a4ee0"
     },
     {
       "name": "mattermost",
@@ -41,8 +82,21 @@
       "capabilities": [
         "channel"
       ],
+      "provides": "mattermost",
       "url": "https://github.com/zeroclaw-labs/zeroclaw-plugins/releases/download/plugins/mattermost-0.1.0.zip",
       "sha256": "df6d8ca21f8a4a93bc8e18fef441b5886beb39e2688f850e1ccfaf431ac7b85c"
+    },
+    {
+      "name": "mattermost",
+      "version": "0.2.0",
+      "description": "Mattermost channel plugin for ZeroClaw: v4 REST channel-post polling + createPost over wasi:http.",
+      "author": "JordanTheJet",
+      "capabilities": [
+        "channel"
+      ],
+      "provides": "mattermost",
+      "url": "https://github.com/zeroclaw-labs/zeroclaw-plugins/releases/download/plugins/mattermost-0.2.0.zip",
+      "sha256": "7123074500b727667531d77e805fd543e0ad4b8790f9c5893459046b2604374d"
     },
     {
       "name": "mochat",
@@ -52,8 +106,21 @@
       "capabilities": [
         "channel"
       ],
+      "provides": "mochat",
       "url": "https://github.com/zeroclaw-labs/zeroclaw-plugins/releases/download/plugins/mochat-0.1.0.zip",
       "sha256": "d7ba5f552a304a88a8a27887b6f306171192c516fc53e2b37a8d422d25ff950d"
+    },
+    {
+      "name": "mochat",
+      "version": "0.2.0",
+      "description": "Mochat customer-service channel plugin for ZeroClaw: message-receive polling + message-send over wasi:http.",
+      "author": "JordanTheJet",
+      "capabilities": [
+        "channel"
+      ],
+      "provides": "mochat",
+      "url": "https://github.com/zeroclaw-labs/zeroclaw-plugins/releases/download/plugins/mochat-0.2.0.zip",
+      "sha256": "746efaab59ae18646a11c9c6e850cdcd6ffe5cac5666d1491690da4d4cd48450"
     },
     {
       "name": "notion",
@@ -63,8 +130,20 @@
       "capabilities": [
         "channel"
       ],
+      "provides": "notion",
       "url": "https://github.com/zeroclaw-labs/zeroclaw-plugins/releases/download/plugins/notion-0.1.0.zip",
       "sha256": "14241ec074af63c093d9216657940b954eb99d105efbda68ec9078b7f8b7ee8d"
+    },
+    {
+      "name": "notion",
+      "version": "0.2.0",
+      "description": "Notion task-queue channel plugin for ZeroClaw: poll a database for pending tasks and write results back over wasi:http.",
+      "author": "JordanTheJet",
+      "capabilities": [
+        "channel"
+      ],
+      "url": "https://github.com/zeroclaw-labs/zeroclaw-plugins/releases/download/plugins/notion-0.2.0.zip",
+      "sha256": "68c78395554d21eb246d7d8e537ee39da39d624191b315bb8dc47e32117383a6"
     },
     {
       "name": "redact-text",
@@ -78,6 +157,17 @@
       "sha256": "d315647652eb7c18bf00034822c271e0612c8edebb056eb58d1b7327f360aa68"
     },
     {
+      "name": "redact-text",
+      "version": "0.2.0",
+      "description": "Redact secrets and PII from text: emails, bearer/API tokens, and configured patterns",
+      "author": "ZeroClaw Labs",
+      "capabilities": [
+        "tool"
+      ],
+      "url": "https://github.com/zeroclaw-labs/zeroclaw-plugins/releases/download/plugins/redact-text-0.2.0.zip",
+      "sha256": "65176a6eeb33cea3336ac2ad86d482f64fe3685ead5a5187be1d864e27e5e3ec"
+    },
+    {
       "name": "reddit",
       "version": "0.1.0",
       "description": "Reddit channel plugin for ZeroClaw: message/unread long-poll + comment/compose over wasi:http.",
@@ -85,8 +175,21 @@
       "capabilities": [
         "channel"
       ],
+      "provides": "reddit",
       "url": "https://github.com/zeroclaw-labs/zeroclaw-plugins/releases/download/plugins/reddit-0.1.0.zip",
       "sha256": "a6964c868299a20e0337aac597ddf502a93ed53cb83aee6a3aaca4ef9edc06a1"
+    },
+    {
+      "name": "reddit",
+      "version": "0.2.0",
+      "description": "Reddit channel plugin for ZeroClaw: message/unread long-poll + comment/compose over wasi:http.",
+      "author": "JordanTheJet",
+      "capabilities": [
+        "channel"
+      ],
+      "provides": "reddit",
+      "url": "https://github.com/zeroclaw-labs/zeroclaw-plugins/releases/download/plugins/reddit-0.2.0.zip",
+      "sha256": "331ff0a21e5692f27022c713b900d6923a4fce37b55ef0331d6c32b552e3b4eb"
     },
     {
       "name": "telegram",
@@ -96,8 +199,22 @@
       "capabilities": [
         "channel"
       ],
+      "provides": "telegram",
       "url": "https://github.com/zeroclaw-labs/zeroclaw-plugins/releases/download/plugins/telegram-0.1.0.zip",
       "sha256": "67e3e13ce7f21950da87d1432cb69cfa0867d65fa0c917e336243a968db9dbf0"
+    },
+    {
+      "name": "telegram",
+      "version": "0.2.0",
+      "description": "Telegram channel plugin for ZeroClaw: getUpdates long-poll + sendMessage over wasi:http.",
+      "author": "JordanTheJet",
+      "capabilities": [
+        "channel"
+      ],
+      "provides": "telegram",
+      "sender_match": "handle",
+      "url": "https://github.com/zeroclaw-labs/zeroclaw-plugins/releases/download/plugins/telegram-0.2.0.zip",
+      "sha256": "953ed3c24ad0c9f374635f95f91ae43821bd1e7026ed4983b1856eed8c626432"
     },
     {
       "name": "twitter",
@@ -107,8 +224,21 @@
       "capabilities": [
         "channel"
       ],
+      "provides": "twitter",
       "url": "https://github.com/zeroclaw-labs/zeroclaw-plugins/releases/download/plugins/twitter-0.1.0.zip",
       "sha256": "d8a4a795da05f557e17eeb378b98906b0112d5fc59f8a078c4290f42c95b8e1c"
+    },
+    {
+      "name": "twitter",
+      "version": "0.2.0",
+      "description": "X/Twitter channel plugin for ZeroClaw: mentions polling + reply tweets over wasi:http.",
+      "author": "JordanTheJet",
+      "capabilities": [
+        "channel"
+      ],
+      "provides": "twitter",
+      "url": "https://github.com/zeroclaw-labs/zeroclaw-plugins/releases/download/plugins/twitter-0.2.0.zip",
+      "sha256": "cfbc311e6509583a7fe93e67a5c6db1bc15374e121f5b78a54855e53b889b7d7"
     },
     {
       "name": "wechat",
@@ -118,8 +248,21 @@
       "capabilities": [
         "channel"
       ],
+      "provides": "wechat",
       "url": "https://github.com/zeroclaw-labs/zeroclaw-plugins/releases/download/plugins/wechat-0.1.0.zip",
       "sha256": "a85ae6f57d50f67fb668671a1fdc7580334c66f6204d874a854a5c1133a15fdc"
+    },
+    {
+      "name": "wechat",
+      "version": "0.2.0",
+      "description": "WeChat (iLink Bot) channel plugin for ZeroClaw: getUpdates long-poll + sendMessage over wasi:http.",
+      "author": "JordanTheJet",
+      "capabilities": [
+        "channel"
+      ],
+      "provides": "wechat",
+      "url": "https://github.com/zeroclaw-labs/zeroclaw-plugins/releases/download/plugins/wechat-0.2.0.zip",
+      "sha256": "4e213f2b6d769077ce754efc67482d399ef5788f378219dab0dd8f656227c4fd"
     },
     {
       "name": "wecom",
@@ -129,8 +272,23 @@
       "capabilities": [
         "channel"
       ],
+      "provides": "wecom",
+      "sender_match": "exact",
       "url": "https://github.com/zeroclaw-labs/zeroclaw-plugins/releases/download/plugins/wecom-0.1.0.zip",
       "sha256": "154f669e9d3689ffb31c1ac97ac21a39dd35fb2f9651ab4653c3829d1656ab53"
+    },
+    {
+      "name": "wecom",
+      "version": "0.2.0",
+      "description": "Send-only WeCom Bot Webhook channel plugin for ZeroClaw over wasi:http.",
+      "author": "JordanTheJet",
+      "capabilities": [
+        "channel"
+      ],
+      "provides": "wecom",
+      "sender_match": "exact",
+      "url": "https://github.com/zeroclaw-labs/zeroclaw-plugins/releases/download/plugins/wecom-0.2.0.zip",
+      "sha256": "6fb3132b556d44cd325779ed5c1e11b3878eb045d65a83de6b42a038963a9338"
     }
   ]
 }

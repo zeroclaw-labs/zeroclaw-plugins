@@ -49,7 +49,7 @@ mod component {
 
     use exports::zeroclaw::plugin::channel::{
         ApprovalRequest, ApprovalResponse, ChannelCapabilities, Guest as Channel, InboundMessage,
-        SendMessage,
+        SendMessage, WebhookRejection,
     };
     use exports::zeroclaw::plugin::plugin_info::Guest as PluginInfo;
 
@@ -202,7 +202,7 @@ mod component {
         fn parse_webhook(
             headers: Vec<(String, String)>,
             body: Vec<u8>,
-        ) -> Result<Vec<InboundMessage>, String> {
+        ) -> Result<Vec<InboundMessage>, WebhookRejection> {
             let method = header_get(&headers, "x-webhook-method").unwrap_or_default();
             // Pub/Sub delivers via POST; ack a GET with nothing.
             if method.eq_ignore_ascii_case("GET") {
@@ -214,16 +214,21 @@ mod component {
             // ── Shared-secret auth ──
             let auth = header_get(&headers, "authorization").unwrap_or_default();
             if !verify_bearer(cfg.webhook_secret(), &auth) {
-                return Err("gmail_push: unauthorized (bad or missing Bearer secret)".to_string());
+                return Err(WebhookRejection::Unauthorized(
+                    "gmail_push: unauthorized (bad or missing Bearer secret)".to_string(),
+                ));
             }
 
             // ── Decode the Pub/Sub notification ──
-            let envelope = parse_envelope(&body)?;
-            let notification = parse_notification(&envelope.message)?;
+            let envelope = parse_envelope(&body).map_err(WebhookRejection::BadRequest)?;
+            let notification =
+                parse_notification(&envelope.message).map_err(WebhookRejection::BadRequest)?;
 
             let token = cfg.oauth_token();
             if token.is_empty() {
-                return Err("gmail_push: missing oauth_token in config".to_string());
+                return Err(WebhookRejection::BadRequest(
+                    "gmail_push: missing oauth_token in config".to_string(),
+                ));
             }
 
             // First notification seeds the cursor and yields nothing.
@@ -234,7 +239,8 @@ mod component {
             }
 
             // Fetch messages added since the last-seen historyId.
-            let (message_ids, newest) = fetch_history(token, last)?;
+            let (message_ids, newest) =
+                fetch_history(token, last).map_err(WebhookRejection::BadRequest)?;
             LAST_HISTORY_ID.with(|c| c.set(newest.max(last)));
 
             let mut out = Vec::new();

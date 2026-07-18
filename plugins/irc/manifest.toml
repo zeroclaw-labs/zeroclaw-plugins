@@ -4,7 +4,7 @@ description = "IRC channel plugin for ZeroClaw: TLS, registration, SASL, and tex
 author = "JordanTheJet"
 wasm_path = "irc.wasm"
 capabilities = ["channel"]
-sender_match = "case-insensitive"
+sender_match = "case_insensitive"
 # Real text implementation, kept source-only until ZeroClaw's socket-client
 # host capability reaches upstream master.
 registry = false

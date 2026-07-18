@@ -31,28 +31,47 @@ interface socket {
         /// No bytes were ready. The plugin should back off and poll again,
         /// exactly as it backs off on an empty `inbound-poll`.
         idle,
-        /// The connection closed (peer close, transport error, or stream end);
-        /// the string is a human-readable reason. The handle is spent — the
-        /// plugin must `tcp-connect` again to reconnect. Any bytes buffered
-        /// before the close are still delivered first.
+        /// The connection closed (peer close, read/write error, or stream end);
+        /// the string is a human-readable reason. Returning this event retires
+        /// the handle and releases its host connection slot — the plugin must
+        /// `tcp-connect` again to reconnect. Any bytes buffered before the close
+        /// are still delivered first.
         closed(string),
     }
 
-    /// Open a TCP connection to `host:port`. When `tls` is true the host
-    /// performs a TLS client handshake (SNI from `host`, WebPKI roots) over the
-    /// socket before returning. Returns an opaque connection handle on success,
-    /// or an error string when the resolve, dial, or handshake fails.
+    /// Open a TCP connection to `host:port`. The `socket_client` capability is
+    /// public-network-only: local/private names are rejected, DNS is resolved
+    /// once, and every resolved address must be globally routable before the
+    /// host dials that checked address set. There is no private-network
+    /// exception. A destination rejection starts with the stable error key
+    /// `socket_destination_not_allowed`.
+    ///
+    /// When `tls` is true the host performs a TLS client handshake (SNI from
+    /// `host`, WebPKI roots) over the socket before returning and needs no
+    /// plaintext exception. When `tls` is false, the exact host must be allowed
+    /// by the operator's live
+    /// `plugins.security.socket_plaintext_allowed_hosts` policy; absent an
+    /// exact match, the call fails closed with the stable error key
+    /// `socket_plaintext_not_allowed`. Plaintext authorization never overrides
+    /// the public-network-only destination guard. Returns an opaque connection
+    /// handle on success, or an error string when policy, resolve, dial, or
+    /// handshake fails.
     tcp-connect: func(host: string, port: u16, tls: bool) -> result<u64, string>;
 
-    /// Queue a chunk of bytes to send on the connection. Errors if the handle
-    /// is unknown or the outbound buffer is full; a full buffer signals the
-    /// plugin is producing faster than the socket drains.
+    /// Queue a chunk of bytes to send on the connection. Each call is bounded
+    /// by a host-defined maximum chunk size before the bytes can enter the
+    /// outbound queue; an oversized chunk fails with the stable error key
+    /// `socket_outbound_chunk_too_large` and is not retained. Also errors if the
+    /// handle is unknown or the outbound buffer is full; a full buffer signals
+    /// the plugin is producing faster than the socket drains.
     tcp-send: func(handle: u64, bytes: list<u8>) -> result<_, string>;
 
     /// Drain the next event from the connection without blocking. Returns
     /// `idle` immediately when no bytes are queued, or `closed` once the
-    /// connection has ended and its buffered chunks are exhausted. Errors only
-    /// if the handle is unknown.
+    /// connection has ended and its buffered chunks are exhausted. A terminal
+    /// `closed` event consumes the handle and releases its connection slot;
+    /// subsequent calls with that handle report it as unknown. Errors only if
+    /// the handle is unknown.
     tcp-receive: func(handle: u64) -> result<socket-event, string>;
 
     /// Number of byte chunks currently buffered for the connection, so the

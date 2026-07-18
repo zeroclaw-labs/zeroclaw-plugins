@@ -12,8 +12,9 @@
 //! Authenticity model (plaintext mode): Lark webhooks carry a `token` — the
 //! operator-set **verification token** — in the URL-verification body and in the
 //! `header.token` of every event. The plugin verifies that token against its own
-//! configured `verification_token` and returns `Err(reason)` on mismatch, which
-//! the host turns into a 401/400 with nothing enqueued. Encrypted transport
+//! configured `verification_token` and returns `Err(reason)` on mismatch. The
+//! component maps token failures to 401 and payload failures to 400, with
+//! nothing enqueued. Encrypted transport
 //! (`encrypt_key`, AES-256-CBC) is detected and cleanly rejected — see
 //! [`handle_webhook`] — and left as a follow-up.
 
@@ -305,27 +306,13 @@ pub fn parse_events(payload: &Value, per_user_session: bool) -> Vec<Inbound> {
     }]
 }
 
-/// Decode a raw inbound webhook request into a [`WebhookOutcome`], owning the
-/// authenticity check. `method` / `query` are the reserved request-line pieces
-/// the host passes via the `x-webhook-method` / `x-webhook-query` headers.
-///
-/// Dispatch order:
-/// 1. `GET` → a plain 200 liveness reply (Lark verifies over `POST` only).
-/// 2. Non-JSON body → `Err` (400).
-/// 3. Encrypted envelope (`{"encrypt": …}`) → `Err` (plaintext-only; follow-up).
-/// 4. URL-verification (`challenge` present) → verify `token`, echo the
-///    `{"challenge": …}` JSON.
-/// 5. Real event → verify `header.token`, decode text messages.
-pub fn handle_webhook(
-    cfg: &LarkConfig,
-    method: &str,
-    _query: &str,
-    body: &[u8],
-) -> Result<WebhookOutcome, String> {
+/// Decode the request body. `None` represents a GET liveness probe, while
+/// malformed JSON and unsupported encrypted envelopes are payload errors.
+pub fn parse_webhook_body(method: &str, body: &[u8]) -> Result<Option<Value>, String> {
     // Lark performs its verification handshake over POST; a GET is only ever a
     // browser/health probe. Answer it with a bare 200 and enqueue nothing.
     if method.eq_ignore_ascii_case("GET") {
-        return Ok(WebhookOutcome::Reply("ok".to_string()));
+        return Ok(None);
     }
 
     let payload: Value = serde_json::from_slice(body)
@@ -339,29 +326,53 @@ pub fn handle_webhook(
                 .to_string(),
         );
     }
+    Ok(Some(payload))
+}
 
+/// Verify the token carried by an already-decoded challenge or event payload.
+pub fn authenticate_webhook(cfg: &LarkConfig, payload: &Value) -> Result<(), String> {
     // URL-verification handshake.
-    if let Some((challenge, token)) = challenge_of(&payload) {
+    if let Some((_, token)) = challenge_of(payload) {
         if let (Some(expected), Some(got)) = (cfg.verification_token(), token.as_deref()) {
             if got != expected {
                 return Err("lark: url_verification token mismatch".to_string());
             }
         }
-        return Ok(WebhookOutcome::Reply(verification_reply(&challenge)));
+        return Ok(());
     }
 
     // Real event: authenticate against the configured verification token when
     // both sides carry one, then decode.
-    if let (Some(expected), Some(got)) = (cfg.verification_token(), event_token_of(&payload)) {
+    if let (Some(expected), Some(got)) = (cfg.verification_token(), event_token_of(payload)) {
         if got != expected {
             return Err("lark: event verification token mismatch".to_string());
         }
     }
+    Ok(())
+}
 
-    Ok(WebhookOutcome::Events(parse_events(
-        &payload,
-        cfg.per_user_session,
-    )))
+/// Convert an authenticated Lark payload into a handshake reply or events.
+pub fn decode_webhook(cfg: &LarkConfig, payload: &Value) -> WebhookOutcome {
+    if let Some((challenge, _)) = challenge_of(payload) {
+        return WebhookOutcome::Reply(verification_reply(&challenge));
+    }
+    WebhookOutcome::Events(parse_events(payload, cfg.per_user_session))
+}
+
+/// Decode, authenticate, and map a raw inbound webhook. The split helpers are
+/// also exposed so the WIT shim can preserve the host's typed authentication
+/// and payload-rejection boundary.
+pub fn handle_webhook(
+    cfg: &LarkConfig,
+    method: &str,
+    _query: &str,
+    body: &[u8],
+) -> Result<WebhookOutcome, String> {
+    let Some(payload) = parse_webhook_body(method, body)? else {
+        return Ok(WebhookOutcome::Reply("ok".to_string()));
+    };
+    authenticate_webhook(cfg, &payload)?;
+    Ok(decode_webhook(cfg, &payload))
 }
 
 /// Build the `tenant_access_token/internal` request body.

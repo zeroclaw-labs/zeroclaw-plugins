@@ -1,5 +1,5 @@
 name = "wechat"
-version = "0.1.0"
+version = "0.2.0"
 description = "WeChat (iLink Bot) channel plugin for ZeroClaw: getUpdates long-poll + sendMessage over wasi:http."
 author = "JordanTheJet"
 wasm_path = "wechat.wasm"

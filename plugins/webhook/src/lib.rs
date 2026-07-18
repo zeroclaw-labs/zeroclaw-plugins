@@ -36,7 +36,7 @@ mod component {
 
     use exports::zeroclaw::plugin::channel::{
         ApprovalRequest, ApprovalResponse, ChannelCapabilities, Guest as Channel, InboundMessage,
-        SendMessage,
+        SendMessage, WebhookRejection,
     };
     use exports::zeroclaw::plugin::plugin_info::Guest as PluginInfo;
 
@@ -155,7 +155,7 @@ mod component {
         fn parse_webhook(
             headers: Vec<(String, String)>,
             body: Vec<u8>,
-        ) -> Result<Vec<InboundMessage>, String> {
+        ) -> Result<Vec<InboundMessage>, WebhookRejection> {
             let method = header_get(&headers, "x-webhook-method").unwrap_or_default();
             // Generic webhook has no GET verification; ack a GET with nothing.
             if method.eq_ignore_ascii_case("GET") {
@@ -165,10 +165,12 @@ mod component {
             let cfg = CONFIG.with(|c| c.borrow().clone());
             let signature = header_get(&headers, "x-webhook-signature");
             if !verify_signature(cfg.secret(), &body, signature.as_deref()) {
-                return Err("webhook: X-Webhook-Signature verification failed".to_string());
+                return Err(WebhookRejection::Unauthorized(
+                    "webhook: X-Webhook-Signature verification failed".to_string(),
+                ));
             }
 
-            let inbound = parse_incoming(&body)?;
+            let inbound = parse_incoming(&body).map_err(WebhookRejection::BadRequest)?;
             Ok(vec![to_wit(inbound)])
         }
 
