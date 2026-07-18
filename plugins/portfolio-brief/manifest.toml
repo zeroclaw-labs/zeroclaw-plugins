@@ -1,0 +1,9 @@
+name = "portfolio-brief"
+version = "0.1.0"
+description = "Read-only Solana portfolio brief with compact balances, prices, and 24h changes"
+author = "YingchenWang999"
+wasm_path = "portfolio_brief.wasm"
+capabilities = ["tool"]
+# http_client: query the configured Solana RPC and Jupiter Price API endpoints.
+# config_read: read endpoint URLs, the Jupiter API key, display limits, and labels.
+permissions = ["http_client", "config_read"]
