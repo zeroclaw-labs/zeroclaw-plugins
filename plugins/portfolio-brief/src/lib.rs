@@ -162,10 +162,13 @@ mod component {
     }
 
     fn get_json(url: &str, api_key: &str) -> Result<Value, String> {
-        waki::Client::new()
+        let mut request = waki::Client::new()
             .get(url)
-            .header("x-api-key", api_key)
-            .header("Accept", "application/json")
+            .header("Accept", "application/json");
+        if !api_key.is_empty() {
+            request = request.header("x-api-key", api_key);
+        }
+        request
             .send()
             .map_err(|e| format!("price request failed: {e}"))?
             .json::<Value>()

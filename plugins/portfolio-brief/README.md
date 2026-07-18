@@ -25,7 +25,7 @@ The host injects only this plugin's jailed config section through
 
 | Key | Required | Default | Meaning |
 |---|---:|---|---|
-| `jupiter_api_key` | yes | — | Jupiter developer API key used only in the `x-api-key` header. |
+| `jupiter_api_key` | no | keyless access | Optional Jupiter developer API key used only in the `x-api-key` header. |
 | `rpc_url` | no | `https://api.mainnet-beta.solana.com` | HTTPS Solana JSON-RPC endpoint. |
 | `price_api_url` | no | `https://api.jup.ag/price/v3` | HTTPS Jupiter-compatible Price V3 endpoint. |
 | `max_positions` | no | `8` | Output rows, clamped to 1–15. |
@@ -34,12 +34,14 @@ The host injects only this plugin's jailed config section through
 
 Endpoint URLs and API keys can only come from operator config, never from tool
 arguments. HTTP endpoints must use HTTPS and may not contain embedded
-credentials, fragments, or whitespace.
+credentials, fragments, or whitespace. Jupiter currently permits rate-limited
+keyless requests, so the plugin works without an account; configure a free key
+for higher limits and usage analytics.
 
 Example plugin config values:
 
 ```toml
-jupiter_api_key = "<jupiter-api-key>"
+# Optional: jupiter_api_key = "<jupiter-api-key>"
 rpc_url = "https://api.mainnet-beta.solana.com"
 max_positions = "8"
 token_labels = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v:USDC"
@@ -128,7 +130,9 @@ structured count-only logging.
 
 Protocol references: [Solana `getBalance`](https://solana.com/docs/rpc/http/getbalance),
 [Solana `getTokenAccountsByOwner`](https://solana.com/docs/rpc/http/gettokenaccountsbyowner),
-and [Jupiter Price API V3](https://developers.jup.ag/docs/price).
+and [Jupiter Price API V3](https://developers.jup.ag/docs/price). Jupiter's
+[current plans documentation](https://developers.jup.ag/docs/portal/plans)
+documents the keyless 0.5 requests/second allowance.
 
 ## Demo plan
 

@@ -19,20 +19,19 @@ fn validates_a_real_pubkey_and_rejects_prompt_injection() {
 }
 
 #[test]
-fn config_is_https_only_and_requires_the_price_key() {
+fn config_is_https_only_and_rejects_header_injection() {
     let mut section = HashMap::new();
-    assert_eq!(
-        PortfolioConfig::from_section(&section).unwrap_err(),
-        "missing config key: jupiter_api_key"
-    );
+    let keyless = PortfolioConfig::from_section(&section).unwrap();
+    assert!(keyless.jupiter_api_key.is_empty());
+    assert_eq!(keyless.max_price_ids, 50);
 
-    section.insert("jupiter_api_key".into(), "secret-key".into());
     section.insert("rpc_url".into(), "http://rpc.example".into());
     assert!(PortfolioConfig::from_section(&section)
         .unwrap_err()
         .contains("HTTPS"));
 
     section.insert("rpc_url".into(), "https://rpc.example".into());
+    section.insert("jupiter_api_key".into(), "secret-key".into());
     section.insert("max_positions".into(), "16".into());
     assert!(PortfolioConfig::from_section(&section)
         .unwrap_err()

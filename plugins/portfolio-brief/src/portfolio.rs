@@ -53,8 +53,7 @@ impl PortfolioConfig {
         let jupiter_api_key = section
             .get("jupiter_api_key")
             .map(|v| v.trim())
-            .filter(|v| !v.is_empty())
-            .ok_or_else(|| "missing config key: jupiter_api_key".to_string())?
+            .unwrap_or_default()
             .to_string();
         if jupiter_api_key.len() > 256
             || jupiter_api_key
