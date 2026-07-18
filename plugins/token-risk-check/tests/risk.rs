@@ -251,3 +251,23 @@ fn report_never_floods_the_context_window() {
         report.text
     );
 }
+
+#[test]
+fn hostile_rpc_duplicate_extension_flood_stays_bounded() {
+    // A compromised node returns a mint account padded with 5000 duplicate
+    // PermanentDelegate TLVs to blow up the agent's context. The report must
+    // collapse the duplicates and stay small — the exact scenario the README
+    // threat model claims immunity to.
+    let flood: Vec<(u16, Vec<u8>)> = (0..5000).map(|_| (12u16, vec![8u8; 32])).collect();
+    let rpc = MockRpc::new(&token_2022_program(), mint_data(false, false, &flood));
+    let report = assess(&rpc);
+    assert_eq!(report.verdict, Verdict::Red);
+    assert!(
+        report.text.len() < 2100,
+        "flood report is {} chars — must stay bounded",
+        report.text.len()
+    );
+    // Only one delegate line survives, plus the malformed-mint flag.
+    assert_eq!(report.text.matches("permanent delegate").count(), 1);
+    assert!(report.text.contains("malformed mint"));
+}

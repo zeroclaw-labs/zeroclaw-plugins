@@ -196,6 +196,9 @@ fn percent_encode(s: &str) -> String {
 /// Every guardrail failure is an `Err` — the tool never "corrects" a request.
 pub fn build_request(args: &PayArgs, cfg: &PayConfig) -> Result<PayRequest, String> {
     validate_decimal(&args.amount)?;
+    if !args.amount.chars().any(|c| c.is_ascii_digit() && c != '0') {
+        return Err("refused: amount must be greater than zero".to_string());
+    }
 
     let symbol = args
         .token

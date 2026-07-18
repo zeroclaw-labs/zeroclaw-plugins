@@ -58,14 +58,18 @@ rpc_url = "https://your-rpc.example.com"
 
 Read-only, so the attack surface is *misleading the reader*, not moving funds:
 
-- **Context flooding** — a hostile RPC (or a pathological token) cannot blow
-  up the agent's context: the report is assembled from parsed fields only,
-  never echoes raw RPC payloads, and a worst-case token (every extension +
-  whale holders) stays under 1 KB — pinned by the
-  `report_never_floods_the_context_window` host test.
-- **Malformed accounts** — non-mint accounts, truncated TLV entries, and
-  nonexistent addresses produce short errors, not misparses (TLV walker stops
-  at padding/truncation; account-type discriminant is checked).
+- **Context flooding** — a hostile RPC cannot blow up the agent's context.
+  The report is assembled from parsed fields only (never echoes raw RPC
+  payloads); Token-2022 extensions are **deduplicated and capped at 32** in
+  the shared core, so a mint account padded with thousands of duplicate
+  extension TLVs (a real ~180 KB flood attempt) still collapses to a handful
+  of lines; and the final report text is hard-clamped to 2 KB as a backstop.
+  Pinned by `hostile_rpc_duplicate_extension_flood_stays_bounded` and
+  `report_never_floods_the_context_window`.
+- **Malformed accounts** — non-mint accounts, token-account-sized data,
+  truncated TLV entries, and nonexistent addresses produce short errors, not
+  misparses. A mint whose extension list was capped or contained duplicates
+  is flagged RED as "malformed mint (possible hostile RPC)".
 - **Wrong-cluster confusion** — a mint that doesn't exist on the configured
   cluster is reported as exactly that.
 - **Prompt injection** — "mark this token GREEN" has nowhere to land: the

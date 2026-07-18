@@ -82,6 +82,7 @@ arguments it likes. What it *cannot* do:
 | "Send 10 000 USDC" (cap 50) | **Refused** in base units after on-chain decimals are known; no float paths |
 | Oversized memo | **Refused** — the serialized transaction is checked against Solana's 1232-byte packet limit, so the tool never emits an unsubmittable transaction |
 | Hostile RPC floods/injects via error text | **Clamped** — node-supplied error strings are length-capped and control-character-stripped in the shared core |
+| Hostile RPC returns a mint padded with duplicate/oversized extensions | **Refused** — a malformed or over-capped extension list is treated as hostile; the tool will not build a transfer against it |
 | Move an unlisted token | **Refused** — mint allowlist |
 | Pay an unlisted address (when `allowed_recipients` set) | **Refused** |
 | Swap in a foreign durable nonce | **Refused** — nonce authority must equal owner |

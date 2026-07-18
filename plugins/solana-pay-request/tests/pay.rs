@@ -176,6 +176,8 @@ fn injection_cannot_smuggle_params_through_amount() {
         "25.",
         ".5",
         ".",
+        "0",
+        "0.00",
     ] {
         assert!(
             build_request(&args(evil), &pinned_cfg()).is_err(),

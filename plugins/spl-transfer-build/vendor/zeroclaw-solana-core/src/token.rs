@@ -65,11 +65,16 @@ pub struct MintInfo {
     pub supply: u64,
     pub decimals: u8,
     pub extensions: Vec<Extension>,
+    /// True when the extension list was cut short (cap hit or duplicate
+    /// flood) — a signal that the mint account is malformed or hostile.
+    pub extensions_truncated: bool,
 }
 
+/// A COption<Pubkey>: the tag is 0 (None) or 1 (Some); any other value is a
+/// malformed account, treated as None rather than trusting stray bytes.
 fn read_coption_pubkey(data: &[u8]) -> Option<Pubkey> {
     let tag = u32::from_le_bytes(data[0..4].try_into().unwrap());
-    if tag == 0 {
+    if tag != 1 {
         return None;
     }
     let mut key = [0u8; 32];
@@ -114,11 +119,14 @@ pub fn parse_mint(data: &[u8]) -> Result<MintInfo, String> {
     let freeze_authority = read_coption_pubkey(&data[46..82]);
 
     let mut extensions = Vec::new();
+    let mut extensions_truncated = false;
     if data.len() > ACCOUNT_TYPE_OFFSET {
         if data[ACCOUNT_TYPE_OFFSET] != ACCOUNT_TYPE_MINT {
             return Err("extended account is not a mint".to_string());
         }
-        extensions = parse_tlv_extensions(&data[ACCOUNT_TYPE_OFFSET + 1..]);
+        let parsed = parse_tlv_extensions(&data[ACCOUNT_TYPE_OFFSET + 1..]);
+        extensions = parsed.extensions;
+        extensions_truncated = parsed.truncated;
     }
 
     Ok(MintInfo {
@@ -127,11 +135,29 @@ pub fn parse_mint(data: &[u8]) -> Result<MintInfo, String> {
         supply,
         decimals,
         extensions,
+        extensions_truncated,
     })
 }
 
-fn parse_tlv_extensions(mut tlv: &[u8]) -> Vec<Extension> {
+/// Upper bound on distinct Token-2022 mint extensions the program defines is
+/// well under this. A real mint cannot exceed it; a response that tries to is
+/// a hostile RPC padding the account to flood a downstream context window, so
+/// we stop parsing and flag it. This caps every consumer's output size at the
+/// source — the risk report and transfer summary can never scale with a
+/// malicious payload.
+pub const MAX_EXTENSIONS: usize = 32;
+
+/// Parsed extensions plus whether the entry list was cut short (cap hit or a
+/// duplicate flood), so callers can surface "malformed/oversized mint".
+pub struct ParsedExtensions {
+    pub extensions: Vec<Extension>,
+    pub truncated: bool,
+}
+
+fn parse_tlv_extensions(mut tlv: &[u8]) -> ParsedExtensions {
     let mut extensions = Vec::new();
+    let mut seen_types = std::collections::HashSet::new();
+    let mut truncated = false;
     while tlv.len() >= 4 {
         let ext_type = u16::from_le_bytes(tlv[0..2].try_into().unwrap());
         let len = u16::from_le_bytes(tlv[2..4].try_into().unwrap()) as usize;
@@ -141,11 +167,24 @@ fn parse_tlv_extensions(mut tlv: &[u8]) -> Vec<Extension> {
         if tlv.len() < 4 + len {
             break; // Truncated entry; stop rather than misparse.
         }
-        let value = &tlv[4..4 + len];
-        extensions.push(decode_extension(ext_type, value));
+        // Each extension type appears at most once on a real mint. A repeat
+        // is a flood vector or a malformed account: skip it, but flag that the
+        // list was not clean so callers can surface "malformed mint".
+        if seen_types.insert(ext_type) {
+            extensions.push(decode_extension(ext_type, &tlv[4..4 + len]));
+            if extensions.len() >= MAX_EXTENSIONS {
+                truncated = true;
+                break;
+            }
+        } else {
+            truncated = true;
+        }
         tlv = &tlv[4 + len..];
     }
-    extensions
+    ParsedExtensions {
+        extensions,
+        truncated,
+    }
 }
 
 fn decode_extension(ext_type: u16, value: &[u8]) -> Extension {
@@ -267,6 +306,40 @@ mod tests {
         let mut data = base_mint(None, None);
         data[45] = 0;
         assert!(parse_mint(&data).is_err());
+    }
+
+    #[test]
+    fn duplicate_extension_flood_is_bounded() {
+        // A hostile RPC pads the account with thousands of duplicate
+        // PermanentDelegate TLVs to blow up a downstream context window.
+        // Parsing must dedupe to a single extension and flag truncation —
+        // never return a Vec that scales with the payload.
+        let mut data = base_mint(None, None);
+        data.resize(ACCOUNT_TYPE_OFFSET, 0);
+        data.push(ACCOUNT_TYPE_MINT);
+        for _ in 0..5000 {
+            data.extend_from_slice(&12u16.to_le_bytes());
+            data.extend_from_slice(&32u16.to_le_bytes());
+            data.extend_from_slice(&[8u8; 32]);
+        }
+        let info = parse_mint(&data).unwrap();
+        assert_eq!(info.extensions.len(), 1, "duplicates must collapse to one");
+        assert!(matches!(
+            info.extensions[0],
+            Extension::PermanentDelegate { .. }
+        ));
+
+        // Many *distinct* junk types are capped, not unbounded.
+        let mut many = base_mint(None, None);
+        many.resize(ACCOUNT_TYPE_OFFSET, 0);
+        many.push(ACCOUNT_TYPE_MINT);
+        for t in 100u16..100 + 200 {
+            many.extend_from_slice(&t.to_le_bytes());
+            many.extend_from_slice(&0u16.to_le_bytes());
+        }
+        let info = parse_mint(&many).unwrap();
+        assert!(info.extensions.len() <= MAX_EXTENSIONS);
+        assert!(info.extensions_truncated);
     }
 
     #[test]

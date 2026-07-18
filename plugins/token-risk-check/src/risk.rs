@@ -100,6 +100,13 @@ pub fn assess_mint<T: HttpTransport>(
     let mut red: Vec<String> = Vec::new();
     let mut amber: Vec<String> = Vec::new();
 
+    if info.extensions_truncated {
+        red.push(
+            "malformed mint: extension list is oversized or padded with duplicates \
+             (possible hostile RPC); results below may be incomplete"
+                .to_string(),
+        );
+    }
     if info.mint_authority.is_some() {
         amber.push("mint authority active: supply can be inflated at will".to_string());
     }
@@ -206,6 +213,13 @@ pub fn assess_mint<T: HttpTransport>(
         );
     }
     text.push_str(&concentration);
+
+    // Belt-and-suspenders: the extension cap already bounds this, but never
+    // hand the agent an oversized report even if a future field regresses.
+    const MAX_REPORT_CHARS: usize = 2000;
+    if text.chars().count() > MAX_REPORT_CHARS {
+        text = text.chars().take(MAX_REPORT_CHARS).collect::<String>() + "\n…(report truncated)";
+    }
 
     Ok(RiskReport { verdict, text })
 }

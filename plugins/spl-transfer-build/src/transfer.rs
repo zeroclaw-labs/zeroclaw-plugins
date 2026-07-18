@@ -258,6 +258,14 @@ pub fn build_transfer<T: HttpTransport>(
             return Err(format!("{mint} is not owned by a token program"));
         };
         let info = parse_mint(&mint_account.data)?;
+        // An oversized / duplicate-padded extension list means the mint
+        // account is malformed or the RPC is hostile. We are about to move
+        // money against it — refuse rather than transfer on bad data.
+        if info.extensions_truncated {
+            return Err("refused: mint has a malformed or oversized extension list \
+                 (possible hostile RPC); not building a transfer against it"
+                .to_string());
+        }
         screen_extensions(&info.extensions, &mut notes)?;
 
         let amount_base = checked_amount(&args.amount, info.decimals, cap)?;
