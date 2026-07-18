@@ -1,0 +1,9 @@
+name = "lending-health"
+version = "0.1.0"
+description = "Read-only Kamino lending position health for Solana wallets."
+author = "CECILIA-MULANDI"
+wasm_path = "lending_health.wasm"
+capabilities = ["tool"]
+# http_client: JSON reads against Kamino's public API and (for v0.2) Solana RPC.
+# config_read: reads endpoint URL, wallet address, and alert thresholds.
+permissions = ["http_client", "config_read"]
