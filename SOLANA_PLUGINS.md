@@ -166,3 +166,12 @@ MIT
 ## Author
 
 Levrone ([@levr_nx](https://x.com/levr_nx)) — [GitHub](https://github.com/cutlerjay109-create)
+
+## What we'd build next
+
+1. **lending-health** (T0) — Kamino/MarginFi health factor monitor with cron SOP alerts when health drops below 1.15
+2. **portfolio-brief** (T0) — token balances + prices + 24h delta shaped to ~200 tokens for a daily briefing SOP
+3. **solana-pay-request** (T1) — generate Solana Pay QR URLs so any ZeroClaw Telegram agent becomes a payment terminal
+4. **governance-watch** (T0) — Realms proposal alerts and summaries
+
+These four would complete a full Track D + Track A suite, giving ZeroClaw agents complete Solana awareness from safety checking through payments.
