@@ -1,0 +1,9 @@
+name = "solana-priority-fee"
+version = "0.1.0"
+description = "Estimate recent Solana priority fees with account-aware percentiles and a hard recommendation cap"
+author = "ZeroClaw community contributor"
+wasm_path = "solana_priority_fee.wasm"
+capabilities = ["tool"]
+# http_client: call the trusted operator-configured Solana HTTPS RPC endpoint.
+# config_read: read only this plugin's rpc_url and bounded estimation policy.
+permissions = ["http_client", "config_read"]
