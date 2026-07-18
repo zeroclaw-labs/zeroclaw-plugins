@@ -1,0 +1,9 @@
+name = "address-activity"
+version = "0.1.0"
+description = "Read the ten latest confirmed signatures involving a public Solana address."
+author = "Mateo Rojas"
+wasm_path = "address_activity.wasm"
+capabilities = ["tool"]
+# http_client: one read-only getSignaturesForAddress request.
+# config_read: reads only rpc_url and commitment.
+permissions = ["http_client", "config_read"]
