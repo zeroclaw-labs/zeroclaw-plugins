@@ -165,10 +165,13 @@ channel run are required before the demo can be claimed complete.
 
 Runtime evidence: the component was installed into an official ZeroClaw v0.8.3
 build with the WASM plugin runtime enabled. A real agent call against Solana
-mainnet returned 150 account-scoped samples, a nonzero raw p75 recommendation,
-and `recommendationCapped: true` after applying the operator cap. The remaining
-demo gate is transport through a user-controlled real channel. Do not present a
-CLI-only run as the required Telegram/Discord demo.
+mainnet was then exercised through a user-controlled Telegram bot. The first
+account-scoped p75 call returned 150 samples and an uncapped zero recommendation;
+a second p95 call with a fresh writable-account set returned
+`rawRecommendation: 400000`, `recommended: 1000`, and
+`recommendationCapped: true` after applying the operator cap. The real-channel
+demo is available at https://youtu.be/M5zm0C2J0xc and shows both the tool-call
+cards and final agent responses.
 
 ## Limitations and next step
 
