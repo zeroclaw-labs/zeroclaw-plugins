@@ -1,0 +1,7 @@
+name = "payment-watch"
+version = "0.1.0"
+description = "Watch Solana address for expected payments by reference key — SOP-triggered"
+author = "Khaa Labs"
+wasm_path = "payment_watch.wasm"
+capabilities = ["tool"]
+permissions = ["http_client", "config_read"]

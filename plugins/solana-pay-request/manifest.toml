@@ -1,0 +1,7 @@
+name = "solana-pay-request"
+version = "0.1.0"
+description = "Build Solana Pay transfer request URLs for payment terminals"
+author = "Khaa Labs"
+wasm_path = "solana_pay_request.wasm"
+capabilities = ["tool"]
+permissions = ["config_read"]
