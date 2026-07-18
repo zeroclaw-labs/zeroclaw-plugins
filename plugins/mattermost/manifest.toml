@@ -1,5 +1,5 @@
 name = "mattermost"
-version = "0.2.0"
+version = "0.2.1"
 description = "Mattermost channel plugin for ZeroClaw: v4 REST channel-post polling + createPost over wasi:http."
 author = "JordanTheJet"
 wasm_path = "mattermost.wasm"

@@ -32,9 +32,9 @@ mod component {
     use serde_json::Value;
 
     use crate::mattermost::{
-        Inbound, MattermostConfig, build_send_body, extract_posts, me_url, parse_post,
-        parse_self_user_id, parse_self_username, post_create_at, posts_poll_url, posts_url,
-        split_recipient,
+        build_send_body, extract_posts, me_url, parse_post, parse_self_user_id,
+        parse_self_username, post_create_at, posts_poll_url, posts_url, split_recipient, Inbound,
+        MattermostConfig,
     };
 
     use exports::zeroclaw::plugin::channel::{
@@ -51,7 +51,7 @@ mod component {
         // Poll cursor: the max post `create_at` (Unix ms) delivered so far. Seeded
         // to "now" in `configure` so the channel backlog is ignored on startup.
         static CURSOR: Cell<i64> = const { Cell::new(0) };
-        static BUFFER: RefCell<VecDeque<Inbound>> = RefCell::new(VecDeque::new());
+        static BUFFER: RefCell<VecDeque<Inbound>> = const { RefCell::new(VecDeque::new()) };
         // Bot user id — `self_handle` + the self-loop guard in `parse_post`.
         static SELF_USER_ID: RefCell<Option<String>> = const { RefCell::new(None) };
         // Bot `@username` — `self_addressed_mention`.
@@ -188,7 +188,9 @@ mod component {
             if posts.is_empty() {
                 return None;
             }
-            let self_id = SELF_USER_ID.with(|u| u.borrow().clone()).unwrap_or_default();
+            let self_id = SELF_USER_ID
+                .with(|u| u.borrow().clone())
+                .unwrap_or_default();
             let thread_replies = cfg.thread_replies();
             let mut max_create = since;
             for post in &posts {
