@@ -1,0 +1,30 @@
+# Standalone crate (own [workspace]): built for wasm32-wasip2 as a tool plugin.
+# This plugin is PURE computation — it builds a Solana Pay URL and never touches
+# the network or config. It depends on solana-core WITHOUT the `http` feature,
+# so its component imports no `wasi:http` and its manifest declares zero
+# permissions. Nothing to inject, nothing to leak.
+[package]
+name = "solana-pay-request"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "ZeroClaw tool plugin (T1): turn 'charge 25 USDC' into a Solana Pay transfer-request URL + QR payload. Zero secrets, zero network."
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+wit-bindgen = "0.46"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+solana-core = { path = "../../crates/solana-core" }
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true
+codegen-units = 1
+
+# Standalone crate: built for wasm32-wasip2, not part of the host workspace.
+[workspace]
