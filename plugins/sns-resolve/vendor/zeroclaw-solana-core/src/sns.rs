@@ -127,7 +127,7 @@ mod tests {
         assert!(parse_registry_owner(&[0u8; 10]).is_err());
         // All-zero owner (closed/malformed record) is rejected, not reported
         // as the system-program address.
-        assert!(parse_registry_owner(&vec![0u8; NAME_HEADER_LEN]).is_err());
+        assert!(parse_registry_owner(&[0u8; NAME_HEADER_LEN]).is_err());
     }
 
     #[test]
