@@ -238,3 +238,32 @@ of this plugin.
 - An upstream maintainer must approve the first fork-originated Actions run on
   draft PR 54. The same exact workflow is already green in the fork.
 - `spl-transfer-build` and every M3 concern remain unstarted.
+
+## M3 shared-core regression addendum
+
+Recorded 2026-07-18 after the focused M3 core evolution. This addendum
+supersedes only the dependency/artifact facts above; it does not rewrite the
+preserved M2.5 execution record.
+
+- Both plugin manifests now pin immutable `nanosol` revision
+  `989cd0d3bd25ce6a2d796f72c0dc6a4ae56d989f` from
+  <https://github.com/Fianko-codes/zeroclaw-solana>. No branch dependency or
+  local path is used.
+- M2 now calls the shared `nanosol::reference::derive_payment_reference`
+  implementation. The framing, asset discriminator, digest bytes, base58
+  reference, URL, QR payload, and all other M2 golden behavior are unchanged.
+- At validated implementation head
+  `8d3895cea02c7e4722602a43598b1159cd562c5e`, all five required Rust 1.96.1
+  commands passed again from `plugins/solana-pay-request`: `fmt --check`,
+  locked host tests, host Clippy with warnings denied, WASM Clippy with warnings
+  denied, and locked release WASM build.
+- Result: 25 tests passed, 0 failed, 0 ignored. The final clean-clone strict
+  validator also reported test/clippy/WASM-build exit codes `0/0/0/0` and a
+  clean source-mutation guard.
+- Fresh-`CARGO_HOME` strict staged artifact: 230,812 bytes; SHA-256
+  `4d0a6469de763b8ebca3ceac35c5cb6c9e67f5bcb2816f05d85ac22467daf8bd`.
+  Cargo embeds source paths, so this supersedes the earlier artifact identity
+  only for the M3 branch and validation environment.
+- The cross-component M3 golden test reproduces M2 reference
+  `ECvLKMSgRzVdJjZsdiGAPcRSjwVjS9f7HxizfC256Kei` for the same framed invoice
+  tuple. No M2 schema, permissions, custody boundary, or output shape changed.

@@ -310,6 +310,18 @@ the decoded shape, and confirmation; never commit the keypair or its seed.
 The exact M3 acceptance run, public signature, component hash, and bounded host
 transcript are recorded in `RESULTS.md` after execution.
 
+The preserved acceptance fixture used sender
+`DY8kZcYtLkPBsRgu9BGfRirKsK3Jnf1eDn8LyYiJkxw9`, disposable legacy mint
+`Ha9rCm2gQphTYZpEjTGE2un9Nm85SS6coTSS4jidmzY9`, and recipient
+`ERajJRamvLoNyDmboTE6JjR4rPp16ZHdTwcnqcMz7kjH`. The plugin built and simulated
+an unsigned 1.25-token proposal. A separate disposable signer filled the one
+signature slot without changing the message, and an external RPC client
+submitted it. Devnet finalized public signature
+[`4vmwtcaV5tohLi2TGY6SnZVKvuvff1je3wxXYM2p328pfxtzbEf5jj4FSpXNX6794x3y4TfCrJ634UbsLEFExhLn`](https://explorer.solana.com/tx/4vmwtcaV5tohLi2TGY6SnZVKvuvff1je3wxXYM2p328pfxtzbEf5jj4FSpXNX6794x3y4TfCrJ634UbsLEFExhLn?cluster=devnet),
+after which independent balance reads returned recipient `1.25` and sender
+`98.75`. The plugin received only the sender public key; it never received the
+disposable signing key.
+
 ## Known limitations
 
 - One SPL-token recipient and one configured sender per invocation.
