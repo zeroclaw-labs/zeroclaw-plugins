@@ -1,0 +1,9 @@
+name = "token-risk-check"
+version = "0.1.0"
+description = "Given a Solana mint, return a compact red/amber/green report: authorities, holders, LP liquidity/locks, and Token-2022 extensions."
+author = "Isaí Vicente Moreno Lara"
+wasm_path = "token_risk_check.wasm"
+capabilities = ["tool"]
+# http_client: outbound Solana JSON-RPC and RugCheck liquidity calls through wasi:http.
+# config_read: optional endpoints and risk thresholds.
+permissions = ["http_client", "config_read"]
