@@ -1,0 +1,9 @@
+name = "stake-monitor"
+version = "0.1.0"
+description = "Read-only Solana stake-account lifecycle, delegated validator health, and prior-epoch rewards"
+author = "Mateo"
+wasm_path = "stake_monitor.wasm"
+capabilities = ["tool"]
+# http_client: four bounded JSON-RPC reads against the operator-configured endpoint.
+# config_read: reads only rpc_url, commitment, and local alert thresholds.
+permissions = ["http_client", "config_read"]
