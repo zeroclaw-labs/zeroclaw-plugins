@@ -26,8 +26,14 @@ pub fn sol_tld_authority() -> Pubkey {
     Pubkey::parse("58PwtjSDuFHuUkYjH9BYnnQKHfwo9reZhC2zMJv9JPkx").unwrap()
 }
 
+/// A defensive upper bound on the label length. SNS itself imposes no such
+/// limit (the label is hashed to 32 bytes regardless), so this is only a
+/// flood/abuse guard set well above any real `.sol` domain — never a protocol
+/// maximum.
+const MAX_LABEL_LEN: usize = 63;
+
 /// Normalize a user-supplied domain: trim, lowercase, strip a single trailing
-/// `.sol`. Rejects empty, over-long, subdomain (`a.b.sol`), and non-label
+/// `.sol`. Rejects empty, absurdly long, subdomain (`a.b.sol`), and non-label
 /// characters — a `.sol` label is `[a-z0-9-]`.
 pub fn normalize_domain(input: &str) -> Result<String, String> {
     let d = input.trim().trim_start_matches('@').to_ascii_lowercase();
@@ -35,8 +41,8 @@ pub fn normalize_domain(input: &str) -> Result<String, String> {
     if d.is_empty() {
         return Err("empty domain".to_string());
     }
-    if d.len() > 32 {
-        return Err("domain label too long (max 32 chars)".to_string());
+    if d.len() > MAX_LABEL_LEN {
+        return Err("domain is too long".to_string());
     }
     if d.contains('.') {
         return Err("subdomains are not supported; use a bare name like \"lucas.sol\"".to_string());
@@ -91,7 +97,8 @@ mod tests {
         assert!(normalize_domain("a.b.sol").is_err());
         assert!(normalize_domain("bad name").is_err());
         assert!(normalize_domain("emoji😀.sol").is_err());
-        assert!(normalize_domain(&"x".repeat(40)).is_err());
+        assert!(normalize_domain(&"x".repeat(70)).is_err()); // above the flood guard
+        assert!(normalize_domain(&"x".repeat(40)).is_ok()); // long but valid
     }
 
     #[test]

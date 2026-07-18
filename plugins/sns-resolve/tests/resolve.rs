@@ -102,7 +102,7 @@ fn derived_collision_with_a_non_registry_account_is_rejected() {
 #[test]
 fn malformed_inputs_fail_closed() {
     let rpc = MockRpc::with_registry([1u8; 32]);
-    for bad in ["", ".sol", "a.b.sol", "bad name", &"x".repeat(40)] {
+    for bad in ["", ".sol", "a.b.sol", "bad name", &"x".repeat(70)] {
         assert!(
             resolve_domain(&rpc, bad, &cfg()).is_err(),
             "{bad:?} should fail"
