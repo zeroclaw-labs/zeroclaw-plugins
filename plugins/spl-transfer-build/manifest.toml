@@ -1,0 +1,7 @@
+name = "spl-transfer-build"
+version = "0.1.0"
+description = "Build and verify an unsigned v0 SPL token transfer using a recent blockhash"
+author = "ZeroClaw Solana contributors"
+wasm_path = "spl_transfer_build.wasm"
+capabilities = ["tool"]
+permissions = ["http_client", "config_read"]

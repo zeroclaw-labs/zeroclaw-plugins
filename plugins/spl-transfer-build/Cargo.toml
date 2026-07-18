@@ -1,10 +1,10 @@
 [package]
-name = "solana-pay-request"
+name = "spl-transfer-build"
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.81"
 license = "MIT"
-description = "ZeroClaw tool plugin for deterministic, zero-network Solana Pay requests"
+description = "ZeroClaw tool plugin for verified unsigned SPL transfer transactions"
 repository = "https://github.com/zeroclaw-labs/zeroclaw-plugins"
 publish = false
 
@@ -12,11 +12,14 @@ publish = false
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
+base64 = "0.22"
 nanosol = { git = "https://github.com/Fianko-codes/zeroclaw-solana.git", rev = "989cd0d3bd25ce6a2d796f72c0dc6a4ae56d989f" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+url = "2"
 
 [target.'cfg(target_family = "wasm")'.dependencies]
+waki = "0.5.1"
 wit-bindgen = "0.46"
 
 [profile.release]

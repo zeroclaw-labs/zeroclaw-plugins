@@ -9,12 +9,12 @@ use std::{
 use nanosol::{
     amount::{format_ui_amount, parse_ui_amount, AmountError, MAX_SUPPORTED_DECIMALS},
     pubkey::Pubkey,
+    reference::{derive_payment_reference, PAYMENT_REFERENCE_DOMAIN},
     shape::{elide_address, quote_untrusted},
 };
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 
-pub const REFERENCE_DOMAIN: &[u8] = b"zeroclaw-solana-pay-v1";
+pub const REFERENCE_DOMAIN: &[u8] = PAYMENT_REFERENCE_DOMAIN;
 pub const MAX_TOOL_OUTPUT_BYTES: usize = 4_000;
 pub const MAX_URL_BYTES: usize = 1_600;
 
@@ -27,7 +27,6 @@ const MAX_ALIAS_BYTES: usize = 24;
 const MAX_MINT_ALIASES: usize = 32;
 const MAX_ALLOWED_RECIPIENTS: usize = 128;
 const SUMMARY_INVOICE_CHARS: usize = 80;
-const NATIVE_SOL_MINT_SENTINEL: [u8; 32] = [0; 32];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RequestArgs {
@@ -415,22 +414,7 @@ pub fn derive_reference(
     canonical_amount: &str,
     invoice_id: &str,
 ) -> Pubkey {
-    let mut hasher = Sha256::new();
-    hasher.update(REFERENCE_DOMAIN);
-    hasher.update(recipient.as_bytes());
-    match mint {
-        Some(mint) => {
-            hasher.update([1]);
-            hasher.update(mint.as_bytes());
-        }
-        None => {
-            hasher.update([0]);
-            hasher.update(NATIVE_SOL_MINT_SENTINEL);
-        }
-    }
-    update_frame(&mut hasher, canonical_amount.as_bytes());
-    update_frame(&mut hasher, invoice_id.as_bytes());
-    Pubkey::new(hasher.finalize().into())
+    derive_payment_reference(recipient, mint, canonical_amount, invoice_id)
 }
 
 pub fn parameters_schema() -> String {
@@ -606,12 +590,6 @@ fn form_urlencode(input: &str) -> String {
         }
     }
     output
-}
-
-fn update_frame(hasher: &mut Sha256, value: &[u8]) {
-    let length = u32::try_from(value.len()).unwrap_or(u32::MAX);
-    hasher.update(length.to_be_bytes());
-    hasher.update(value);
 }
 
 fn serialize_output(output: RequestOutput) -> Result<String, RequestError> {
