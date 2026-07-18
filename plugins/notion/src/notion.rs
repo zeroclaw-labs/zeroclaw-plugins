@@ -10,8 +10,11 @@
 //! `#[cfg(target_family = "wasm")]` component shim in `lib.rs` does only the
 //! HTTP (blocking `waki` `wasi:http` calls) and reuses this logic verbatim.
 
-use serde::Deserialize;
-use serde_json::{Value, json};
+use std::fmt::Display;
+use std::str::FromStr;
+
+use serde::{de, Deserialize, Deserializer};
+use serde_json::{json, Value};
 
 /// Notion rich-text property content cap (characters). Results longer than this
 /// are truncated before being written back.
@@ -36,7 +39,10 @@ pub struct NotionConfig {
     #[serde(default)]
     pub database_id: String,
     /// Seconds between polls (host-side loop cadence; informational here).
-    #[serde(default = "default_poll_interval")]
+    #[serde(
+        default = "default_poll_interval",
+        deserialize_with = "deserialize_poll_interval"
+    )]
     pub poll_interval_secs: u64,
     /// Name of the select/status property that holds the task state
     /// (`pending` / `running` / `done`).
@@ -49,11 +55,17 @@ pub struct NotionConfig {
     #[serde(default = "default_result_property")]
     pub result_property: String,
     /// Maximum tasks claimed (flipped to `running`) per poll tick.
-    #[serde(default = "default_max_concurrent")]
+    #[serde(
+        default = "default_max_concurrent",
+        deserialize_with = "deserialize_max_concurrent"
+    )]
     pub max_concurrent: usize,
     /// On load, reset any rows stuck in `running` (from a prior crash) back to
     /// `pending` so they are re-dispatched.
-    #[serde(default = "default_recover_stale")]
+    #[serde(
+        default = "default_recover_stale",
+        deserialize_with = "deserialize_recover_stale"
+    )]
     pub recover_stale: bool,
     /// API origin override for a test mock or self-host. Not part of the native
     /// config; defaults to the public Notion API base.
@@ -83,6 +95,59 @@ fn default_api_base_url() -> String {
     DEFAULT_API_BASE_URL.to_string()
 }
 
+fn deserialize_poll_interval<'de, D>(deserializer: D) -> Result<u64, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    deserialize_string_or_native(deserializer, "poll_interval_secs", "a non-negative integer")
+}
+
+fn deserialize_max_concurrent<'de, D>(deserializer: D) -> Result<usize, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    deserialize_string_or_native(deserializer, "max_concurrent", "a non-negative integer")
+}
+
+fn deserialize_recover_stale<'de, D>(deserializer: D) -> Result<bool, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    deserialize_string_or_native(deserializer, "recover_stale", "true or false")
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum StringOrNative<T> {
+    String(String),
+    Native(T),
+}
+
+fn deserialize_string_or_native<'de, D, T>(
+    deserializer: D,
+    field: &str,
+    expected: &str,
+) -> Result<T, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de> + FromStr,
+    T::Err: Display,
+{
+    let value = StringOrNative::<T>::deserialize(deserializer).map_err(|_| {
+        de::Error::custom(format!(
+            "notion config field '{field}' must be {expected} or its string form"
+        ))
+    })?;
+    match value {
+        StringOrNative::Native(value) => Ok(value),
+        StringOrNative::String(value) => value.parse().map_err(|error| {
+            de::Error::custom(format!(
+                "notion config field '{field}' must be {expected} or its string form; got {value:?}: {error}"
+            ))
+        }),
+    }
+}
+
 impl Default for NotionConfig {
     fn default() -> Self {
         Self {
@@ -100,11 +165,13 @@ impl Default for NotionConfig {
 }
 
 impl NotionConfig {
-    /// Parse the JSON config string the host hands to `configure`. An empty or
-    /// malformed string yields defaults (so a mis-permissioned `"{}"` is inert
-    /// rather than a hard failure).
-    pub fn from_json(config_json: &str) -> Self {
-        serde_json::from_str(config_json).unwrap_or_default()
+    /// Parse the JSON config string the host hands to `configure`. A withheld
+    /// `"{}"` remains inert, while malformed JSON or invalid field values return
+    /// an actionable error instead of silently replacing the whole config with
+    /// defaults.
+    pub fn from_json(config_json: &str) -> Result<Self, String> {
+        serde_json::from_str(config_json)
+            .map_err(|error| format!("notion config could not be parsed: {error}"))
     }
 
     /// Both the token and the target database are required to reach the API.

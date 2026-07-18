@@ -1,5 +1,5 @@
 name = "notion"
-version = "0.2.0"
+version = "0.2.1"
 description = "Notion task-queue channel plugin for ZeroClaw: poll a database for pending tasks and write results back over wasi:http."
 author = "JordanTheJet"
 wasm_path = "notion.wasm"
