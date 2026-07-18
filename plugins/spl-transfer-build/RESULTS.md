@@ -370,3 +370,185 @@ here so they are not misreported as passes:
 
 None of these remaining risks authorizes M4 behavior. Durable nonce remains
 explicitly deferred to M4.
+
+## M3.5 security-audit remediation and release freeze
+
+### Audit record and immutable baseline
+
+This section records the Milestone 3.5 remediation of the external audit in
+the repository-root `M3_SECURITY_AUDIT.md`. The audit verdict was 0 Critical,
+0 High, 1 Medium, and 4 Low findings. Its independent 11-case serialized-wire
+harness found zero verifier bypasses. The remediation began from a clean
+tracked worktree at fork commit
+`3f7f8e9a5db1a7d7c626d1f22ace166cd0d02b17`; upstream remained
+`23a5dcb953f697cae08d8e2802b39894ac9ddda1`, and PR #54 was open and draft
+with no maintainer review, comment, CI result, or packaging decision.
+
+The known-good M3 head is preserved publicly by the annotated, non-rewritten
+tag `m3-known-good-3f7f8e9`, which resolves to that exact commit. Remediation
+was isolated on `agent/m35-audit-remediation`. The production-and-test
+remediation commit is
+`d20320556d6b64defe81ca72f5bda7c0c7290bcb`. Both plugins still pin the
+unchanged immutable `nanosol` revision
+`989cd0d3bd25ce6a2d796f72c0dc6a4ae56d989f`; M3.5 did not change the core or
+any transaction-construction, serialization, instruction-order, or verifier
+semantics.
+
+### Remediations and committed regressions
+
+- A Token-2022 approval now includes: `Token-2022: displayed amount is the
+  transfer amount; net received may depend on mint extensions as reported by
+  the configured RPC.` The branch decision uses the token program decoded
+  from the final serialized transaction. The extension-free Token-2022
+  end-to-end fixture proves the qualifier is model-visible; the corresponding
+  legacy fixture proves it is absent. Existing amount, asset, recipient, ATA,
+  sender, memo, reference, and blockhash fields remain present, and the output
+  budget remains enforced.
+- Five audit harness mutations are now ordinary committed wire-level tests:
+  an unreferenced extra static key; a six-account transfer with a second
+  reference; both reference-policy direction mismatches; a noncanonical key
+  ordering with every instruction index remapped; and a separate readonly
+  signer as transfer authority. Every final-byte verifier check refuses; none
+  reaches or preserves a misleading approval summary. The previous mutation
+  suite remains intact.
+- A host oracle uses official dev-only
+  `spl-token-2022-interface = 3.1.1` extension machinery, from source commit
+  `e18f9c6f9bf6044b934f48e3090e8e59e4820f02`, to pack a Mint with
+  `TransferFeeConfig`. Its exact bytes have SHA-256
+  `3cbb482fdcae9086d23a0d76309e4865dc0ece0222d1972bbf4f3275466d0ba1`.
+  The test checks official account type and TLV offsets, core parsing, and the
+  plugin's semantics-changing-extension refusal. Official Solana crates remain
+  test-only dependencies.
+- Both components test execution after caller-controlled `__config` is
+  stripped and no trusted host configuration is injected. Payment-request
+  attacker aliases do not become policy, and transfer-build refuses before
+  transport use. The component value itself cannot authenticate field
+  provenance; current ZeroClaw `inject_config` stripping remains a documented
+  hard security dependency.
+- The smallest transport-agnostic response collector is shared by host tests
+  and the Waki path. HTTP 200 succeeds; redirects and 4xx/5xx refuse; the
+  documented size limit is inclusive; one byte over or aggregate chunk
+  overflow refuses; diagnostics reveal neither URL nor body.
+- Three additional Solana Pay vectors cover minimal native SOL, SPL token
+  without display text, and reserved/Unicode text. They were executed from
+  official `@solana/pay` source declaring version 1.0.22 at commit
+  `9b0f8ec70c509c946c387633ae4f1e3115ea4958`. The registry does not publish
+  1.0.22, so the exact source commit—not a nonexistent npm artifact—is the
+  reproducible oracle. Existing golden output is unchanged.
+- Both README openings now lead with operator utility. They also document the
+  Token-2022 RPC trust boundary, host config dependency, noncommitted CI-built
+  artifacts, path-dependent Cargo hashes, and the priority of semantic and
+  byte-level reproducibility.
+
+The new totals are 36 `nanosol` tests, 29 `solana-pay-request` tests, and 37
+`spl-transfer-build` tests. Payment-request categories are component 3,
+injection 6, output 3, request/golden 10, and validation 7. Transfer-build
+categories are component/injection 7, config/amount 6, RPC/simulation 6,
+Token policy 5, transaction/mutation 9, and transport 4. Repository tooling
+remains 17/17 and CI tooling 36/36. All tests are host-run with deterministic
+fixtures or mock transport; the real network is used only for separately
+recorded acceptance.
+
+### Validation and artifacts
+
+For `nanosol` and, separately, each plugin, these commands passed under Rust
+1.96.1:
+
+```bash
+cargo +1.96.1 fmt --check
+cargo +1.96.1 test --locked
+cargo +1.96.1 clippy --locked --all-targets -- -D warnings
+cargo +1.96.1 clippy --locked --target wasm32-wasip2 -- -D warnings
+cargo +1.96.1 build --locked --target wasm32-wasip2 --release
+```
+
+The M0 PDA oracle (`9` tests) and WASM spike passed. PR-mode change planning
+selected exactly both changed plugins. Host repository tooling (`17/17`), CI
+tooling (`36/36`), strict component validation for both plugins, WIT drift,
+source-mutation guards, metadata checks, package dry run, and exact
+publication-set verification all passed. A public fresh clone at the
+remediation commit, with a new empty `CARGO_HOME`, repeated both strict
+component pipelines and packaging successfully.
+
+Authoritative fresh-clone strict artifacts for the tested implementation:
+
+```text
+solana-pay-request: 230764 bytes
+SHA-256: d437ddd26e6badb8d8382b1f496915eddd06070c31dba18897aa58aa076526da
+
+spl-transfer-build: 689146 bytes
+SHA-256: 93208cf7edf1e3e7276902d2ac85771946bd14f235fe7349070e62a456bb26e4
+```
+
+The exact pinned-container wrapper could not run locally because this machine
+has no Docker socket. That command exited 1 without running tests; its
+underlying host Python suite passed 17/17, and the repository's pinned wrapper
+is exercised by the fork workflow. Development-only failures were an
+intentional placeholder fixture hash, one exact policy-message assertion,
+one Clippy `drop_non_drop` lint, strict validation seeing ignored local
+`target/` directories, an incorrectly shaped package-plan input, an
+unpublished npm version lookup, and public devnet faucet rate limiting. Each
+was corrected or bounded without weakening a security check; all corresponding
+final commands pass except the explicitly environment-blocked Docker wrapper.
+
+### Host, devnet, packaging, and residual risk
+
+ZeroClaw 0.8.3 discovered and executed both final clean-clone components. It
+reported `ConfigRead` for `solana-pay-request` and exactly `HttpClient,
+ConfigRead` for `spl-transfer-build`. A real payment-request call returned the
+expected official-vector URL and reference. A real transfer-build call used
+the configured devnet RPC, parsed live mint state, obtained a recent
+blockhash, simulated successfully, and returned a 475-byte unsigned v0
+transaction; the component received only the sender public key.
+
+Because M3.5 routes the Waki success path through the newly tested status/body
+collector, the externally signed devnet acceptance is repeated conservatively.
+The repeat used sender `Em1XUGLSa9ZEHY27ji81TsePMaXyAcxrQJfoZ36rH36a`,
+legacy mint `2QWDRwof3A56ZE3R4CC6iokK2gY4PsNik7HSyHQP8WxA`, recipient
+`Av3jRATKDH2CFWfbYZWLRmmn1k8mN6RUYk3ZC8Le6uoD`, source ATA
+`DmYtgmRL4tYjnHzi42ctt8xb5PT8FtY4G5ppEQTjo5Mk`, destination ATA
+`Ew2GeCMSzEkuDhWPq5NsBAPcRcZw329crBhutkBXHETC`, and reference
+`BEPTACJj2wvHWry39tGxFh9ryAVWsRMRkeEnmKLcigUd`. The real agent returned a
+475-byte unsigned transaction with SHA-256
+`0934375f5400e4d991efa6fd4afbae050235c45b2b94014f7269600157a436a7`.
+An isolated external Solders 0.27.1 helper independently required v0, one zero
+signature, one payer/signer, no ALT, the exact three programs/account orders,
+derived ATAs, raw amount 1,250,000, six decimals, one readonly reference, and
+the exact memo. It signed without changing the versioned message (SHA-256
+`6720090f84a0f08cbd1c3ea8dd0d72ebdde1dba3b4c9eae40226d2a77f838d1b`)
+and submitted outside ZeroClaw. The plugin never received either disposable
+key file.
+
+The repeat finalized with public signature
+[`PGbL4d1s39LsXMt3SKEKKP7BMh3RP1QeqnZbp8p2udyaPemPSXdGL97ho3jV8gspqBLCEmMd2iBFLJAHPTCmtRM`](https://explorer.solana.com/tx/PGbL4d1s39LsXMt3SKEKKP7BMh3RP1QeqnZbp8p2udyaPemPSXdGL97ho3jV8gspqBLCEmMd2iBFLJAHPTCmtRM?cluster=devnet).
+Independent CLI inspection reported message version 0, the exact
+CreateIdempotent/TransferChecked/Memo order, no ALT or extra instruction,
+23,853 compute units, and status `Ok`. Final balances were recipient 1.25 and
+sender 98.75 disposable tokens.
+
+No maintainer packaging response existed when remediation began. `nanosol`
+has not been published or relocated, and both plugins retain the exact pinned
+Git revision pending an explicit maintainer choice or acceptance. This remains
+an M3.5 gate and draft-review blocker, not a reason to invent a packaging
+policy.
+
+The Medium finding is corrected in the model-visible summary, but its root RPC
+trust-boundary condition is residual: one configured endpoint can still lie
+about Token-2022 mint bytes. The qualifier discloses that uncertainty without
+claiming a fee exists or that the RPC is honest. The audit's four Low risks
+remain bounded/documented: dependence on host-side `__config` provenance,
+limited independent official fixtures despite the new packed oracle,
+previously thin transport coverage now materially strengthened, and
+judge-facing utility/reproducibility communication now improved. Additional
+residual risks are recent-blockhash expiry, future Token-2022 evolution,
+stateless lack of per-day caps, signer-side approval responsibility, and the
+operator's OS-sandbox/RPC choices.
+
+### Security freeze
+
+The M3 implementation is security-frozen after this remediation: no feature
+addition, durable nonce, new transaction type, instruction-order change,
+verifier weakening, runtime dependency, or guardrail-semantic change is
+included. Future runtime dependencies or security-semantic changes require
+renewed targeted review and regression coverage. M4 and `payment-watch` are
+explicitly not included and have not begun.
