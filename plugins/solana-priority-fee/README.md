@@ -163,8 +163,12 @@ channel run are required before the demo can be claimed complete.
 5. Attempt an unknown `rpc_url` field and an oversized/prose account; show that
    both fail before network access.
 
-Demo evidence: pending a real ZeroClaw installation and user-controlled channel.
-Do not replace this line with a simulated or edited-to-appear-real run.
+Runtime evidence: the component was installed into an official ZeroClaw v0.8.3
+build with the WASM plugin runtime enabled. A real agent call against Solana
+mainnet returned 150 account-scoped samples, a nonzero raw p75 recommendation,
+and `recommendationCapped: true` after applying the operator cap. The remaining
+demo gate is transport through a user-controlled real channel. Do not present a
+CLI-only run as the required Telegram/Discord demo.
 
 ## Limitations and next step
 
