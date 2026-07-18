@@ -1,0 +1,11 @@
+name = "lending-health"
+version = "0.1.0"
+description = "Read-only Solana lending position health (Kamino): health factors, liquidation alerts, morning-briefing digests"
+author = "Rowland Akinduro"
+wasm_path = "lending_health.wasm"
+capabilities = ["tool"]
+# http_client: GET requests to the operator-configured lending API.
+# config_read: the host injects this plugin's own config section (wallet,
+# api_base, alert_threshold) into execute args as `__config`. `wallet` is
+# required; the plugin refuses to run unconfigured.
+permissions = ["http_client", "config_read"]
