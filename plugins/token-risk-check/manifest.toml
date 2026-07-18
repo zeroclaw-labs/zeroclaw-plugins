@@ -1,0 +1,19 @@
+# ZeroClaw plugin manifest — token-risk-check.
+# Fields mirror `PluginManifest` in crates/zeroclaw-plugins/src/lib.rs.
+name = "token-risk-check"
+version = "0.1.0"
+description = "T0 read-only safety report for any SPL / Token-2022 mint: authorities, holder concentration, transfer hooks, fees, permanent delegate → red/amber/green."
+author = "zeroclaw-solana-plugins contributors"
+
+# The compiled component. `cargo build --target wasm32-wasip2 --release` emits
+# target/wasm32-wasip2/release/token_risk_check.wasm; ship it under this name.
+wasm_path = "token_risk_check.wasm"
+
+# What it is: a single callable tool.
+capabilities = ["tool"]
+
+# What it may reach. Exactly two, both used:
+#   http_client — outbound wasi:http to the Solana RPC (TLS host-side).
+#   config_read — read the plugin's own `rpc_url` from its config jail.
+# No file or memory permissions: this tool needs neither.
+permissions = ["http_client", "config_read"]

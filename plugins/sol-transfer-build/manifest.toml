@@ -1,0 +1,14 @@
+# ZeroClaw plugin manifest — sol-transfer-build.
+name = "sol-transfer-build"
+version = "0.1.0"
+description = "T1 builder: unsigned SOL transfer (base64 v0), optional durable nonce so it survives an approval queue. Holds no key; a wallet / approval gate / Squads proposal signs."
+author = "zeroclaw-solana-plugins contributors"
+
+wasm_path = "sol_transfer_build.wasm"
+
+capabilities = ["tool"]
+
+# http_client — fetch the recent blockhash or the durable-nonce account.
+# config_read — read `rpc_url` from the plugin's own config jail.
+# No signing capability exists; the output is an unsigned transaction.
+permissions = ["http_client", "config_read"]
