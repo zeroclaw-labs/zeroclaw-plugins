@@ -157,11 +157,11 @@ mod component {
                         PluginOutcome::Success,
                         "pay request built",
                     );
-                    Ok(ToolResult {
+                    Ok(clamp(ToolResult {
                         success: true,
                         output: format!("{}\n{}", req.summary, req.url),
                         error: None,
-                    })
+                    }))
                 }
                 Err(e) => {
                     // Guardrail refusals are reported to the model verbatim so
@@ -177,12 +177,30 @@ mod component {
         }
     }
 
+    /// Final backstop: no ToolResult ever exceeds this, whatever the inputs.
+    /// The core already bounds every field; this guarantees it at the WIT edge.
+    const MAX_RESULT_CHARS: usize = 4096;
+
+    fn clamp(mut r: ToolResult) -> ToolResult {
+        if r.output.len() > MAX_RESULT_CHARS {
+            r.output = r.output.chars().take(MAX_RESULT_CHARS).collect::<String>() + "…";
+        }
+        if let Some(e) = r.error.take() {
+            r.error = Some(if e.len() > MAX_RESULT_CHARS {
+                e.chars().take(MAX_RESULT_CHARS).collect::<String>() + "…"
+            } else {
+                e
+            });
+        }
+        r
+    }
+
     fn fail(error: String) -> ToolResult {
-        ToolResult {
+        clamp(ToolResult {
             success: false,
             output: String::new(),
             error: Some(error),
-        }
+        })
     }
 
     fn emit(action: PluginAction, outcome: PluginOutcome, message: &str) {

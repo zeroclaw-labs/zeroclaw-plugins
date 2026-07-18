@@ -3,10 +3,18 @@
 //! cannot represent ("0.0000001" USDC) is an error, not a rounding.
 
 /// Parse a human decimal string into base units for a mint with `decimals`.
+/// Longest a legitimate amount string can be: u64::MAX is 20 digits, plus a
+/// dot and a fractional part. Anything longer is a flood attempt (e.g.
+/// `"0"×50000+"1"` is numerically valid but must never reach output).
+pub const MAX_AMOUNT_CHARS: usize = 40;
+
 pub fn parse_decimal_amount(s: &str, decimals: u8) -> Result<u64, String> {
     let s = s.trim();
     if s.is_empty() {
         return Err("amount is empty".to_string());
+    }
+    if s.len() > MAX_AMOUNT_CHARS {
+        return Err("amount string is too long".to_string());
     }
     let (whole, frac) = match s.split_once('.') {
         Some((w, f)) => (w, f),

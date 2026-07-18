@@ -138,6 +138,11 @@ pub struct PayRequest {
 /// ambiguous for wallets rendering the URL, so they are rejected too.
 fn validate_decimal(s: &str) -> Result<(), String> {
     let s = s.trim();
+    // u64::MAX is 20 digits; anything longer is a flood attempt (e.g. a
+    // 50k-char string that is numerically "1" but bloats the URL/output).
+    if s.len() > 40 {
+        return Err("invalid amount: too long".to_string());
+    }
     let ok = match s.split_once('.') {
         None => !s.is_empty() && s.chars().all(|c| c.is_ascii_digit()),
         Some((whole, frac)) => {
@@ -210,6 +215,8 @@ pub fn build_request(args: &PayArgs, cfg: &PayConfig) -> Result<PayRequest, Stri
         ("message", args.message.as_deref()),
         ("memo", args.memo.as_deref()),
         ("invoice_id", args.invoice_id.as_deref()),
+        // token is echoed in the allowlist-refusal error, so bound it too.
+        ("token", args.token.as_deref()),
     ] {
         if let Some(v) = value {
             if v.chars().count() > MAX_DISPLAY_FIELD_CHARS {

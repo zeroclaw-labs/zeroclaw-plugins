@@ -319,15 +319,41 @@ fn per_token_caps_override_the_global_cap() {
 }
 
 #[test]
+fn giant_arguments_are_refused_before_echo() {
+    // A numerically-valid but 50k-char amount, an oversized token symbol, and
+    // an oversized memo must all be rejected on length — none may reach an
+    // error string or the built transaction and flood the agent's context.
+    let flood = format!("{}1", "0".repeat(50_000));
+    assert!(
+        build_transfer(&rpc_with_usdc(true), &args(&recipient(), &flood), &cfg(&[]))
+            .unwrap_err()
+            .contains("too long")
+    );
+
+    let mut a = args(&recipient(), "1");
+    a.token = Some("X".repeat(5000));
+    assert!(build_transfer(&rpc_with_usdc(true), &a, &cfg(&[]))
+        .unwrap_err()
+        .contains("too long"));
+
+    let mut long_addr = args(&recipient(), "1");
+    long_addr.recipient = "1".repeat(5000);
+    assert!(build_transfer(&rpc_with_usdc(true), &long_addr, &cfg(&[]))
+        .unwrap_err()
+        .contains("too long"));
+}
+
+#[test]
 fn oversized_memo_is_refused_not_built() {
-    // A multi-KB memo would serialize past Solana's 1232-byte packet limit;
-    // the tool must refuse instead of emitting an unsubmittable transaction.
+    // A multi-KB memo is rejected on length first (context-flood guard); the
+    // 1232-byte packet-size check remains as defense-in-depth for the
+    // multi-instruction case.
     let mut a = args(&recipient(), "1");
     a.memo = Some("x".repeat(2000));
     let err = build_transfer(&rpc_with_usdc(true), &a, &cfg(&[])).unwrap_err();
-    assert!(err.contains("1232"), "must name the limit, got: {err}");
+    assert!(err.contains("too long"), "must refuse, got: {err}");
 
-    // A normal memo still fits.
+    // A normal memo still fits and builds.
     a.memo = Some("invoice #412".to_string());
     assert!(build_transfer(&rpc_with_usdc(true), &a, &cfg(&[])).is_ok());
 }

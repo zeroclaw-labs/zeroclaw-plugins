@@ -157,14 +157,14 @@ mod component {
                         PluginOutcome::Success,
                         "unsigned transfer built",
                     );
-                    Ok(ToolResult {
+                    Ok(clamp(ToolResult {
                         success: true,
                         output: format!(
                             "{}\nunsigned_transaction_base64: {}",
                             built.summary, built.transaction_base64
                         ),
                         error: None,
-                    })
+                    }))
                 }
                 Err(e) => {
                     // Guardrail refusals and RPC failures both fail closed;
@@ -180,12 +180,31 @@ mod component {
         }
     }
 
+    /// Final backstop: no ToolResult exceeds this, whatever the inputs. A
+    /// valid transfer is ~1.7 KB base64 + a short summary; the core bounds
+    /// every field, and this guarantees it at the WIT edge.
+    const MAX_RESULT_CHARS: usize = 4096;
+
+    fn clamp(mut r: ToolResult) -> ToolResult {
+        if r.output.len() > MAX_RESULT_CHARS {
+            r.output = r.output.chars().take(MAX_RESULT_CHARS).collect::<String>() + "…";
+        }
+        if let Some(e) = r.error.take() {
+            r.error = Some(if e.len() > MAX_RESULT_CHARS {
+                e.chars().take(MAX_RESULT_CHARS).collect::<String>() + "…"
+            } else {
+                e
+            });
+        }
+        r
+    }
+
     fn fail(error: String) -> ToolResult {
-        ToolResult {
+        clamp(ToolResult {
             success: false,
             output: String::new(),
             error: Some(error),
-        }
+        })
     }
 
     fn emit(action: PluginAction, outcome: PluginOutcome, message: &str) {

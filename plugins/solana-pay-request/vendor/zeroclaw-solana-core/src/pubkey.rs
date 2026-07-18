@@ -20,8 +20,14 @@ pub const SYSTEM_PROGRAM: Pubkey = Pubkey([0u8; 32]);
 impl Pubkey {
     /// Parse a base58 address; rejects anything that is not exactly 32 bytes.
     pub fn parse(s: &str) -> Result<Self, String> {
+        let s = s.trim();
+        // A base58 32-byte key is at most 44 chars. Reject longer input before
+        // it can be echoed into an error string (context-flood guard).
+        if s.len() > 44 {
+            return Err("invalid address: too long".to_string());
+        }
         let mut buf = [0u8; PUBKEY_BYTES];
-        let len = bs58::decode(s.trim())
+        let len = bs58::decode(s)
             .onto(&mut buf)
             .map_err(|_| format!("invalid base58 address: {s:?}"))?;
         if len != PUBKEY_BYTES {

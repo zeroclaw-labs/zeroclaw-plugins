@@ -188,8 +188,8 @@ fn injection_cannot_smuggle_params_through_amount() {
 
 #[test]
 fn injection_cannot_flood_output_through_display_fields() {
-    // Display fields are the only part of the output that scales with caller
-    // input; an oversized label/message/memo must be refused, not embedded.
+    // Every caller-supplied string that reaches the URL or an error must be
+    // length-bounded, so tool output can't scale with caller input.
     let mut a = args("5");
     a.message = Some("A".repeat(5000));
     let err = build_request(&a, &pinned_cfg()).unwrap_err();
@@ -201,6 +201,23 @@ fn injection_cannot_flood_output_through_display_fields() {
     ok.label = Some("Table 4".to_string());
     let req = build_request(&ok, &pinned_cfg()).unwrap();
     assert!(req.url.len() < 512);
+}
+
+#[test]
+fn injection_cannot_flood_output_through_a_giant_amount() {
+    // "0"×50000 + "1" is numerically 1 — it would pass every cap and the
+    // non-zero check, but must be rejected on length before it can bloat the
+    // URL and the success-path output to ~100 KB.
+    let flood = format!("{}1", "0".repeat(50_000));
+    let err = build_request(&args(&flood), &pinned_cfg()).unwrap_err();
+    assert!(err.contains("too long"), "must reject length, got: {err}");
+
+    // A long token symbol (echoed in the allowlist error) is bounded too.
+    let mut a = args("5");
+    a.token = Some("X".repeat(5000));
+    assert!(build_request(&a, &pinned_cfg())
+        .unwrap_err()
+        .contains("exceeds"));
 }
 
 #[test]

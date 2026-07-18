@@ -158,8 +158,11 @@ pub fn get_token_largest_accounts<T: HttpTransport>(
     let entries = result["value"]
         .as_array()
         .ok_or("getTokenLargestAccounts: missing value array")?;
+    // The RPC returns at most 20; cap regardless so a hostile node cannot make
+    // us allocate an unbounded Vec (consumers only read the top few anyway).
     Ok(entries
         .iter()
+        .take(20)
         .filter_map(|e| {
             Some(LargestHolder {
                 address: e["address"].as_str()?.to_string(),

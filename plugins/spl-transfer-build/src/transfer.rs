@@ -166,6 +166,16 @@ pub fn build_transfer<T: HttpTransport>(
     args: &TransferArgs,
     cfg: &TransferConfig,
 ) -> Result<BuiltTransfer, String> {
+    // Bound caller-supplied strings before any of them can be echoed into an
+    // error (context-flood guard). Amount is bounded in parse_decimal_amount,
+    // recipient in Pubkey::parse; token and memo are echoed/embedded here.
+    if args.token.as_deref().is_some_and(|t| t.len() > 32) {
+        return Err("refused: token symbol is too long".to_string());
+    }
+    if args.memo.as_deref().is_some_and(|m| m.len() > 512) {
+        return Err("refused: memo is too long".to_string());
+    }
+
     let recipient = Pubkey::parse(&args.recipient)?;
     if !cfg.allowed_recipients.is_empty() && !cfg.allowed_recipients.contains(&recipient) {
         return Err(format!(

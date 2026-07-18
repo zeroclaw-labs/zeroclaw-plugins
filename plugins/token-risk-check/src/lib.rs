@@ -124,11 +124,11 @@ mod component {
                         PluginOutcome::Success,
                         "mint assessed",
                     );
-                    Ok(ToolResult {
+                    Ok(clamp(ToolResult {
                         success: true,
                         output: report.text,
                         error: None,
-                    })
+                    }))
                 }
                 Err(e) => {
                     emit(
@@ -142,12 +142,30 @@ mod component {
         }
     }
 
+    /// Final backstop: the core already hard-clamps the report to 2 KB, but
+    /// this guarantees a bounded ToolResult at the WIT edge regardless.
+    const MAX_RESULT_CHARS: usize = 4096;
+
+    fn clamp(mut r: ToolResult) -> ToolResult {
+        if r.output.len() > MAX_RESULT_CHARS {
+            r.output = r.output.chars().take(MAX_RESULT_CHARS).collect::<String>() + "…";
+        }
+        if let Some(e) = r.error.take() {
+            r.error = Some(if e.len() > MAX_RESULT_CHARS {
+                e.chars().take(MAX_RESULT_CHARS).collect::<String>() + "…"
+            } else {
+                e
+            });
+        }
+        r
+    }
+
     fn fail(error: String) -> ToolResult {
-        ToolResult {
+        clamp(ToolResult {
             success: false,
             output: String::new(),
             error: Some(error),
-        }
+        })
     }
 
     fn emit(action: PluginAction, outcome: PluginOutcome, message: &str) {
