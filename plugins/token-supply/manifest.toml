@@ -1,0 +1,9 @@
+name = "token-supply"
+version = "0.1.0"
+description = "Inspect the current amount and decimals of a public SPL token mint."
+author = "Mateo Rojas"
+wasm_path = "token_supply.wasm"
+capabilities = ["tool"]
+# http_client: one read-only getTokenSupply request.
+# config_read: reads only rpc_url and commitment.
+permissions = ["http_client", "config_read"]
