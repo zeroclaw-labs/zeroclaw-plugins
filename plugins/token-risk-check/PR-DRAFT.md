@@ -4,7 +4,7 @@
 
 Adds one T0, read-only `tool-plugin` for concise Solana mint risk checks. It reports a red/amber/green verdict and reasons covering mint/freeze authorities, holder concentration, LP/locker status, and Token-2022 transfer hooks, transfer fees, and permanent delegates.
 
-It naturally complements the `sns-resolve` PR (#TBD): `.sol domain → resolved address → risk check`.
+It naturally complements the `sns-resolve` PR (#55): `.sol domain → resolved address → risk check`.
 
 ## Safety and custody
 
