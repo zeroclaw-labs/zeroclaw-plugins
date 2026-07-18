@@ -17,7 +17,7 @@ pub const DEFAULT_API_BASE_URL: &str = "https://ilinkai.weixin.qq.com";
 pub const DEFAULT_CDN_BASE_URL: &str = "https://novac2c.cdn.weixin.qq.com/c2c";
 /// Reported in every request's `base_info.channel_version`; kept in sync with
 /// the manifest / plugin version.
-pub const CHANNEL_VERSION: &str = "0.1.0";
+pub const CHANNEL_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// iLink message item type: text.
 pub const ITEM_TYPE_TEXT: u64 = 1;
@@ -33,7 +33,7 @@ pub const SESSION_EXPIRED_ERRCODE: i64 = -14;
 /// The plugin's config section (`[channels.wechat.<alias>]` for a mirror, or
 /// `[[plugins.entries.wechat]].config` as a novel plugin). Field names match the
 /// native `WeChatConfig` snake_case keys so a mirror plugin can be fed the native
-/// section verbatim; serde ignores the fields this v0.1.0 plugin does not use
+/// section verbatim; serde ignores the fields this plugin does not use
 /// (`enabled`, `excluded_tools`, `state_dir`).
 ///
 /// `bot_token` is the one field the native config does *not* carry: the native
@@ -280,7 +280,7 @@ pub fn extract_text_from_items(items: &[Value]) -> String {
 }
 
 /// Map one `getupdates` message to an [`Inbound`]. Returns `None` when the
-/// message has no sender or no textual content (this v0.1.0 plugin delivers text
+/// message has no sender or no textual content (this plugin delivers text
 /// only; media items are skipped). WeChat conversations are 1:1, so both the
 /// `sender` and the `reply_target` are the peer's `from_user_id`.
 pub fn parse_message(msg: &Value, channel_alias: Option<&str>) -> Option<Inbound> {

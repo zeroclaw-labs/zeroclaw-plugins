@@ -13,7 +13,7 @@ use serde_json::{Value, json};
 /// The plugin's config section (`[channels.mattermost.<alias>]` for a mirror, or
 /// `[[plugins.entries.mattermost]].config` as a novel plugin). Field names match
 /// the native `MattermostConfig` snake_case keys so a mirror plugin can be fed
-/// the native section verbatim. Only the fields this v0.1.0 plugin uses are
+/// the native section verbatim. Only the fields this plugin uses are
 /// declared; serde ignores the rest (login flow, team allowlist, discovery,
 /// pacing, …).
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -27,7 +27,7 @@ pub struct MattermostConfig {
     /// this plugin only implements the static-token path.
     #[serde(default)]
     pub bot_token: Option<String>,
-    /// Channel IDs the bot serves. For v0.1.0 the plugin operates on a single
+    /// Channel IDs the bot serves. The plugin currently operates on a single
     /// channel: the first explicit (non-blank, non-`"*"`) entry. An empty list
     /// or a `["*"]` wildcard (native auto-discovery) leaves the plugin inert.
     #[serde(default)]
@@ -58,7 +58,7 @@ impl MattermostConfig {
         self.bot_token.as_deref().unwrap_or("").trim()
     }
 
-    /// The single channel this v0.1.0 plugin polls: the first explicit entry in
+    /// The single channel this plugin polls: the first explicit entry in
     /// `channel_ids` (trimmed, skipping blanks and the `"*"` wildcard). `None`
     /// means the operator asked for native auto-discovery, which the plugin does
     /// not implement yet.

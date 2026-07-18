@@ -4,7 +4,6 @@ description = "Twitch channel plugin for ZeroClaw: nonblocking IRC chat over a h
 author = "JordanTheJet"
 wasm_path = "twitch.wasm"
 capabilities = ["channel"]
-sender_match = "case-insensitive"
 # Real implementation, kept source-only until ZeroClaw's socket-client host
 # capability reaches upstream master.
 registry = false

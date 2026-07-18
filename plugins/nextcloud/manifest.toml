@@ -13,8 +13,9 @@ registry = false
 # `webhook-ingress` channel capability (get-channel-capabilities), not a
 # permission — the host runs the listener and hands raw POSTs to parse-webhook.
 permissions = ["http_client", "config_read"]
-# provides: mirror the built-in `nextcloud` channel — read [channels.nextcloud.*]
+# provides: mirror the built-in `nextcloud_talk` channel — read
+# [channels.nextcloud_talk.*]
 # and honor native-wins. Inert on hosts without the `provides` feature (they load
 # this as a novel channel named `nextcloud`, configured from
 # [[plugins.entries.nextcloud]]).
-provides = "nextcloud"
+provides = "nextcloud_talk"

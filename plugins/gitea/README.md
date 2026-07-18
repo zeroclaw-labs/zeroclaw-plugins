@@ -56,7 +56,7 @@ cargo build --target wasm32-wasip2 --release  # → target/wasm32-wasip2/release
 
 ## Scope
 
-This v0.1.0 handles **text issue/PR conversation comments** only. Deferred:
+This release handles **text issue/PR conversation comments** only. Deferred:
 inline PR review comments, opening-post bodies that have no comment yet,
 reactions, media/attachments, repo enumeration, and per-event routing.
 Notification-fetch failures on a tick drop that comment (best-effort delivery).

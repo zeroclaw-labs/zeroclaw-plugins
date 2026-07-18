@@ -15,7 +15,7 @@ use serde_json::{Value, json};
 /// The plugin's config section (`[channels.bluesky.<alias>]` for a mirror, or
 /// `[[plugins.entries.bluesky]].config` as a novel plugin). Field names match
 /// the native `BlueskyConfig` snake_case keys so a mirror plugin can be fed the
-/// native section verbatim; serde ignores the fields this v0.1.0 plugin does not
+/// native section verbatim; serde ignores the fields this plugin does not
 /// use (`enabled`, `excluded_tools`). `service` is an optional override the
 /// native config doesn't carry — it defaults to the public PDS.
 #[derive(Debug, Clone, Deserialize, Default)]

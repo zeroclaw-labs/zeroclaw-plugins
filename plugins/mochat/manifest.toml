@@ -1,5 +1,5 @@
 name = "mochat"
-version = "0.1.0"
+version = "0.2.0"
 description = "Mochat customer-service channel plugin for ZeroClaw: message-receive polling + message-send over wasi:http."
 author = "JordanTheJet"
 wasm_path = "mochat.wasm"

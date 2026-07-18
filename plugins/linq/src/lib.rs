@@ -39,7 +39,7 @@ mod component {
 
     use exports::zeroclaw::plugin::channel::{
         ApprovalRequest, ApprovalResponse, ChannelCapabilities, Guest as Channel, InboundMessage,
-        SendMessage,
+        SendMessage, WebhookRejection,
     };
     use exports::zeroclaw::plugin::plugin_info::Guest as PluginInfo;
 
@@ -162,7 +162,7 @@ mod component {
         fn parse_webhook(
             headers: Vec<(String, String)>,
             body: Vec<u8>,
-        ) -> Result<Vec<InboundMessage>, String> {
+        ) -> Result<Vec<InboundMessage>, WebhookRejection> {
             let method = header_get(&headers, "x-webhook-method").unwrap_or_default();
             // Linq has no GET verification handshake; ack a GET with nothing.
             if method.eq_ignore_ascii_case("GET") {
@@ -176,12 +176,15 @@ mod component {
                 let timestamp = header_get(&headers, "x-webhook-timestamp").unwrap_or_default();
                 let signature = header_get(&headers, "x-webhook-signature").unwrap_or_default();
                 if !verify_signature(secret, &body, &timestamp, &signature, now_secs()) {
-                    return Err("linq: X-Webhook-Signature verification failed".to_string());
+                    return Err(WebhookRejection::Unauthorized(
+                        "linq: X-Webhook-Signature verification failed".to_string(),
+                    ));
                 }
             }
 
-            let payload: serde_json::Value = serde_json::from_slice(&body)
-                .map_err(|e| format!("linq: invalid JSON payload: {e}"))?;
+            let payload: serde_json::Value = serde_json::from_slice(&body).map_err(|e| {
+                WebhookRejection::BadRequest(format!("linq: invalid JSON payload: {e}"))
+            })?;
             Ok(parse_webhook_payload(&payload)
                 .into_iter()
                 .map(to_wit)

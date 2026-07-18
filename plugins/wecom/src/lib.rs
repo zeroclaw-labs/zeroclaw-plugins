@@ -15,11 +15,11 @@ mod component {
     use crate::wecom::{build_text_body, check_api_response, webhook_url, WeComConfig, CHANNEL};
     use exports::zeroclaw::plugin::channel::{
         ApprovalRequest, ApprovalResponse, ChannelCapabilities, Guest as Channel, InboundMessage,
-        SendMessage,
+        SendMessage, WebhookRejection,
     };
     use exports::zeroclaw::plugin::plugin_info::Guest as PluginInfo;
 
-    const PLUGIN_VERSION: &str = "0.1.0";
+    const PLUGIN_VERSION: &str = env!("CARGO_PKG_VERSION");
 
     thread_local! {
         static CONFIG: RefCell<WeComConfig> = RefCell::new(WeComConfig::default());
@@ -176,8 +176,10 @@ mod component {
         fn parse_webhook(
             _headers: Vec<(String, String)>,
             _body: Vec<u8>,
-        ) -> Result<Vec<InboundMessage>, String> {
-            Err("wecom Bot Webhook mode is send-only".to_string())
+        ) -> Result<Vec<InboundMessage>, WebhookRejection> {
+            Err(WebhookRejection::BadRequest(
+                "wecom Bot Webhook mode is send-only".to_string(),
+            ))
         }
     }
 

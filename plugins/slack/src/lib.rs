@@ -5,8 +5,8 @@
 //! [`parse_webhook`] (in the pure [`slack`] core), which:
 //!   - verifies the Slack request signature (`X-Slack-Signature` HMAC-SHA256
 //!     over the raw body, with the 5-minute replay window) using the app
-//!     `signing_secret` from config — returning `Err` makes the gateway reply
-//!     401/400 and enqueue nothing;
+//!     `signing_secret` from config — authentication failures return the typed
+//!     unauthorized rejection and enqueue nothing;
 //!   - answers the `url_verification` handshake by echoing the `challenge`
 //!     back in the HTTP response body (the `__webhook_reply__` convention);
 //!   - decodes `event_callback` message events into inbound messages.
@@ -38,13 +38,13 @@ mod component {
     use serde_json::Value;
 
     use crate::slack::{
-        build_send_body, chunk_text, parse_webhook, Inbound, SlackConfig, WebhookOutcome, CHANNEL,
-        MAX_TEXT_CHARS, WEBHOOK_REPLY_CHANNEL,
+        authenticate_webhook, build_send_body, chunk_text, decode_webhook, Inbound, SlackConfig,
+        WebhookOutcome, CHANNEL, MAX_TEXT_CHARS, WEBHOOK_REPLY_CHANNEL,
     };
 
     use exports::zeroclaw::plugin::channel::{
         ApprovalRequest, ApprovalResponse, ChannelCapabilities, Guest as Channel, InboundMessage,
-        SendMessage,
+        SendMessage, WebhookRejection,
     };
     use exports::zeroclaw::plugin::plugin_info::Guest as PluginInfo;
 
@@ -187,9 +187,14 @@ mod component {
         fn parse_webhook(
             headers: Vec<(String, String)>,
             body: Vec<u8>,
-        ) -> Result<Vec<InboundMessage>, String> {
+        ) -> Result<Vec<InboundMessage>, WebhookRejection> {
             let secret = CONFIG.with(|c| c.borrow().signing_secret().to_string());
-            match parse_webhook(&secret, &headers, &body, now_secs())? {
+            if !authenticate_webhook(&secret, &headers, &body, now_secs())
+                .map_err(WebhookRejection::Unauthorized)?
+            {
+                return Ok(Vec::new());
+            }
+            match decode_webhook(&body).map_err(WebhookRejection::BadRequest)? {
                 WebhookOutcome::Challenge(challenge) => Ok(vec![webhook_reply(challenge)]),
                 WebhookOutcome::Messages(msgs) => Ok(msgs.into_iter().map(to_wit).collect()),
             }

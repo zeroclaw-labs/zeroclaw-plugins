@@ -24,16 +24,11 @@ pub const NOTION_VERSION: &str = "2022-06-28";
 /// builders append `/databases/...` and `/pages/...` directly).
 pub const DEFAULT_API_BASE_URL: &str = "https://api.notion.com/v1";
 
-/// The plugin's config section (`[channels.notion.<alias>]` for a mirror, or
-/// `[[plugins.entries.notion]].config` as a novel plugin). Field names mirror
-/// the native `NotionConfig` snake_case keys so a host-serialized native section
-/// deserializes unchanged.
+/// The novel plugin's `[[plugins.entries]]` config map. The manifest omits
+/// `provides` because current ZeroClaw has no canonical built-in Notion channel
+/// family.
 #[derive(Debug, Clone, Deserialize)]
 pub struct NotionConfig {
-    /// Whether the operator enabled the channel. Parsed for parity with the
-    /// native section; the plugin gates on credentials, not this flag.
-    #[serde(default)]
-    pub enabled: bool,
     /// Notion internal-integration token. Sent as `Authorization: Bearer`.
     #[serde(default)]
     pub api_key: String,
@@ -91,7 +86,6 @@ fn default_api_base_url() -> String {
 impl Default for NotionConfig {
     fn default() -> Self {
         Self {
-            enabled: false,
             api_key: String::new(),
             database_id: String::new(),
             poll_interval_secs: default_poll_interval(),

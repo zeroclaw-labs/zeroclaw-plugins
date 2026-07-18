@@ -45,12 +45,12 @@ mod component {
 
     use exports::zeroclaw::plugin::channel::{
         ApprovalRequest, ApprovalResponse, ChannelCapabilities, Guest as Channel, InboundMessage,
-        SendMessage,
+        SendMessage, WebhookRejection,
     };
     use exports::zeroclaw::plugin::plugin_info::Guest as PluginInfo;
 
     const PLUGIN_NAME: &str = "wechat";
-    const PLUGIN_VERSION: &str = "0.1.0";
+    const PLUGIN_VERSION: &str = env!("CARGO_PKG_VERSION");
     /// Server-hold hint (ms) for `getupdates`. `0` asks the server to return
     /// immediately (a short poll), so a blocking call never stalls an
     /// interleaved `send`; if the server ignores the hint it falls back to its
@@ -342,8 +342,10 @@ mod component {
         fn parse_webhook(
             _headers: Vec<(String, String)>,
             _body: Vec<u8>,
-        ) -> Result<Vec<InboundMessage>, String> {
-            Err("this channel does not serve webhooks".to_string())
+        ) -> Result<Vec<InboundMessage>, WebhookRejection> {
+            Err(WebhookRejection::BadRequest(
+                "this channel does not serve webhooks".to_string(),
+            ))
         }
     }
 

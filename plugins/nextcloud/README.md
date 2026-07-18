@@ -56,7 +56,7 @@ boundary.
 
 Config comes from the plugin's own section (requires the `config_read`
 permission). Field names match the built-in `nextcloud` channel, so a mirror
-install reads `[channels.nextcloud.<alias>]` directly. Fields used by this
+install reads `[channels.nextcloud_talk.<alias>]` directly. Fields used by this
 plugin:
 
 - `base_url` (required) — the Nextcloud origin, e.g.

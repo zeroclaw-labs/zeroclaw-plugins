@@ -5,8 +5,8 @@
 //! `POST` to `parse-webhook`. The plugin owns its authenticity check — it
 //! verifies the Talk bot HMAC signature
 //! (`hex(HMAC-SHA256(secret, X-Nextcloud-Talk-Random ++ raw_body))`) over the
-//! exact bytes using its own `webhook_secret`, returning `err(reason)` to make
-//! the gateway reply 401/400 and enqueue nothing. There is no poll: `poll-message`
+//! exact bytes using its own `webhook_secret`, returning a typed rejection so
+//! the gateway replies 401 or 400 and enqueues nothing. There is no poll: `poll-message`
 //! always returns `none`.
 //!
 //! Outbound replies go through the Nextcloud Talk OCS API:
@@ -41,12 +41,13 @@ mod component {
     use serde_json::Value;
 
     use crate::nextcloud::{
-        build_send_body, chat_url, parse_webhook, truncate_to_nc_limit, Inbound, NextcloudConfig,
+        authenticate_webhook, build_send_body, chat_url, decode_webhook, truncate_to_nc_limit,
+        Inbound, NextcloudConfig,
     };
 
     use exports::zeroclaw::plugin::channel::{
         ApprovalRequest, ApprovalResponse, ChannelCapabilities, Guest as Channel, InboundMessage,
-        SendMessage,
+        SendMessage, WebhookRejection,
     };
     use exports::zeroclaw::plugin::plugin_info::Guest as PluginInfo;
 
@@ -175,9 +176,10 @@ mod component {
         fn parse_webhook(
             headers: Vec<(String, String)>,
             body: Vec<u8>,
-        ) -> Result<Vec<InboundMessage>, String> {
+        ) -> Result<Vec<InboundMessage>, WebhookRejection> {
             let cfg = CONFIG.with(|c| c.borrow().clone());
-            let inbound = parse_webhook(&headers, &body, &cfg)?;
+            authenticate_webhook(&headers, &body, &cfg).map_err(WebhookRejection::Unauthorized)?;
+            let inbound = decode_webhook(&body, &cfg).map_err(WebhookRejection::BadRequest)?;
             Ok(inbound.into_iter().map(to_wit).collect())
         }
 

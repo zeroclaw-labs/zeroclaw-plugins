@@ -3,7 +3,7 @@
 //! This is the `rlib` half of the plugin. It owns everything the sandboxed
 //! component needs that is *not* I/O:
 //!
-//!   * parsing the plugin's `[channels.nextcloud.<alias>]` config section,
+//!   * parsing the plugin's `[channels.nextcloud_talk.<alias>]` config section,
 //!   * verifying the Talk bot webhook HMAC signature over the raw body,
 //!   * decoding a Talk bot webhook payload into inbound messages,
 //!   * building the OCS `sendMessage` request URL + body,
@@ -36,7 +36,8 @@ pub const RANDOM_HEADER: &str = "x-nextcloud-talk-random";
 /// Lower-cased header carrying the hex HMAC-SHA256 signature.
 pub const SIGNATURE_HEADER: &str = "x-nextcloud-talk-signature";
 
-/// The plugin's config section (`[channels.nextcloud.<alias>]` for a mirror, or
+/// The plugin's config section (`[channels.nextcloud_talk.<alias>]` for a mirror,
+/// or
 /// `[[plugins.entries.nextcloud]].config` as a novel plugin). Field names match
 /// the native `NextcloudTalkConfig` snake_case keys so a mirror plugin can be fed
 /// the native section verbatim. Only the fields this v0.1.0 plugin uses are
@@ -183,18 +184,14 @@ pub fn header<'a>(headers: &'a [(String, String)], name: &str) -> Option<&'a str
 
 // ── Webhook ingest ──────────────────────────────────────────────────────────────
 
-/// Verify and decode a raw inbound webhook. This is the plugin's authenticity
-/// gate: when a `webhook_secret` is configured it verifies the HMAC signature
-/// over `body` and returns `Err(reason)` on failure (the host then replies
-/// 401/400 and enqueues nothing). When no secret is configured it accepts
-/// unsigned — mirroring the native channel.
-///
-/// `headers` are lower-cased; `body` is the exact received bytes.
-pub fn parse_webhook(
+/// Authenticate a raw inbound webhook. When a `webhook_secret` is configured,
+/// verify the HMAC over the exact request body; otherwise accept unsigned input
+/// to mirror the native channel.
+pub fn authenticate_webhook(
     headers: &[(String, String)],
     body: &[u8],
     cfg: &NextcloudConfig,
-) -> Result<Vec<Inbound>, String> {
+) -> Result<(), String> {
     let secret = cfg.webhook_secret();
     if !secret.is_empty() {
         let random = header(headers, RANDOM_HEADER).unwrap_or("");
@@ -203,10 +200,26 @@ pub fn parse_webhook(
             return Err("nextcloud: webhook signature verification failed".to_string());
         }
     }
+    Ok(())
+}
 
+/// Decode an already-authenticated Nextcloud Talk webhook body.
+pub fn decode_webhook(body: &[u8], cfg: &NextcloudConfig) -> Result<Vec<Inbound>, String> {
     let payload: Value = serde_json::from_slice(body)
         .map_err(|e| format!("nextcloud: invalid JSON payload: {e}"))?;
     Ok(decode_inbound(&payload, &cfg.bot_name()))
+}
+
+/// Authenticate and decode a raw webhook. The split helpers are also exposed so
+/// the WIT shim can preserve the host's typed authentication and payload-
+/// rejection boundary.
+pub fn parse_webhook(
+    headers: &[(String, String)],
+    body: &[u8],
+    cfg: &NextcloudConfig,
+) -> Result<Vec<Inbound>, String> {
+    authenticate_webhook(headers, body, cfg)?;
+    decode_webhook(body, cfg)
 }
 
 /// Decode a Talk bot webhook payload into inbound messages. Routes on the
