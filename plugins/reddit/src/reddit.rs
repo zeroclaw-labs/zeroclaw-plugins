@@ -96,9 +96,8 @@ pub fn basic_auth_header(client_id: &str, client_secret: &str) -> String {
 /// dependency set to `serde`/`serde_json`/`waki` — the token endpoint's HTTP
 /// Basic header is the only place we need it.
 pub fn base64_encode(input: &[u8]) -> String {
-    const ALPHABET: &[u8; 64] =
-        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut out = String::with_capacity((input.len() + 2) / 3 * 4);
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(input.len().div_ceil(3) * 4);
     for chunk in input.chunks(3) {
         let b0 = chunk[0] as u32;
         let b1 = *chunk.get(1).unwrap_or(&0) as u32;
@@ -172,9 +171,7 @@ pub fn join_fullnames(fullnames: &[String]) -> String {
 /// reply); a bare username routes to `api/compose` (a DM). Mirrors the native
 /// channel's `t1_`/`t3_`/`t4_` prefix check.
 pub fn is_thing_fullname(recipient: &str) -> bool {
-    recipient.starts_with("t1_")
-        || recipient.starts_with("t3_")
-        || recipient.starts_with("t4_")
+    recipient.starts_with("t1_") || recipient.starts_with("t3_") || recipient.starts_with("t4_")
 }
 
 /// Map one Reddit inbox item's `data` object to an [`Inbound`]. Returns `None`
@@ -221,7 +218,10 @@ pub fn parse_item(item: &Value, username: &str, subreddits: &[String]) -> Option
         author.to_string()
     };
 
-    let created = item.get("created_utc").and_then(Value::as_f64).unwrap_or(0.0);
+    let created = item
+        .get("created_utc")
+        .and_then(Value::as_f64)
+        .unwrap_or(0.0);
     let timestamp = if created < 0.0 { 0 } else { created as u64 };
 
     Some(Inbound {
