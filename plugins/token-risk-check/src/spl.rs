@@ -164,7 +164,9 @@ fn decode_extension(ty: u16, val: &[u8]) -> Extension {
             basis_points: read_u16_le(val, 106).unwrap_or(u16::MAX),
         },
         3 => Extension::MintCloseAuthority,
-        4 => Extension::ConfidentialTransfers,
+        // 4 = ConfidentialTransferMint, 16 = ConfidentialTransferFeeConfig;
+        // both reduce to "confidential transfers configured" for risk purposes.
+        4 | 16 => Extension::ConfidentialTransfers,
         6 => Extension::DefaultAccountState {
             frozen: val.first().copied() == Some(2),
         },

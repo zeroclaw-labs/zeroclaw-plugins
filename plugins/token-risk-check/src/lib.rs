@@ -140,11 +140,22 @@ mod component {
         let supply_resp = post_json(url, &rpc::build_get_token_supply(&args.mint))?;
         let (supply, _decimals) = rpc::parse_token_supply(&supply_resp)?;
 
-        let largest_resp = post_json(url, &rpc::build_get_token_largest_accounts(&args.mint))?;
-        let largest = rpc::parse_largest_amounts(&largest_resp)?;
+        // Holder concentration is an auxiliary signal; several public RPCs
+        // throttle getTokenLargestAccounts. Degrade with explicit disclosure
+        // rather than losing the authority/extension verdict.
+        let largest = post_json(url, &rpc::build_get_token_largest_accounts(&args.mint))
+            .and_then(|resp| rpc::parse_largest_amounts(&resp));
 
-        let report = risk::analyze(&mint, &owner, supply, &largest)?;
-        Ok(risk::render(&args.mint, &report))
+        let (amounts, holder_note): (&[u128], Option<&str>) = match &largest {
+            Ok(a) => (a, None),
+            Err(_) => (&[], Some("\n[NOTE] holder concentration unavailable (RPC throttled this call); verdict covers authorities and extensions only")),
+        };
+        let report = risk::analyze(&mint, &owner, supply, amounts)?;
+        let mut out = risk::render(&args.mint, &report);
+        if let Some(note) = holder_note {
+            out.push_str(note);
+        }
+        Ok(out)
     }
 
     impl PluginInfo for TokenRiskCheck {
