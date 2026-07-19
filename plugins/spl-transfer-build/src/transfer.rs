@@ -11,21 +11,23 @@ use base64::{engine::general_purpose::STANDARD, Engine as _};
 use nanosol::{
     amount::{format_ui_amount, parse_ui_amount, AmountError},
     inspect::{
-        decode_ata_create_idempotent, decode_memo, decode_transfer_checked,
-        decode_unsigned_v0_transaction,
+        decode_advance_nonce_account, decode_ata_create_idempotent, decode_memo,
+        decode_transfer_checked, decode_unsigned_v0_transaction,
     },
     instruction::{
-        create_associated_token_account_idempotent, memo as memo_instruction, transfer_checked,
-        AccountMeta, TokenProgram,
+        advance_nonce_account, create_associated_token_account_idempotent, memo as memo_instruction,
+        transfer_checked, AccountMeta, TokenProgram,
     },
     message::{Message, MessageVersion, Transaction, MAX_TRANSACTION_BYTES},
     mint::{parse_mint_account, MintInfo},
-    pubkey::{derive_associated_token_address, Pubkey},
+    nonce::{parse_nonce_account_data, NonceAccount},
+    pubkey::{derive_associated_token_address, Pubkey, SYSTEM_PROGRAM_ID},
     reference::derive_payment_reference,
     rpc::{
         get_account_info_request, get_latest_blockhash_request, parse_account_info_response,
-        parse_latest_blockhash_response, parse_simulation_response, simulate_transaction_request,
-        RpcError, MAX_RPC_RESPONSE_BYTES,
+        parse_latest_blockhash_response, parse_simulation_response,
+        simulate_durable_transaction_request, simulate_transaction_request, LatestBlockhash,
+        RpcAccount, RpcError, MAX_RPC_RESPONSE_BYTES,
     },
     shape::{elide_address, quote_untrusted, single_line},
 };
@@ -49,12 +51,22 @@ const SUMMARY_MEMO_CHARS: usize = 96;
 const MINT_RPC_ID: u64 = 1;
 const BLOCKHASH_RPC_ID: u64 = 2;
 const SIMULATION_RPC_ID: u64 = 3;
+const NONCE_RPC_ID: u64 = 4;
+
+/// Operator-selected transaction-lifetime mode. This is chosen only from trusted
+/// operator configuration, never from model arguments or caller `__config`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BlockhashMode {
+    Recent,
+    DurableNonce,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExecutionPhase {
     ConfigValidated,
     MintRpc,
     BlockhashRpc,
+    NonceRpc,
     TransactionBuilt,
     VerificationPassed,
     SimulationRpc,
@@ -74,8 +86,13 @@ pub struct TransferArgs {
 pub struct TransferOutput {
     pub transaction_base64: String,
     pub summary: String,
-    pub last_valid_block_height: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_valid_block_height: Option<u64>,
     pub blockhash_mode: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub nonce_account: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub nonce: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reference: Option<String>,
 }
@@ -149,6 +166,8 @@ pub struct TransferConfig {
     allowed_recipients: Option<BTreeSet<Pubkey>>,
     allow_off_curve_recipients: bool,
     allow_token_2022: bool,
+    blockhash_mode: BlockhashMode,
+    nonce_account: Option<Pubkey>,
 }
 
 impl TransferConfig {
@@ -164,6 +183,8 @@ impl TransferConfig {
                     | "recipient_allowlist"
                     | "allow_off_curve_recipients"
                     | "allow_token_2022"
+                    | "blockhash_mode"
+                    | "nonce_account_pubkey"
             ) {
                 return Err(TransferError::InvalidConfig(
                     "unknown configuration key".to_string(),
@@ -265,6 +286,7 @@ impl TransferConfig {
         )?;
         let allow_token_2022 =
             parse_optional_bool(section.get("allow_token_2022"), "allow_token_2022")?;
+        let (blockhash_mode, nonce_account) = parse_blockhash_mode(section)?;
 
         Ok(Self {
             rpc_url: rpc_url.to_string(),
@@ -275,11 +297,21 @@ impl TransferConfig {
             allowed_recipients,
             allow_off_curve_recipients,
             allow_token_2022,
+            blockhash_mode,
+            nonce_account,
         })
     }
 
     pub fn sender(&self) -> Pubkey {
         self.sender
+    }
+
+    pub fn blockhash_mode(&self) -> BlockhashMode {
+        self.blockhash_mode
+    }
+
+    pub fn nonce_account(&self) -> Option<Pubkey> {
+        self.nonce_account
     }
 
     fn resolve_mint(&self, input: &str) -> Result<Pubkey, TransferError> {
@@ -313,9 +345,14 @@ pub struct VerificationPolicy {
     pub token_program: TokenProgram,
     pub raw_amount: u64,
     pub decimals: u8,
+    /// The message `recent_blockhash` field. In durable mode this is the stored
+    /// durable nonce value, not a recent blockhash.
     pub recent_blockhash: [u8; 32],
     pub reference: Option<Pubkey>,
     pub memo: Option<String>,
+    pub mode: BlockhashMode,
+    /// The configured nonce account. Required in durable mode; `None` in recent mode.
+    pub nonce_account: Option<Pubkey>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -352,6 +389,8 @@ pub enum TransferError {
     MintState(String),
     Token2022Disabled,
     Token2022ExtensionsDenied,
+    NonceAccountState(String),
+    NonceAuthorityMismatch,
     TransactionBuild,
     TransactionVerification(String),
     SimulationFailed(String),
@@ -378,6 +417,8 @@ impl TransferError {
             Self::RpcTransport(_) | Self::Rpc(_) => "rpc_failure",
             Self::MintState(_) => "invalid_mint_state",
             Self::Token2022Disabled | Self::Token2022ExtensionsDenied => "token_2022_policy",
+            Self::NonceAccountState(_) => "invalid_nonce_state",
+            Self::NonceAuthorityMismatch => "nonce_authority_mismatch",
             Self::TransactionBuild => "transaction_build",
             Self::TransactionVerification(_) => "transaction_verification",
             Self::SimulationFailed(_) => "simulation_failed",
@@ -426,6 +467,12 @@ impl fmt::Display for TransferError {
             ),
             Self::Token2022ExtensionsDenied => formatter.write_str(
                 "Token-2022 mint extensions are outside the supported safe subset",
+            ),
+            Self::NonceAccountState(reason) => {
+                write!(formatter, "nonce account refused: {reason}")
+            }
+            Self::NonceAuthorityMismatch => formatter.write_str(
+                "nonce account authority does not equal the configured sender; M4 durable mode requires nonce authority == sender",
             ),
             Self::TransactionBuild => formatter.write_str("could not build supported transaction"),
             Self::TransactionVerification(reason) => {
@@ -555,17 +602,42 @@ fn build_transfer_observed(
     let canonical_amount =
         format_ui_amount(raw_amount, mint_info.decimals).map_err(amount_error)?;
 
-    observer(ExecutionPhase::BlockhashRpc);
-    let blockhash_body = rpc_post(
-        transport,
-        &config.rpc_url,
-        &get_latest_blockhash_request(BLOCKHASH_RPC_ID),
-    )?;
-    let latest = parse_latest_blockhash_response(&blockhash_body, BLOCKHASH_RPC_ID)?;
-
     let reference = invoice_id.as_deref().map(|invoice| {
         derive_payment_reference(&recipient, Some(&mint), &canonical_amount, invoice)
     });
+
+    // Resolve the message blockhash per operator-selected mode. Recent mode uses
+    // getLatestBlockhash; durable mode fetches and validates the configured nonce
+    // account and uses its stored durable nonce as the message blockhash.
+    let blockhash = match config.blockhash_mode {
+        BlockhashMode::Recent => {
+            observer(ExecutionPhase::BlockhashRpc);
+            let body = rpc_post(
+                transport,
+                &config.rpc_url,
+                &get_latest_blockhash_request(BLOCKHASH_RPC_ID),
+            )?;
+            ResolvedBlockhash::Recent(parse_latest_blockhash_response(&body, BLOCKHASH_RPC_ID)?)
+        }
+        BlockhashMode::DurableNonce => {
+            observer(ExecutionPhase::NonceRpc);
+            let nonce_account = config.nonce_account.ok_or_else(|| {
+                TransferError::InvalidConfig("durable mode requires a nonce account".to_string())
+            })?;
+            let body = rpc_post(
+                transport,
+                &config.rpc_url,
+                &get_account_info_request(NONCE_RPC_ID, &nonce_account),
+            )?;
+            let account = parse_account_info_response(&body, NONCE_RPC_ID)?;
+            let nonce = validate_nonce_account(&account, config.sender)?;
+            ResolvedBlockhash::Durable {
+                account: nonce_account,
+                nonce,
+            }
+        }
+    };
+
     let policy = VerificationPolicy {
         sender: config.sender,
         recipient,
@@ -573,9 +645,11 @@ fn build_transfer_observed(
         token_program: mint_info.token_program,
         raw_amount,
         decimals: mint_info.decimals,
-        recent_blockhash: latest.blockhash,
+        recent_blockhash: blockhash.message_blockhash(),
         reference,
         memo,
+        mode: config.blockhash_mode,
+        nonce_account: config.nonce_account,
     };
     let bytes = build_unsigned_bytes(&policy)?;
     observer(ExecutionPhase::TransactionBuilt);
@@ -584,29 +658,96 @@ fn build_transfer_observed(
     let transaction_base64 = STANDARD.encode(&bytes);
 
     observer(ExecutionPhase::SimulationRpc);
-    let simulation_body = rpc_post(
-        transport,
-        &config.rpc_url,
-        &simulate_transaction_request(SIMULATION_RPC_ID, &transaction_base64),
-    )?;
+    let simulation_request = match config.blockhash_mode {
+        BlockhashMode::Recent => {
+            simulate_transaction_request(SIMULATION_RPC_ID, &transaction_base64)
+        }
+        BlockhashMode::DurableNonce => {
+            simulate_durable_transaction_request(SIMULATION_RPC_ID, &transaction_base64)
+        }
+    };
+    let simulation_body = rpc_post(transport, &config.rpc_url, &simulation_request)?;
     let simulation = parse_simulation_response(&simulation_body, SIMULATION_RPC_ID)?;
     if let Some(reason) = simulation.error {
         return Err(TransferError::SimulationFailed(reason));
     }
+    // Durable mode requests no blockhash replacement; if the RPC replaced it
+    // anyway, the simulation exercised a different lifetime mechanism than the
+    // returned bytes, so refuse rather than silently accept.
+    if config.blockhash_mode == BlockhashMode::DurableNonce && simulation.replaced_blockhash {
+        return Err(TransferError::SimulationFailed(
+            "RPC unexpectedly replaced the durable-nonce blockhash".to_string(),
+        ));
+    }
     observer(ExecutionPhase::SimulationPassed);
 
-    let summary = approval_summary(
-        &verified,
-        config.unique_alias(&verified.mint),
-        latest.last_valid_block_height,
-    )?;
-    Ok(TransferOutput {
-        transaction_base64,
-        summary,
-        last_valid_block_height: latest.last_valid_block_height,
-        blockhash_mode: "recent".to_string(),
-        reference: verified.reference.map(|value| value.to_string()),
-    })
+    let alias = config.unique_alias(&verified.mint);
+    match blockhash {
+        ResolvedBlockhash::Recent(latest) => {
+            let summary = approval_summary(&verified, alias, latest.last_valid_block_height)?;
+            Ok(TransferOutput {
+                transaction_base64,
+                summary,
+                last_valid_block_height: Some(latest.last_valid_block_height),
+                blockhash_mode: "recent".to_string(),
+                nonce_account: None,
+                nonce: None,
+                reference: verified.reference.map(|value| value.to_string()),
+            })
+        }
+        ResolvedBlockhash::Durable { account, nonce } => {
+            let summary = durable_approval_summary(&verified, alias, &account, &nonce)?;
+            Ok(TransferOutput {
+                transaction_base64,
+                summary,
+                last_valid_block_height: None,
+                blockhash_mode: "durable_nonce".to_string(),
+                nonce_account: Some(account.to_string()),
+                nonce: Some(nonce_to_base58(&nonce.durable_nonce)),
+                reference: verified.reference.map(|value| value.to_string()),
+            })
+        }
+    }
+}
+
+/// The message blockhash and, in durable mode, the validated nonce account.
+enum ResolvedBlockhash {
+    Recent(LatestBlockhash),
+    Durable { account: Pubkey, nonce: NonceAccount },
+}
+
+impl ResolvedBlockhash {
+    fn message_blockhash(&self) -> [u8; 32] {
+        match self {
+            Self::Recent(latest) => latest.blockhash,
+            Self::Durable { nonce, .. } => nonce.durable_nonce,
+        }
+    }
+}
+
+/// Validate a fetched nonce account against the durable-mode trust boundary:
+/// System-Program-owned, not executable, initialized+current, and with authority
+/// equal to the configured sender (the only M4 arrangement).
+fn validate_nonce_account(
+    account: &RpcAccount,
+    sender: Pubkey,
+) -> Result<NonceAccount, TransferError> {
+    if account.owner != SYSTEM_PROGRAM_ID {
+        return Err(TransferError::NonceAccountState(
+            "owner is not the System Program".to_string(),
+        ));
+    }
+    if account.executable {
+        return Err(TransferError::NonceAccountState(
+            "account must not be executable".to_string(),
+        ));
+    }
+    let parsed = parse_nonce_account_data(&account.data)
+        .map_err(|error| TransferError::NonceAccountState(single_line(&error.to_string(), 120)))?;
+    if parsed.authority != sender {
+        return Err(TransferError::NonceAuthorityMismatch);
+    }
+    Ok(parsed)
 }
 
 pub fn build_unsigned_bytes(policy: &VerificationPolicy) -> Result<Vec<u8>, TransferError> {
@@ -634,7 +775,15 @@ pub fn build_unsigned_bytes(policy: &VerificationPolicy) -> Result<Vec<u8>, Tran
             .accounts
             .push(AccountMeta::readonly(reference, false));
     }
-    let mut instructions = vec![create, transfer];
+    let mut instructions = Vec::new();
+    // Durable mode: AdvanceNonceAccount must be instruction zero, with the nonce
+    // authority equal to the sender (fee payer / only signer).
+    if policy.mode == BlockhashMode::DurableNonce {
+        let nonce_account = policy.nonce_account.ok_or(TransferError::TransactionBuild)?;
+        instructions.push(advance_nonce_account(nonce_account, policy.sender));
+    }
+    instructions.push(create);
+    instructions.push(transfer);
     if let Some(memo) = &policy.memo {
         instructions.push(memo_instruction(memo));
     }
@@ -663,6 +812,9 @@ pub fn verify_final_bytes(
     let transaction = decode_unsigned_v0_transaction(bytes)
         .map_err(|_| TransferError::TransactionVerification("wire decoding refused".to_string()))?;
     let message = &transaction.message;
+    // Both modes require exactly one required signature, one all-zero signature
+    // slot, and the configured sender as fee payer (index 0). Durable mode does
+    // not add a second signer: the sender is also the nonce authority.
     if transaction.signatures.len() != 1
         || message.header.num_required_signatures != 1
         || message.header.num_readonly_signed_accounts != 0
@@ -673,19 +825,36 @@ pub fn verify_final_bytes(
     if message.recent_blockhash != policy.recent_blockhash {
         return verification_refusal("recent blockhash differs from verified RPC value");
     }
-    let expected_instruction_count = 2 + usize::from(policy.memo.is_some());
+
+    // In durable mode, AdvanceNonceAccount must be instruction zero for the
+    // configured nonce account with the sender as nonce authority; the rest of
+    // the M3.5 instruction set follows, shifted by one.
+    let durable = policy.mode == BlockhashMode::DurableNonce;
+    let offset = usize::from(durable);
+    let expected_instruction_count = offset + 2 + usize::from(policy.memo.is_some());
     if message.instructions.len() != expected_instruction_count {
         return verification_refusal("instruction count is outside the supported subset");
     }
+    if durable {
+        let nonce_account = policy
+            .nonce_account
+            .ok_or_else(|| TransferError::TransactionVerification("missing nonce account".to_string()))?;
+        let advance = decode_advance_nonce_account(message, 0).map_err(|_| {
+            TransferError::TransactionVerification("AdvanceNonceAccount instruction refused".to_string())
+        })?;
+        if advance.nonce_account != nonce_account || advance.nonce_authority != policy.sender {
+            return verification_refusal("nonce account or authority differs from policy");
+        }
+    }
 
-    let create = decode_ata_create_idempotent(message, 0).map_err(|_| {
+    let create = decode_ata_create_idempotent(message, offset).map_err(|_| {
         TransferError::TransactionVerification("ATA instruction refused".to_string())
     })?;
-    let transfer = decode_transfer_checked(message, 1).map_err(|_| {
+    let transfer = decode_transfer_checked(message, offset + 1).map_err(|_| {
         TransferError::TransactionVerification("TransferChecked instruction refused".to_string())
     })?;
     let decoded_memo = if policy.memo.is_some() {
-        Some(decode_memo(message, 2).map_err(|_| {
+        Some(decode_memo(message, offset + 2).map_err(|_| {
             TransferError::TransactionVerification("memo instruction refused".to_string())
         })?)
     } else {
@@ -730,7 +899,7 @@ pub fn verify_final_bytes(
     }
 
     let reconstructed =
-        reconstruct_message(&transaction, &create, &transfer, decoded_memo.as_deref())?;
+        reconstruct_message(&transaction, &create, &transfer, decoded_memo.as_deref(), policy)?;
     if reconstructed != *message {
         return verification_refusal("message contains non-canonical keys, flags, or structure");
     }
@@ -754,6 +923,7 @@ fn reconstruct_message(
     create: &nanosol::inspect::DecodedAtaCreateIdempotent,
     transfer: &nanosol::inspect::DecodedTransferChecked,
     memo: Option<&str>,
+    policy: &VerificationPolicy,
 ) -> Result<Message, TransferError> {
     let (create_instruction, derived_destination) = create_associated_token_account_idempotent(
         create.payer,
@@ -779,7 +949,18 @@ fn reconstruct_message(
             .accounts
             .push(AccountMeta::readonly(reference, false));
     }
-    let mut instructions = vec![create_instruction, transfer_instruction];
+    let mut instructions = Vec::new();
+    // Durable mode reconstructs AdvanceNonceAccount as instruction zero with the
+    // configured nonce account and the sender (== fee payer) as authority; the
+    // byte-equivalent recompile then rejects any deviation.
+    if policy.mode == BlockhashMode::DurableNonce {
+        let nonce_account = policy.nonce_account.ok_or_else(|| {
+            TransferError::TransactionVerification("missing nonce account".to_string())
+        })?;
+        instructions.push(advance_nonce_account(nonce_account, create.payer));
+    }
+    instructions.push(create_instruction);
+    instructions.push(transfer_instruction);
     if let Some(memo) = memo {
         instructions.push(memo_instruction(memo));
     }
@@ -827,6 +1008,60 @@ fn approval_summary(
         " · recent blockhash valid through block height {last_valid_block_height} · UNSIGNED: external approval and signing required; not submitted"
     ));
     Ok(summary)
+}
+
+/// Durable-mode approval summary. Derived only from the verified transfer plus
+/// the validated nonce account. Never claims the transaction never expires, is
+/// guaranteed to land, or is fee-free on failure.
+fn durable_approval_summary(
+    transfer: &VerifiedTransfer,
+    alias: Option<&str>,
+    nonce_account: &Pubkey,
+    nonce: &NonceAccount,
+) -> Result<String, TransferError> {
+    let amount = format_ui_amount(transfer.raw_amount, transfer.decimals).map_err(amount_error)?;
+    let mint = elide_address(&transfer.mint);
+    let asset = alias
+        .map(|alias| format!("{alias} ({mint})"))
+        .unwrap_or_else(|| format!("token {mint}"));
+    let mut summary = format!(
+        "SEND {amount} {asset} to owner {} · destination ATA {} · sender/fee payer/nonce authority {}",
+        transfer.recipient,
+        elide_address(&transfer.destination_ata),
+        elide_address(&transfer.sender),
+    );
+    if let Some(memo) = &transfer.memo {
+        summary.push_str(" · memo ");
+        summary.push_str(&quote_untrusted(memo, SUMMARY_MEMO_CHARS));
+    }
+    if let Some(reference) = transfer.reference {
+        summary.push_str(" · reference ");
+        summary.push_str(&reference.to_string());
+    }
+    if transfer.token_program == TokenProgram::Token2022 {
+        summary.push_str(
+            " · Token-2022: displayed amount is the transfer amount; net received may depend on mint extensions as reported by the configured RPC.",
+        );
+    }
+    summary.push_str(&format!(
+        " · blockhash_mode durable_nonce · nonce account {} · nonce {}",
+        elide_address(nonce_account),
+        nonce_to_base58(&nonce.durable_nonce),
+    ));
+    summary.push_str(
+        " · Durable nonce: valid only while the configured nonce account remains initialized with this exact nonce and authority. Advancing or changing the nonce account invalidates this transaction.",
+    );
+    summary.push_str(
+        " · Execution warning: once nonce validation succeeds, a later instruction failure can still consume the nonce and charge the transaction fee.",
+    );
+    summary.push_str(" · UNSIGNED: external approval and signing required; not submitted");
+    Ok(summary)
+}
+
+/// Base58-encode a 32-byte durable nonce for display (the same encoding a
+/// blockhash uses; matches `solana nonce` output).
+fn nonce_to_base58(nonce: &[u8; 32]) -> String {
+    Pubkey::new(*nonce).to_string()
 }
 
 fn enforce_token_policy(mint: &MintInfo, config: &TransferConfig) -> Result<(), TransferError> {
@@ -1030,6 +1265,52 @@ fn normalize_alias(alias: &str) -> Result<String, TransferError> {
         ));
     }
     Ok(alias.to_ascii_uppercase())
+}
+
+/// Resolve the operator-selected blockhash mode and, in durable mode, the
+/// configured nonce account.
+///
+/// Documented deterministic rules:
+/// - missing `blockhash_mode` → recent (default; recent-blockhash behavior);
+/// - only the exact values `recent` and `durable_nonce` are accepted;
+/// - `durable_nonce` requires a non-empty `nonce_account_pubkey`;
+/// - in recent mode, providing `nonce_account_pubkey` (a "nonce-only"
+///   configuration) is **refused**, not silently ignored, so the operator's
+///   intent is never guessed.
+fn parse_blockhash_mode(
+    section: &HashMap<String, String>,
+) -> Result<(BlockhashMode, Option<Pubkey>), TransferError> {
+    let mode = match section.get("blockhash_mode").map(String::as_str) {
+        None | Some("recent") => BlockhashMode::Recent,
+        Some("durable_nonce") => BlockhashMode::DurableNonce,
+        Some(_) => {
+            return Err(TransferError::InvalidConfig(
+                "blockhash_mode must be exactly \"recent\" or \"durable_nonce\"".to_string(),
+            ))
+        }
+    };
+    let nonce_key = section
+        .get("nonce_account_pubkey")
+        .filter(|value| !value.is_empty());
+    match mode {
+        BlockhashMode::Recent => {
+            if nonce_key.is_some() {
+                return Err(TransferError::InvalidConfig(
+                    "nonce_account_pubkey requires blockhash_mode = durable_nonce".to_string(),
+                ));
+            }
+            Ok((BlockhashMode::Recent, None))
+        }
+        BlockhashMode::DurableNonce => {
+            let key = nonce_key.ok_or_else(|| {
+                TransferError::InvalidConfig(
+                    "durable_nonce mode requires nonce_account_pubkey".to_string(),
+                )
+            })?;
+            let nonce_account = parse_config_pubkey(key, "nonce_account_pubkey")?;
+            Ok((BlockhashMode::DurableNonce, Some(nonce_account)))
+        }
+    }
 }
 
 fn parse_optional_bool(value: Option<&String>, field: &'static str) -> Result<bool, TransferError> {

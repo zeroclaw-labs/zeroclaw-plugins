@@ -9,8 +9,8 @@ use nanosol::{
 };
 use serde_json::json;
 use spl_transfer_build::transfer::{
-    build_unsigned_bytes, execute_component_input, verify_final_bytes, TransferOutput,
-    VerificationPolicy,
+    build_unsigned_bytes, execute_component_input, verify_final_bytes, BlockhashMode,
+    TransferOutput, VerificationPolicy,
 };
 
 use common::{
@@ -35,6 +35,8 @@ fn policy() -> VerificationPolicy {
         recent_blockhash: pubkey(BLOCKHASH).to_bytes(),
         reference: Some(reference),
         memo: Some("invoice 412".to_string()),
+        mode: BlockhashMode::Recent,
+        nonce_account: None,
     }
 }
 
