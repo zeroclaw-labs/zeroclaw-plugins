@@ -1,0 +1,10 @@
+name = "token-risk-check"
+version = "0.1.0"
+description = "Read-only Solana mint risk report: authorities, concentration, Token-2022 extensions, and liquidity evidence"
+author = "RealityBreaker"
+wasm_path = "token_risk_check.wasm"
+capabilities = ["tool"]
+
+# T0 Read. HTTP is used for Solana JSON-RPC and optional DEX liquidity data.
+# Config access is jailed to this plugin's rpc_url and dex_url settings.
+permissions = ["http_client", "config_read"]
