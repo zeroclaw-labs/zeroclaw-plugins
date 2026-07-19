@@ -191,6 +191,30 @@ cargo build --locked --target wasm32-wasip2 --release
 - Structured events use ZeroClaw `log-record`; transaction bytes and RPC URLs
   are never printed.
 
+## Live official-host verification
+
+The release component was installed into official ZeroClaw commit
+`a80ddb64998f81dc5b5b3f80611d0f3e538fab1c` with only `http_client` and
+`config_read`. An agent-selected call checked an unsigned devnet System transfer
+of 1,000 lamports, passed exact simulation at 150 compute units, and returned:
+
+```text
+ALLOW low
+transactionHash 4a5ba7b81b8f27d6aae65de488c1a3b597ab2d1af9da1ef609e815f44b22d624
+policyHash      0226f6f267f38aa81f39a3d3ef95c481f1a63e892df30c38b20fb58ddb82c9bb
+receiptHash     8a7da1a2d29aa40568d06c09c4729e51d24eca9e40df01463e58da455ce35e71
+```
+
+The same official-host path denied an expired blockhash. A separate regression
+passed a forged caller `__config`; ZeroClaw stripped it, injected the operator
+policy, and the plugin denied the unapproved recipient before simulation. No
+signature was created and no transaction was broadcast.
+
+The tool was also called through ZeroClaw's official Telegram channel. The bot
+delivered a hash-linked `DENY` for an expired-blockhash fixture back to the
+allowlisted peer, proving the real channel-to-agent-to-WASM-to-channel path.
+Credentials and peer identifiers are not part of the repository.
+
 ## Custody
 
 T0 read-only. The component can inspect public RPC state and return a verdict.
@@ -199,4 +223,3 @@ It cannot create a signature or send a transaction.
 ## License
 
 MIT.
-
