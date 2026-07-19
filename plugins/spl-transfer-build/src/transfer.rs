@@ -15,8 +15,8 @@ use nanosol::{
         decode_transfer_checked, decode_unsigned_v0_transaction,
     },
     instruction::{
-        advance_nonce_account, create_associated_token_account_idempotent, memo as memo_instruction,
-        transfer_checked, AccountMeta, TokenProgram,
+        advance_nonce_account, create_associated_token_account_idempotent,
+        memo as memo_instruction, transfer_checked, AccountMeta, TokenProgram,
     },
     message::{Message, MessageVersion, Transaction, MAX_TRANSACTION_BYTES},
     mint::{parse_mint_account, MintInfo},
@@ -713,7 +713,10 @@ fn build_transfer_observed(
 /// The message blockhash and, in durable mode, the validated nonce account.
 enum ResolvedBlockhash {
     Recent(LatestBlockhash),
-    Durable { account: Pubkey, nonce: NonceAccount },
+    Durable {
+        account: Pubkey,
+        nonce: NonceAccount,
+    },
 }
 
 impl ResolvedBlockhash {
@@ -779,7 +782,9 @@ pub fn build_unsigned_bytes(policy: &VerificationPolicy) -> Result<Vec<u8>, Tran
     // Durable mode: AdvanceNonceAccount must be instruction zero, with the nonce
     // authority equal to the sender (fee payer / only signer).
     if policy.mode == BlockhashMode::DurableNonce {
-        let nonce_account = policy.nonce_account.ok_or(TransferError::TransactionBuild)?;
+        let nonce_account = policy
+            .nonce_account
+            .ok_or(TransferError::TransactionBuild)?;
         instructions.push(advance_nonce_account(nonce_account, policy.sender));
     }
     instructions.push(create);
@@ -836,11 +841,13 @@ pub fn verify_final_bytes(
         return verification_refusal("instruction count is outside the supported subset");
     }
     if durable {
-        let nonce_account = policy
-            .nonce_account
-            .ok_or_else(|| TransferError::TransactionVerification("missing nonce account".to_string()))?;
+        let nonce_account = policy.nonce_account.ok_or_else(|| {
+            TransferError::TransactionVerification("missing nonce account".to_string())
+        })?;
         let advance = decode_advance_nonce_account(message, 0).map_err(|_| {
-            TransferError::TransactionVerification("AdvanceNonceAccount instruction refused".to_string())
+            TransferError::TransactionVerification(
+                "AdvanceNonceAccount instruction refused".to_string(),
+            )
         })?;
         if advance.nonce_account != nonce_account || advance.nonce_authority != policy.sender {
             return verification_refusal("nonce account or authority differs from policy");
@@ -898,8 +905,13 @@ pub fn verify_final_bytes(
         return verification_refusal("decoded associated token accounts differ from derivation");
     }
 
-    let reconstructed =
-        reconstruct_message(&transaction, &create, &transfer, decoded_memo.as_deref(), policy)?;
+    let reconstructed = reconstruct_message(
+        &transaction,
+        &create,
+        &transfer,
+        decoded_memo.as_deref(),
+        policy,
+    )?;
     if reconstructed != *message {
         return verification_refusal("message contains non-canonical keys, flags, or structure");
     }

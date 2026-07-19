@@ -110,9 +110,9 @@ mod component {
     fn emit_phase(phase: ExecutionPhase) {
         let (action, message) = match phase {
             ExecutionPhase::ConfigValidated => (PluginAction::Validate, "config validated"),
-            ExecutionPhase::MintRpc
-            | ExecutionPhase::BlockhashRpc
-            | ExecutionPhase::NonceRpc => (PluginAction::Query, "RPC phase"),
+            ExecutionPhase::MintRpc | ExecutionPhase::BlockhashRpc | ExecutionPhase::NonceRpc => {
+                (PluginAction::Query, "RPC phase")
+            }
             ExecutionPhase::TransactionBuilt => (PluginAction::Complete, "transaction built"),
             ExecutionPhase::VerificationPassed => (PluginAction::Validate, "verification passed"),
             ExecutionPhase::SimulationRpc => (PluginAction::Query, "RPC simulation phase"),
