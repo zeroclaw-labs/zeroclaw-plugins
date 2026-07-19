@@ -9,11 +9,12 @@ use std::collections::HashMap;
 use std::str::FromStr;
 
 use borsh::BorshSerialize;
-use ed25519_dalek::SigningKey;
+use ed25519_dalek::{Signer, SigningKey};
 use palinurus_core::{find_program_address, AccountMeta, CreateAttestationIxData, Instruction, Pubkey};
 use sha2::{Digest, Sha256};
 
 use base64::prelude::{BASE64_STANDARD, Engine as _};
+use palinurus_core::versioned_tx::serialize_message;
 use palinurus_core::{
     build_with_durable_nonce, parse_nonce_account, serialize_tx, short_pubkey, NonceState, Rpc,
 };
@@ -484,7 +485,6 @@ fn shape_memo_fallback(
 }
 
 /// Shape the T2 output (signed + submitted).
-#[allow(dead_code)]
 fn shape_t2(
     attestation_pda: &Pubkey,
     nonce: &Pubkey,
@@ -815,4 +815,149 @@ pub fn enforce_lamport_cap(
         )));
     }
     Ok(())
+}
+
+// ── execute_t2 (slice G) ──
+
+/// Execute the T2 attestation flow: same tx construction as T1, but the scoped
+/// session key signs + submits. Custody guards (allowlist + identity + caps)
+/// are enforced BEFORE signing. Fail closed on any violation.
+///
+/// `daily_cap_state` is maintained by the shim (thread_local); the pure core
+/// receives it as a mutable reference. The "day" is derived from the reading's
+/// timestamp (UTC day = timestamp / 86400) — see README for the soft-bound
+/// disclosure.
+pub fn execute_t2(
+    reading: &SensorReading,
+    memo: Option<&str>,
+    cfg: &AttestConfig,
+    rpc: &dyn Rpc,
+    daily_cap_state: &mut DailyCapState,
+) -> Result<AttestOutput, AttestError> {
+    validate_reading(reading)?;
+
+    // ── Custody guard 1: session key identity (fail closed before any work) ──
+    enforce_session_key_identity(cfg)?;
+
+    // Build the user instructions (SAS ix + optional memo, or memo fallback).
+    let (user_ixs, attestation_pda, expiry, used_memo_fallback) = if cfg.memo_fallback {
+        let memo_text = format!(
+            "palinurus: {}={}{} @ {}",
+            reading.sensor_id, reading.value, reading.unit, reading.timestamp
+        );
+        let mut ixs = vec![build_memo_ix(&memo_text)];
+        if let Some(m) = memo {
+            if !m.is_empty() {
+                ixs.push(build_memo_ix(m));
+            }
+        }
+        (ixs, cfg.nonce_account, 0i64, true)
+    } else {
+        let (sas_ix, pda, exp) = build_attest_ix(reading, cfg)?;
+        let mut ixs = vec![sas_ix];
+        if let Some(m) = memo {
+            if !m.is_empty() {
+                ixs.push(build_memo_ix(m));
+            }
+        }
+        (ixs, pda, exp, false)
+    };
+
+    // ── Custody guard 2: program allowlist (blocks value transfer) ──
+    enforce_program_allowlist(&user_ixs)?;
+
+    // Fetch + parse the nonce account (same as T1).
+    let acct = rpc.get_account_info(&cfg.nonce_account).map_err(AttestError::Rpc)?;
+    let acct = acct.ok_or_else(|| {
+        AttestError::NonceAccount(format!("nonce account not found: {}", cfg.nonce_account))
+    })?;
+
+    let nonce_acct = parse_nonce_account(&acct.data)
+        .map_err(|e| AttestError::NonceAccount(format!("failed to parse nonce account: {e:?}")))?;
+
+    let nonce_data = match nonce_acct.state {
+        NonceState::Initialized(d) => d,
+        NonceState::Uninitialized => {
+            return Err(AttestError::NonceAccount(
+                "nonce account is uninitialized — create + initialize it first".to_string(),
+            ));
+        }
+    };
+
+    if nonce_data.authority != cfg.nonce_authority {
+        return Err(AttestError::NonceAccount(format!(
+            "nonce authority mismatch: expected {}, got {}",
+            cfg.nonce_authority, nonce_data.authority
+        )));
+    }
+
+    // ── Custody guard 3: lamport cap (estimated fee) ──
+    enforce_lamport_cap(nonce_data.lamports_per_signature, 1, cfg.max_lamports_per_tx)?;
+
+    // Build the durable-nonce tx (advance ix is auto-prepended by build_with_durable_nonce).
+    let mut tx = build_with_durable_nonce(
+        &user_ixs,
+        cfg.payer,
+        cfg.nonce_account,
+        nonce_data.durable_nonce,
+        cfg.nonce_authority,
+    );
+
+    // ── Custody guard 4: daily cap (rate limit) ──
+    let today_utc = reading.timestamp / 86400;
+    enforce_daily_cap(daily_cap_state, today_utc, cfg.max_attestations_per_day)?;
+
+    // ── Sign ──
+    let msg_bytes = serialize_message(&tx.message);
+    let sig = cfg
+        .session_key
+        .as_ref()
+        .expect("enforce_session_key_identity verified session_key is present")
+        .sign(&msg_bytes);
+    tx.signatures = vec![sig.to_bytes()];
+
+    // ── Submit ──
+    let signed_tx_bytes = serialize_tx(&tx);
+    let tx_b64 = BASE64_STANDARD.encode(&signed_tx_bytes);
+    let signature = rpc
+        .send_transaction(&signed_tx_bytes)
+        .map_err(|e| AttestError::Submit(format!("{e:?}")))?;
+
+    // ── Shape the T2 output ──
+    let nonce = reading.derive_nonce();
+    let summary = shape_t2(&attestation_pda, &nonce, expiry, &signature, cfg);
+    let explorer_url = format!(
+        "https://explorer.solana.com/tx/{}?cluster={}",
+        signature, cfg.network
+    );
+
+    Ok(AttestOutput {
+        attestation_pda,
+        tx_b64,
+        signature: Some(signature),
+        expiry,
+        used_memo_fallback,
+        explorer_url,
+        summary,
+    })
+}
+
+/// The unified entry point: routes to T1 or T2 based on custody_mode.
+/// The shim calls this. For T2, the shim passes its thread_local DailyCapState.
+pub fn execute_entry(
+    reading: &SensorReading,
+    memo: Option<&str>,
+    cfg: &AttestConfig,
+    rpc: &dyn Rpc,
+    daily_cap_state: Option<&mut DailyCapState>,
+) -> Result<AttestOutput, AttestError> {
+    match cfg.custody_mode {
+        CustodyMode::T1 => execute_t1_entry(reading, memo, cfg, rpc),
+        CustodyMode::T2 => {
+            let state = daily_cap_state.ok_or_else(|| {
+                AttestError::Custody("T2 requires a DailyCapState — the shim must provide it".to_string())
+            })?;
+            execute_t2(reading, memo, cfg, rpc, state)
+        }
+    }
 }

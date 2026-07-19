@@ -31,6 +31,11 @@ mod component {
 
     struct DepinAttest;
 
+    thread_local! {
+        static DAILY_CAP: std::cell::RefCell<crate::depin_attest::DailyCapState> =
+            std::cell::RefCell::new(crate::depin_attest::DailyCapState::default());
+    }
+
     const PLUGIN_NAME: &str = "depin-attest";
     const PLUGIN_VERSION: &str = env!("CARGO_PKG_VERSION");
     const TOOL_NAME: &str = "depin_attest";
@@ -90,9 +95,7 @@ mod component {
         }
 
         fn execute(args: String) -> Result<ToolResult, String> {
-            use crate::depin_attest::{
-    execute_t1_entry, AttestConfig, AttestError, SensorReading,
-};
+            use crate::depin_attest::{execute_entry, AttestConfig, AttestError, SensorReading};
             use std::collections::HashMap;
 
             #[derive(serde::Deserialize)]
@@ -157,9 +160,13 @@ mod component {
                 cfg.rpc_api_key.clone(),
             );
 
-            // 5. Execute T1 (or T2 — slice G adds the T2 branch).
+            // 5. Execute (T1 or T2 based on custody_mode).
             let memo = parsed.memo.as_deref();
-            match execute_t1_entry(&reading, memo, &cfg, &rpc) {
+            let result = DAILY_CAP.with(|cap| {
+                let mut cap = cap.borrow_mut();
+                execute_entry(&reading, memo, &cfg, &rpc, Some(&mut cap))
+            });
+            match result {
                 Ok(out) => {
                     emit(
                         PluginAction::Complete,

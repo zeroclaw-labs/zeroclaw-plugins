@@ -930,3 +930,171 @@ fn lamport_cap_rejects_over_cap() {
     let err = enforce_lamport_cap(5000, 3, 10000).unwrap_err();
     assert!(matches!(err, AttestError::Custody(ref m) if m.contains("exceeds per-tx cap")));
 }
+
+// ── Slice G: execute_t2 tests ──
+
+use depin_attest::depin_attest::{execute_entry, execute_t2};
+use ed25519_dalek::{Signature, Verifier, VerifyingKey};
+use palinurus_core::versioned_tx::serialize_message;
+use palinurus_core::build_with_durable_nonce;
+
+/// Build a T2 config + the session key's pubkey for test assertions.
+fn t2_config_and_pubkey() -> (AttestConfig, [u8; 32]) {
+    let secret = [99u8; 32];
+    let signing_key = ed25519_dalek::SigningKey::from_bytes(&secret);
+    let pubkey_bytes = signing_key.verifying_key().to_bytes();
+    let pubkey_b58 = bs58::encode(pubkey_bytes).into_string();
+
+    let mut s = valid_t1_section();
+    s.insert("custody_mode".to_string(), "t2".to_string());
+    s.insert("session_key".to_string(), bs58::encode(secret).into_string());
+    s.insert("authority".to_string(), pubkey_b58.clone());
+    s.insert("payer".to_string(), pubkey_b58.clone());
+    s.insert("nonce_authority".to_string(), pubkey_b58);
+    // nonce_account = TOKEN (from valid_t1_section), so the mock nonce account
+    // must have authority = pubkey_bytes.
+    let cfg = AttestConfig::from_section(&s).unwrap();
+    (cfg, pubkey_bytes)
+}
+
+/// MockRpc with a nonce account (authority = session key) + a sendTransaction response.
+fn mock_rpc_for_t2(authority: &Pubkey) -> MockRpc {
+    let nonce_resp = nonce_account_response(authority, [0x42; 32]);
+    let send_resp = json!({ "result": "mock_tx_signature_abc123" });
+    MockRpc::new(vec![nonce_resp, send_resp])
+}
+
+#[test]
+fn execute_t2_happy_path() {
+    let (cfg, sk_pubkey) = t2_config_and_pubkey();
+    let auth = Pubkey::from_bytes(sk_pubkey);
+    let rpc = mock_rpc_for_t2(&auth);
+    let mut cap = DailyCapState::default();
+
+    let out = execute_t2(&test_reading(), None, &cfg, &rpc, &mut cap).expect("T2 happy path");
+
+    // Signature is present.
+    assert!(out.signature.is_some());
+    assert_eq!(out.signature.as_ref().unwrap(), "mock_tx_signature_abc123");
+
+    // tx_b64 decodes to a signed tx.
+    let tx_bytes = BASE64_STANDARD.decode(&out.tx_b64).unwrap();
+    // Wire format: [compact-u16 sig_count=1] [64B sig] [message...]
+    assert_eq!(tx_bytes[0], 1, "first byte = sig count (1)");
+    let sig_bytes: [u8; 64] = tx_bytes[1..65].try_into().unwrap();
+    let msg_bytes = &tx_bytes[65..];
+
+    // Verify the signature against the session key's pubkey.
+    let vk = VerifyingKey::from_bytes(&sk_pubkey).unwrap();
+    let sig = Signature::from_bytes(&sig_bytes);
+    assert!(
+        vk.verify(msg_bytes, &sig).is_ok(),
+        "signature must verify against the session key's pubkey"
+    );
+
+    // Summary ≤200 tokens.
+    assert!(estimate_tokens(&out.summary) <= 200);
+    assert!(out.summary.contains("attested + submitted"));
+    assert!(!out.used_memo_fallback);
+}
+
+#[test]
+fn execute_t2_signature_matches_message() {
+    // Cross-check: the signed message bytes == serialize_message(tx.message).
+    let (cfg, _) = t2_config_and_pubkey();
+    let auth = Pubkey::from_bytes(cfg.authority.to_bytes());
+    let rpc = mock_rpc_for_t2(&auth);
+    let mut cap = DailyCapState::default();
+
+    let out = execute_t2(&test_reading(), None, &cfg, &rpc, &mut cap).unwrap();
+
+    // Reconstruct the tx (unsigned) to get the message, then verify the sig is over it.
+    let (sas_ix, _, _) = build_attest_ix(&test_reading(), &cfg).unwrap();
+    let user_ixs = vec![sas_ix];
+    // We need the nonce account's durable_nonce. The mock used [0x42; 32].
+    let tx = build_with_durable_nonce(
+        &user_ixs,
+        cfg.payer,
+        cfg.nonce_account,
+        [0x42; 32], // the durable nonce from the mock
+        cfg.nonce_authority,
+    );
+    let expected_msg = serialize_message(&tx.message);
+
+    let tx_bytes = BASE64_STANDARD.decode(&out.tx_b64).unwrap();
+    let msg_bytes = &tx_bytes[65..]; // skip sig_count(1) + sig(64)
+    assert_eq!(msg_bytes, expected_msg.as_slice(), "signed message must match serialize_message");
+}
+
+#[test]
+fn execute_t2_memo_fallback() {
+    let mut s = valid_t1_section();
+    s.insert("custody_mode".to_string(), "t2".to_string());
+    s.insert("memo_fallback".to_string(), "true".to_string());
+    let secret = [77u8; 32];
+    let sk = ed25519_dalek::SigningKey::from_bytes(&secret);
+    let pk_b58 = bs58::encode(sk.verifying_key().to_bytes()).into_string();
+    s.insert("session_key".to_string(), bs58::encode(secret).into_string());
+    s.insert("authority".to_string(), pk_b58.clone());
+    s.insert("payer".to_string(), pk_b58.clone());
+    s.insert("nonce_authority".to_string(), pk_b58);
+    let cfg = AttestConfig::from_section(&s).unwrap();
+
+    let auth = Pubkey::from_bytes(sk.verifying_key().to_bytes());
+    let rpc = mock_rpc_for_t2(&auth);
+    let mut cap = DailyCapState::default();
+
+    let out = execute_t2(&test_reading(), None, &cfg, &rpc, &mut cap).unwrap();
+    assert!(out.used_memo_fallback);
+    assert!(out.signature.is_some());
+}
+
+#[test]
+fn execute_t2_daily_cap_exceeded() {
+    let (cfg, sk_pubkey) = t2_config_and_pubkey();
+    let auth = Pubkey::from_bytes(sk_pubkey);
+    let rpc = mock_rpc_for_t2(&auth);
+    // Pre-set the daily cap to the limit.
+    let mut cap = DailyCapState { last_day: 1_753_000_000 / 86400, count: 100 };
+
+    let err = execute_t2(&test_reading(), None, &cfg, &rpc, &mut cap).unwrap_err();
+    assert!(matches!(err, AttestError::Custody(ref m) if m.contains("cap exceeded")));
+}
+
+#[test]
+fn execute_t2_identity_mismatch_rejected() {
+    // Build a T2 config where authority != session key.
+    let secret = [99u8; 32];
+    let mut s = valid_t1_section();
+    s.insert("custody_mode".to_string(), "t2".to_string());
+    s.insert("session_key".to_string(), bs58::encode(secret).into_string());
+    // authority = SYSTEM (from valid_t1_section), NOT the session key's pubkey.
+    // This should fail the identity check.
+    let cfg = AttestConfig::from_section(&s).unwrap();
+    let rpc = mock_rpc_for_t2(&Pubkey::from_str(SYSTEM).unwrap());
+    let mut cap = DailyCapState::default();
+
+    let err = execute_t2(&test_reading(), None, &cfg, &rpc, &mut cap).unwrap_err();
+    assert!(matches!(err, AttestError::Custody(ref m) if m.contains("authority")));
+}
+
+#[test]
+fn execute_entry_routes_t2() {
+    let (cfg, sk_pubkey) = t2_config_and_pubkey();
+    let auth = Pubkey::from_bytes(sk_pubkey);
+    let rpc = mock_rpc_for_t2(&auth);
+    let mut cap = DailyCapState::default();
+
+    let out = execute_entry(&test_reading(), None, &cfg, &rpc, Some(&mut cap)).unwrap();
+    assert!(out.signature.is_some(), "T2 via execute_entry must produce a signature");
+}
+
+#[test]
+fn execute_entry_routes_t1() {
+    let cfg = test_config(); // T1 config
+    let auth = Pubkey::from_str(TOKEN).unwrap();
+    let rpc = MockRpc::new(vec![nonce_account_response(&auth, [0x55; 32])]);
+
+    let out = execute_entry(&test_reading(), None, &cfg, &rpc, None).unwrap();
+    assert!(out.signature.is_none(), "T1 via execute_entry must NOT produce a signature");
+}
