@@ -705,3 +705,85 @@ fn execute_t1_rpc_error() {
     let err = execute_t1(&test_reading(), None, &cfg, &rpc).unwrap_err();
     assert!(matches!(err, AttestError::Rpc(_)));
 }
+
+// ── Slice E: memo fallback tests ──
+
+use depin_attest::depin_attest::execute_t1_entry;
+
+fn t1_config_with_memo_fallback() -> AttestConfig {
+    let mut s = valid_t1_section();
+    s.insert("memo_fallback".to_string(), "true".to_string());
+    AttestConfig::from_section(&s).unwrap()
+}
+
+#[test]
+fn memo_fallback_happy_path() {
+    let cfg = t1_config_with_memo_fallback();
+    let auth = Pubkey::from_str(SYSTEM).unwrap();
+    let rpc = MockRpc::new(vec![nonce_account_response(&auth, [0xDD; 32])]);
+
+    let out = execute_t1_entry(&test_reading(), None, &cfg, &rpc).unwrap();
+
+    assert!(out.used_memo_fallback, "must use memo fallback");
+    assert!(out.signature.is_none());
+    assert!(estimate_tokens(&out.summary) <= 200);
+    assert!(out.summary.len() <= 800);
+    assert!(out.summary.contains("memo attestation"), "summary: {}", out.summary);
+
+    // The tx contains the memo text.
+    let tx_bytes = BASE64_STANDARD.decode(&out.tx_b64).unwrap();
+    let memo_text = "palinurus: bme280-1=24.7celsius @ 1753000000";
+    assert!(
+        tx_bytes.windows(memo_text.len()).any(|w| w == memo_text.as_bytes()),
+        "tx must contain the memo text"
+    );
+}
+
+#[test]
+fn memo_fallback_with_optional_memo() {
+    let cfg = t1_config_with_memo_fallback();
+    let auth = Pubkey::from_str(SYSTEM).unwrap();
+    let rpc = MockRpc::new(vec![nonce_account_response(&auth, [0xEE; 32])]);
+
+    let out = execute_t1_entry(&test_reading(), Some("extra note"), &cfg, &rpc).unwrap();
+
+    assert!(out.used_memo_fallback);
+    let tx_bytes = BASE64_STANDARD.decode(&out.tx_b64).unwrap();
+    assert!(tx_bytes.windows(10).any(|w| w == b"extra note"));
+}
+
+#[test]
+fn memo_fallback_explorer_url_points_to_nonce_account() {
+    let cfg = t1_config_with_memo_fallback();
+    let auth = Pubkey::from_str(SYSTEM).unwrap();
+    let rpc = MockRpc::new(vec![nonce_account_response(&auth, [0xFF; 32])]);
+
+    let out = execute_t1_entry(&test_reading(), None, &cfg, &rpc).unwrap();
+    // Explorer URL should contain the nonce_account address, not a SAS PDA.
+    assert!(out.explorer_url.contains(&cfg.nonce_account.to_string()));
+}
+
+#[test]
+fn memo_fallback_validates_reading() {
+    let cfg = t1_config_with_memo_fallback();
+    let rpc = mock_rpc_with_nonce();
+    let reading = SensorReading {
+        sensor_id: "".to_string(),
+        value: 1.0,
+        unit: "C".to_string(),
+        timestamp: 100,
+    };
+    let err = execute_t1_entry(&reading, None, &cfg, &rpc).unwrap_err();
+    assert!(matches!(err, AttestError::InvalidReading(_)));
+}
+
+#[test]
+fn sas_path_used_when_memo_fallback_false() {
+    // Default config (memo_fallback = false) → SAS path.
+    let cfg = test_config();
+    let auth = Pubkey::from_str(TOKEN).unwrap();
+    let rpc = MockRpc::new(vec![nonce_account_response(&auth, [0x11; 32])]);
+
+    let out = execute_t1_entry(&test_reading(), None, &cfg, &rpc).unwrap();
+    assert!(!out.used_memo_fallback, "should use SAS path");
+}

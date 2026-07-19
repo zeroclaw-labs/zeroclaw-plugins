@@ -89,25 +89,99 @@ mod component {
             .to_string()
         }
 
-        fn execute(_args: String) -> Result<ToolResult, String> {
-            emit(
-                PluginAction::Start,
-                None,
-                "execute received args (slice A stub — not implemented)",
-            );
-            emit(
-                PluginAction::Fail,
-                Some(PluginOutcome::Failure),
-                "depin-attest not implemented yet (slice A scaffold)",
+        fn execute(args: String) -> Result<ToolResult, String> {
+            use crate::depin_attest::{
+    execute_t1_entry, AttestConfig, AttestError, SensorReading,
+};
+            use std::collections::HashMap;
+
+            #[derive(serde::Deserialize)]
+            struct ExecuteArgs {
+                sensor_id: String,
+                value: f64,
+                unit: String,
+                timestamp: i64,
+                #[serde(default)]
+                memo: Option<String>,
+                #[serde(rename = "__config", default)]
+                config: HashMap<String, String>,
+            }
+
+            emit(PluginAction::Start, None, "execute received sensor reading");
+
+            // 1. Parse args.
+            let parsed: ExecuteArgs = match serde_json::from_str(&args) {
+                Ok(a) => a,
+                Err(e) => {
+                    emit(PluginAction::Fail, Some(PluginOutcome::Failure), "invalid arguments");
+                    return Ok(ToolResult {
+                        success: false,
+                        output: String::new(),
+                        error: Some(format!("invalid arguments: {e}")),
+                    });
+                }
+            };
+
+            // 2. Build config (fail closed on missing/malformed).
+            let cfg = match AttestConfig::from_section(&parsed.config) {
+                Ok(c) => c,
+                Err(AttestError::Config(msg)) => {
+                    emit(PluginAction::Fail, Some(PluginOutcome::Failure), "config error");
+                    return Ok(ToolResult {
+                        success: false,
+                        output: String::new(),
+                        error: Some(format!("config error: {msg}")),
+                    });
+                }
+                Err(e) => {
+                    emit(PluginAction::Fail, Some(PluginOutcome::Failure), "config error");
+                    return Ok(ToolResult {
+                        success: false,
+                        output: String::new(),
+                        error: Some(format!("config error: {e:?}")),
+                    });
+                }
+            };
+
+            // 3. Build the reading.
+            let reading = SensorReading {
+                sensor_id: parsed.sensor_id,
+                value: parsed.value,
+                unit: parsed.unit,
+                timestamp: parsed.timestamp,
+            };
+
+            // 4. Create the RPC client (waki, wasm-only).
+            let rpc = palinurus_core::WakiRpc::new(
+                cfg.rpc_endpoint.clone(),
+                cfg.rpc_api_key.clone(),
             );
 
-            // Slice A scaffold: the pure core is empty. Slices B–G implement the
-            // real flow (config → nonce → ix → durable-nonce → serialize → shape).
-            Ok(ToolResult {
-                success: false,
-                output: String::new(),
-                error: Some("depin-attest: not implemented (slice A scaffold)".to_string()),
-            })
+            // 5. Execute T1 (or T2 — slice G adds the T2 branch).
+            let memo = parsed.memo.as_deref();
+            match execute_t1_entry(&reading, memo, &cfg, &rpc) {
+                Ok(out) => {
+                    emit(
+                        PluginAction::Complete,
+                        Some(PluginOutcome::Success),
+                        "attestation built (unsigned, durable-nonce)",
+                    );
+                    Ok(ToolResult {
+                        success: true,
+                        output: out.summary,
+                        error: None,
+                    })
+                }
+                Err(e) => {
+                    let msg = format!("{e:?}");
+                    emit(PluginAction::Fail, Some(PluginOutcome::Failure), "attestation failed");
+                    Ok(ToolResult {
+                        success: false,
+                        output: String::new(),
+                        error: Some(msg),
+                    })
+                }
+            }
         }
     }
 

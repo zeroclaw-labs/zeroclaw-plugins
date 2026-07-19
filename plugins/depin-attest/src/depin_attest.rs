@@ -458,7 +458,6 @@ fn shape_t1(
 }
 
 /// Shape the memo-fallback output.
-#[allow(dead_code)]
 fn shape_memo_fallback(
     nonce_account: &Pubkey,
     memo_text: &str,
@@ -623,4 +622,98 @@ fn validate_reading(reading: &SensorReading) -> Result<(), AttestError> {
         )));
     }
     Ok(())
+}
+
+// ── Memo fallback (slice E) ──
+
+/// Execute the memo-fallback T1 flow: skip SAS, build a memo-only tx with the
+/// reading as a UTF-8 string, compose with durable nonce. Used when
+/// `cfg.memo_fallback = true` (the operator's explicit escape hatch).
+fn execute_memo_fallback(
+    reading: &SensorReading,
+    memo: Option<&str>,
+    cfg: &AttestConfig,
+    rpc: &dyn Rpc,
+) -> Result<AttestOutput, AttestError> {
+    validate_reading(reading)?;
+
+    // Build the memo text: "palinurus: sensor_id=value unit @ timestamp"
+    let memo_text = format!(
+        "palinurus: {}={}{} @ {}",
+        reading.sensor_id, reading.value, reading.unit, reading.timestamp
+    );
+
+    let mut user_ixs = vec![build_memo_ix(&memo_text)];
+    if let Some(m) = memo {
+        if !m.is_empty() {
+            user_ixs.push(build_memo_ix(m));
+        }
+    }
+
+    // Fetch + parse the nonce account (same as execute_t1).
+    let acct = rpc.get_account_info(&cfg.nonce_account).map_err(AttestError::Rpc)?;
+    let acct = acct.ok_or_else(|| {
+        AttestError::NonceAccount(format!("nonce account not found: {}", cfg.nonce_account))
+    })?;
+
+    let nonce_acct = parse_nonce_account(&acct.data)
+        .map_err(|e| AttestError::NonceAccount(format!("failed to parse nonce account: {e:?}")))?;
+
+    let nonce_data = match nonce_acct.state {
+        NonceState::Initialized(d) => d,
+        NonceState::Uninitialized => {
+            return Err(AttestError::NonceAccount(
+                "nonce account is uninitialized — create + initialize it first".to_string(),
+            ));
+        }
+    };
+
+    if nonce_data.authority != cfg.nonce_authority {
+        return Err(AttestError::NonceAccount(format!(
+            "nonce authority mismatch: expected {}, got {}",
+            cfg.nonce_authority, nonce_data.authority
+        )));
+    }
+
+    let tx = build_with_durable_nonce(
+        &user_ixs,
+        cfg.payer,
+        cfg.nonce_account,
+        nonce_data.durable_nonce,
+        cfg.nonce_authority,
+    );
+
+    let tx_bytes = serialize_tx(&tx);
+    let tx_b64 = BASE64_STANDARD.encode(&tx_bytes);
+
+    let summary = shape_memo_fallback(&cfg.nonce_account, &memo_text, &tx_b64, cfg);
+    let explorer_url = format!(
+        "https://explorer.solana.com/address/{}?cluster={}",
+        cfg.nonce_account, cfg.network
+    );
+
+    Ok(AttestOutput {
+        attestation_pda: cfg.nonce_account, // no SAS PDA; show the nonce account
+        tx_b64,
+        signature: None,
+        expiry: 0, // memo has no expiry
+        used_memo_fallback: true,
+        explorer_url,
+        summary,
+    })
+}
+
+/// The main T1 entry point: routes to the SAS path or the memo-fallback path
+/// based on `cfg.memo_fallback`. This is what the shim calls.
+pub fn execute_t1_entry(
+    reading: &SensorReading,
+    memo: Option<&str>,
+    cfg: &AttestConfig,
+    rpc: &dyn Rpc,
+) -> Result<AttestOutput, AttestError> {
+    if cfg.memo_fallback {
+        execute_memo_fallback(reading, memo, cfg, rpc)
+    } else {
+        execute_t1(reading, memo, cfg, rpc)
+    }
 }
