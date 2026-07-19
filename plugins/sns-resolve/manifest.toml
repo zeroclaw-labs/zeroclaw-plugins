@@ -1,0 +1,7 @@
+name = "sns-resolve"
+version = "0.1.0"
+description = "Resolve a .sol or ANS domain name to a Solana address. Say 'send 10 USDC to alice.sol' without hallucinating an address."
+author = "ZeroClaw Plugins"
+wasm_path = "sns_resolve.wasm"
+capabilities = ["tool"]
+permissions = ["http_client"]
