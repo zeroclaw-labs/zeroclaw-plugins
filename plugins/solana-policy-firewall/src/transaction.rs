@@ -392,7 +392,36 @@ impl<'a> Cursor<'a> {
 
 #[cfg(test)]
 mod tests {
-    use super::Cursor;
+    use std::panic::{catch_unwind, AssertUnwindSafe};
+
+    use super::{parse_transaction, Cursor};
+    use crate::rpc::{RpcAccount, RpcClient, SimulationResult};
+
+    struct NoopRpc;
+
+    impl RpcClient for NoopRpc {
+        fn get_account(&mut self, _address: &str) -> Result<Option<RpcAccount>, String> {
+            Err("random fixture has no RPC accounts".to_string())
+        }
+
+        fn get_fee_for_message(&mut self, _message_base64: &str) -> Result<Option<u64>, String> {
+            Ok(Some(5_000))
+        }
+
+        fn get_minimum_balance_for_rent_exemption(
+            &mut self,
+            _data_len: usize,
+        ) -> Result<u64, String> {
+            Ok(2_039_280)
+        }
+
+        fn simulate_transaction(
+            &mut self,
+            _transaction_base64: &str,
+        ) -> Result<SimulationResult, String> {
+            unreachable!("wire parser never simulates")
+        }
+    }
 
     #[test]
     fn compact_lengths_are_strict() {
@@ -407,5 +436,28 @@ mod tests {
 
         let mut overflow = Cursor::new(&[0xff, 0xff, 0x04]);
         assert!(overflow.read_compact_len("test", usize::MAX).is_err());
+    }
+
+    #[test]
+    fn bounded_random_wire_inputs_never_panic() {
+        let mut state = 0x6a09_e667_f3bc_c909u64;
+        for case in 0..4_096usize {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            let length = (state as usize ^ case) % 1_233;
+            let mut bytes = vec![0u8; length];
+            for byte in &mut bytes {
+                state ^= state << 13;
+                state ^= state >> 7;
+                state ^= state << 17;
+                *byte = state as u8;
+            }
+            let mut rpc = NoopRpc;
+            let result = catch_unwind(AssertUnwindSafe(|| {
+                let _ = parse_transaction(&bytes, &mut rpc);
+            }));
+            assert!(result.is_ok(), "parser panicked on random case {case}");
+        }
     }
 }

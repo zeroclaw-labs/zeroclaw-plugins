@@ -14,7 +14,10 @@ lookup-table addresses, and priority fee from the bytes that would be signed.
 - Parses legacy and v0 transactions without `solana-sdk`.
 - Resolves v0 address lookup tables through HTTPS Solana RPC.
 - Resolves classic SPL token-account mint and wallet owner.
+- Proves canonical durable nonce state before accepting long-lived bytes.
 - Proves a narrow payment-safe instruction set and denies everything else.
+- Accounts for exact transaction fees, priority-fee bounds, ATA rent, and total
+  native SOL outflow.
 - Simulates the exact unsigned transaction with `sigVerify = false` and without
   replacing its blockhash.
 - Returns a compact, deterministic policy receipt.
@@ -38,6 +41,7 @@ rpc_url = "https://api.devnet.solana.com"
 allowed_fee_payers = "FEE_PAYER_PUBKEY"
 allowed_signers = "FEE_PAYER_PUBKEY"
 allowed_recipients = "SUPPLIER_WALLET_PUBKEY"
+allowed_nonce_accounts = "DURABLE_NONCE_ACCOUNT_PUBKEY"
 
 # Aliases expand to canonical program IDs. Supported aliases:
 # system, token, associated-token, compute-budget, memo, memo-v1.
@@ -50,6 +54,9 @@ allowed_mints = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU"
 max_sol_lamports = "100000000"
 max_token_amounts = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU=25000000"
 max_priority_fee_lamports = "10000"
+max_transaction_fee_lamports = "20000"
+max_account_creation_lamports = "2500000"
+max_total_sol_outflow_lamports = "102520000"
 max_instructions = "8"
 max_writable_accounts = "8"
 
@@ -92,7 +99,14 @@ An allowed result is shaped for an agent approval flow:
   "transfers": [
     {"asset": "4zMMC...cDU", "amountRaw": "25000000", "recipient": "mvin...f2kN"}
   ],
-  "simulation": {"status": "passed", "unitsConsumed": 24517},
+  "nativeOutflow": {
+    "transferLamports": 0,
+    "transactionFeeLamports": 5000,
+    "priorityFeeLamports": 0,
+    "accountCreationLamports": 2039280,
+    "totalLamports": 2044280
+  },
+  "simulation": {"status": "passed", "unitsConsumed": 24517, "slot": 477375182},
   "violations": []
 }
 ```
@@ -115,7 +129,7 @@ there is no signing or broadcast path:
 
 | Program | Proven operations | Everything else |
 | --- | --- | --- |
-| System | `Transfer` | Denied |
+| System | `Transfer`, canonical first-in-message `AdvanceNonceAccount` | Denied |
 | SPL Token | `Transfer`, `TransferChecked` | Denied |
 | Associated Token | Classic SPL create / create-idempotent | Denied |
 | Compute Budget | unit limit, unit price | Denied |
@@ -135,10 +149,12 @@ trusted. The firewall controls the boundary immediately before signing.
    referenced index.
 4. Token recipients are checked by wallet owner, not by a model-provided label.
 5. Value limits aggregate per transaction.
-6. Dangerous and opaque instructions always deny.
-7. Simulation failure, stale blockhash, RPC failure, and incomplete account
+6. Exact transaction fees, priority-fee bounds, ATA rent, and aggregate native
+   outflow are checked separately.
+7. Dangerous and opaque instructions always deny.
+8. Simulation failure, stale blockhash, forged nonce state, RPC failure, and incomplete account
    resolution always deny.
-8. Receipts bind the transaction bytes, canonical operator policy, verdict, and
+9. Receipts bind the transaction bytes, canonical operator policy, verdict, and
    violations with SHA-256.
 
 Residual trust: a single configured RPC can lie about account state or
@@ -172,6 +188,42 @@ The regression suite pins the same boundary: unapproved recipients, signed
 input, unknown config, authority changes, unresolved lookup tables, excessive
 amounts, and simulation failures cannot produce `ALLOW`.
 
+## Five-minute official-host reproduction
+
+Build the component, place it beside the manifest, and install that directory
+with an official ZeroClaw binary compiled with the WASM plugin backend:
+
+```bash
+rustup target add wasm32-wasip2
+cargo build --locked --target wasm32-wasip2 --release
+cp target/wasm32-wasip2/release/solana_policy_firewall.wasm \
+  plugins/solana-policy-firewall/solana_policy_firewall.wasm
+
+zeroclaw plugin install ./plugins/solana-policy-firewall
+zeroclaw config set plugins.enabled true
+zeroclaw plugin list
+zeroclaw plugin info solana-policy-firewall
+```
+
+The current official host seeds `[[plugins.entries]]` during `plugin install`.
+Add the `[plugins.entries.config]` block shown in [ZeroClaw
+configuration](#zeroclaw-configuration), or set the same fields through an
+interactive config surface. Keep `require_unsigned` and `require_simulation`
+true; the plugin rejects a configuration that tries to disable either
+invariant.
+
+Run a local agent against a serialized transaction:
+
+```bash
+zeroclaw agent -a <agent-alias> -m \
+  'Call solana-policy-firewall exactly once with transaction_base64=<BASE64>. Return the complete receipt.'
+```
+
+Public devnet inputs, RPC slots, exact fees, and Explorer links are committed
+in [`docs/devnet-evidence.json`](https://github.com/FeeeeelixWong/solana-policy-firewall/blob/main/docs/devnet-evidence.json).
+Both published fixtures use the same durable nonce and remain valid until that
+nonce account is advanced. No recent-blockhash replacement is required.
+
 ## Build and test
 
 ```bash
@@ -195,27 +247,39 @@ cargo build --locked --target wasm32-wasip2 --release
 
 The release component was installed into official ZeroClaw commit
 `a80ddb64998f81dc5b5b3f80611d0f3e538fab1c` with only `http_client` and
-`config_read`. An agent-selected call checked an unsigned devnet System transfer
-of 1,000 lamports, passed exact simulation at 150 compute units, and returned:
+`config_read`. An agent-selected call checked an unsigned devnet durable-nonce
+System transfer of 1,000,000 lamports, passed exact simulation at 300 compute
+units, and returned:
 
 ```text
 ALLOW low
-transactionHash 4a5ba7b81b8f27d6aae65de488c1a3b597ab2d1af9da1ef609e815f44b22d624
-policyHash      0226f6f267f38aa81f39a3d3ef95c481f1a63e892df30c38b20fb58ddb82c9bb
-receiptHash     8a7da1a2d29aa40568d06c09c4729e51d24eca9e40df01463e58da455ce35e71
+transactionHash 351ae2063fa2554a30402e4bb7f0e7911b91a7cdb57fe4edecbcb641449794e9
+policyHash      283ffa29c568f9dd253564eadd31a4ba958a0e0beffe685b39c85ddee142070d
+receiptHash     3a6196c326a6d6cd0e8cb4e344c1f2bb52fa90e9ad1595c2e02e4bc33c1edf90
 ```
 
-The same official-host path denied an expired blockhash. A separate regression
-passed a forged caller `__config`; ZeroClaw stripped it, injected the operator
-policy, and the plugin denied the unapproved recipient before simulation. No
-signature was created and no transaction was broadcast.
+The same host also allowed a durable-nonce v0 transaction that creates an ATA
+and transfers 1,500,000 raw SPL units. It accounted for 2,039,280 lamports of
+rent, a 5,000-lamport transaction fee, 2,044,280 lamports of total native
+outflow, and returned receipt
+`26dcbc72ccdec0e05c557ee343a3ab99935465c705c363e9b0207c890be08279`.
+Repeating the same bytes and policy at two later RPC slots reproduced that
+receipt hash exactly; the reported slot is observational metadata and is not
+part of the canonical hash.
 
-The tool was also called through ZeroClaw's official Telegram channel. The bot
-delivered `ALLOW`, simulation `passed`, 150 compute units, and receipt
-`3bc83b7d2df727ace9a5bc2897a6c38306b7f892dbc19a0c3024b1506eec4aa0`
-for a fresh fixture. It delivered `DENY` for an expired fixture, proving both
-sides of the real channel-to-agent-to-WASM-to-channel path. Credentials and
-peer identifiers are not part of the repository.
+An adversarial transaction kept the real nonce account and value but replaced
+the nonce authority. The host returned critical `DENY` with both
+`signer_not_allowed` and `nonce_authority_mismatch` before simulation, receipt
+`e3d1e26ea3b8ac901be17df064ad71a12340fc9a24367a5be70e2b416559731a`.
+No signature was created and no transaction was broadcast.
+
+The tool was also called through ZeroClaw's official Telegram channel. A bound
+peer approved the inline T0 tool prompt for the same durable-nonce v0 fixture.
+The bot delivered `ALLOW`, simulation `passed` at 13,773 compute units, full
+rent/fee/outflow accounting, and receipt
+`26dcbc72ccdec0e05c557ee343a3ab99935465c705c363e9b0207c890be08279`.
+That hash matched separate official-host checks at different RPC slots.
+Credentials and peer identifiers are not part of the repository.
 
 ## Custody
 

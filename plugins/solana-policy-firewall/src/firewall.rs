@@ -13,13 +13,15 @@ use sha2::{Digest, Sha256};
 
 use crate::programs::{
     analyze_instructions, Operation, ASSOCIATED_TOKEN_PROGRAM, COMPUTE_BUDGET_PROGRAM,
-    MEMO_PROGRAM, MEMO_V1_PROGRAM, SYSTEM_PROGRAM, TOKEN_2022_PROGRAM, TOKEN_PROGRAM,
+    MEMO_PROGRAM, MEMO_V1_PROGRAM, SYSTEM_PROGRAM, TOKEN_2022_PROGRAM, TOKEN_ACCOUNT_DATA_LEN,
+    TOKEN_PROGRAM,
 };
 use crate::rpc::RpcClient;
 use crate::transaction::{parse_transaction, ParsedTransaction};
 
 const MAX_VIOLATIONS: usize = 6;
 const MAX_RETURNED_TRANSFERS: usize = 3;
+const MAX_TRANSACTION_BASE64_CHARS: usize = 1_644;
 
 #[derive(Clone, Debug, Serialize)]
 pub struct Policy {
@@ -28,9 +30,13 @@ pub struct Policy {
     pub allowed_programs: BTreeSet<String>,
     pub allowed_recipients: BTreeSet<String>,
     pub allowed_mints: BTreeSet<String>,
+    pub allowed_nonce_accounts: BTreeSet<String>,
     pub max_sol_lamports: u64,
     pub max_token_amounts: BTreeMap<String, u64>,
     pub max_priority_fee_lamports: u64,
+    pub max_transaction_fee_lamports: u64,
+    pub max_account_creation_lamports: u64,
+    pub max_total_sol_outflow_lamports: u64,
     pub max_instructions: usize,
     pub max_writable_accounts: usize,
     pub allow_ata_creation: bool,
@@ -41,16 +47,20 @@ pub struct Policy {
 
 impl Policy {
     pub fn from_section(section: &HashMap<String, String>) -> Result<Self, String> {
-        const KEYS: [&str; 14] = [
+        const KEYS: [&str; 18] = [
             "rpc_url",
             "allowed_fee_payers",
             "allowed_signers",
             "allowed_programs",
             "allowed_recipients",
             "allowed_mints",
+            "allowed_nonce_accounts",
             "max_sol_lamports",
             "max_token_amounts",
             "max_priority_fee_lamports",
+            "max_transaction_fee_lamports",
+            "max_account_creation_lamports",
+            "max_total_sol_outflow_lamports",
             "max_instructions",
             "max_writable_accounts",
             "allow_ata_creation",
@@ -89,7 +99,20 @@ impl Policy {
         let allowed_programs = parse_program_set(section)?;
         let allowed_recipients = parse_pubkey_set(section, "allowed_recipients", true)?;
         let allowed_mints = parse_pubkey_set(section, "allowed_mints", false)?;
+        let allowed_nonce_accounts = parse_pubkey_set(section, "allowed_nonce_accounts", false)?;
         let max_token_amounts = parse_token_limits(section.get("max_token_amounts"))?;
+        let require_unsigned = parse_bool(section, "require_unsigned", true)?;
+        if !require_unsigned {
+            return Err(
+                "require_unsigned is a firewall invariant and cannot be disabled".to_string(),
+            );
+        }
+        let require_simulation = parse_bool(section, "require_simulation", true)?;
+        if !require_simulation {
+            return Err(
+                "require_simulation is a firewall invariant and cannot be disabled".to_string(),
+            );
+        }
 
         for mint in max_token_amounts.keys() {
             if !allowed_mints.contains(mint) {
@@ -105,14 +128,22 @@ impl Policy {
             allowed_programs,
             allowed_recipients,
             allowed_mints,
+            allowed_nonce_accounts,
             max_sol_lamports: parse_u64(section, "max_sol_lamports", 0)?,
             max_token_amounts,
             max_priority_fee_lamports: parse_u64(section, "max_priority_fee_lamports", 0)?,
+            max_transaction_fee_lamports: parse_u64(section, "max_transaction_fee_lamports", 0)?,
+            max_account_creation_lamports: parse_u64(section, "max_account_creation_lamports", 0)?,
+            max_total_sol_outflow_lamports: parse_u64(
+                section,
+                "max_total_sol_outflow_lamports",
+                0,
+            )?,
             max_instructions: parse_usize(section, "max_instructions", 8, 64)?,
             max_writable_accounts: parse_usize(section, "max_writable_accounts", 8, 64)?,
             allow_ata_creation: parse_bool(section, "allow_ata_creation", false)?,
-            require_unsigned: parse_bool(section, "require_unsigned", true)?,
-            require_simulation: parse_bool(section, "require_simulation", true)?,
+            require_unsigned,
+            require_simulation,
             require_value_transfer: parse_bool(section, "require_value_transfer", true)?,
         })
     }
@@ -139,6 +170,26 @@ pub struct SimulationReceipt {
     pub status: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub units_consumed: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub slot: Option<u64>,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DurableNonceReceipt {
+    pub account: String,
+    pub authority: String,
+    pub nonce: String,
+}
+
+#[derive(Clone, Debug, Default, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct NativeOutflowReceipt {
+    pub transfer_lamports: u64,
+    pub transaction_fee_lamports: u64,
+    pub priority_fee_lamports: u64,
+    pub account_creation_lamports: u64,
+    pub total_lamports: u64,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
@@ -157,6 +208,10 @@ pub struct DecisionReceipt {
     pub writable_accounts: usize,
     pub summary: String,
     pub transfers: Vec<TransferReceipt>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub durable_nonce: Option<DurableNonceReceipt>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub native_outflow: Option<NativeOutflowReceipt>,
     pub simulation: SimulationReceipt,
     pub violations: Vec<Violation>,
 }
@@ -172,8 +227,16 @@ pub fn evaluate(
     section: &HashMap<String, String>,
     rpc: &mut dyn RpcClient,
 ) -> DecisionReceipt {
+    let transaction_base64 = transaction_base64.trim();
+    if transaction_base64.len() > MAX_TRANSACTION_BASE64_CHARS {
+        return unparsed_denial(
+            hash_bytes(transaction_base64.as_bytes()),
+            "transaction_input_too_large",
+            "transaction_base64 exceeds the canonical Solana packet encoding limit",
+        );
+    }
     let transaction_bytes =
-        match base64::engine::general_purpose::STANDARD.decode(transaction_base64.trim()) {
+        match base64::engine::general_purpose::STANDARD.decode(transaction_base64) {
             Ok(bytes) => bytes,
             Err(error) => {
                 return unparsed_denial(
@@ -291,8 +354,11 @@ fn evaluate_parsed(
     let mut token_totals = BTreeMap::<String, u64>::new();
     let mut transfers = Vec::new();
     let mut transfer_count = 0usize;
+    let mut ata_creation_count = 0usize;
     let mut compute_unit_limit = None;
     let mut compute_unit_price = None;
+    let mut durable_nonce = None;
+    let mut nonce_lamports_per_signature = None;
 
     for operation in operations {
         match operation {
@@ -387,6 +453,7 @@ fn evaluate_parsed(
                 mint,
                 ..
             } => {
+                ata_creation_count += 1;
                 if !policy.allow_ata_creation {
                     add_violation(
                         &mut violations,
@@ -407,6 +474,34 @@ fn evaluate_parsed(
                         "ata_mint_not_allowed",
                         &format!("ATA mint {mint} is not operator-approved"),
                     );
+                }
+            }
+            Operation::AdvanceNonce {
+                nonce_account,
+                authority,
+                durable_nonce: nonce,
+                lamports_per_signature,
+            } => {
+                if durable_nonce.is_some() {
+                    add_violation(
+                        &mut violations,
+                        "duplicate_nonce_advance",
+                        "transaction contains more than one AdvanceNonceAccount instruction",
+                    );
+                } else {
+                    if !policy.allowed_nonce_accounts.contains(&nonce_account) {
+                        add_violation(
+                            &mut violations,
+                            "nonce_account_not_allowed",
+                            &format!("nonce account {nonce_account} is not operator-approved"),
+                        );
+                    }
+                    nonce_lamports_per_signature = Some(lamports_per_signature);
+                    durable_nonce = Some(DurableNonceReceipt {
+                        account: nonce_account,
+                        authority,
+                        nonce,
+                    });
                 }
             }
             Operation::ComputeUnitLimit(limit) => {
@@ -491,6 +586,111 @@ fn evaluate_parsed(
         );
     }
 
+    let mut native_outflow = NativeOutflowReceipt {
+        transfer_lamports: sol_total,
+        priority_fee_lamports: u64::try_from(priority_fee).unwrap_or(u64::MAX),
+        ..NativeOutflowReceipt::default()
+    };
+    if violations.is_empty() {
+        let message_base64 =
+            base64::engine::general_purpose::STANDARD.encode(&transaction.message_bytes);
+        let transaction_fee = rpc.get_fee_for_message(&message_base64).and_then(|fee| {
+            fee.ok_or_else(|| {
+                "getFeeForMessage returned null for the transaction message".to_string()
+            })
+        });
+        match transaction_fee {
+            Ok(fee) => {
+                native_outflow.transaction_fee_lamports = fee;
+                if let Some(lamports_per_signature) = nonce_lamports_per_signature {
+                    match lamports_per_signature.checked_mul(transaction.signature_count as u64) {
+                        Some(minimum_fee) if fee < minimum_fee => add_violation(
+                            &mut violations,
+                            "transaction_fee_inconsistent",
+                            &format!(
+                                "RPC fee {fee} is below durable nonce signature fee {minimum_fee}"
+                            ),
+                        ),
+                        None => add_violation(
+                            &mut violations,
+                            "transaction_fee_overflow",
+                            "durable nonce signature fee overflowed u64",
+                        ),
+                        _ => {}
+                    }
+                }
+                if fee > policy.max_transaction_fee_lamports {
+                    add_violation(
+                        &mut violations,
+                        "transaction_fee_limit_exceeded",
+                        &format!(
+                            "transaction fee {fee} exceeds {} lamports",
+                            policy.max_transaction_fee_lamports
+                        ),
+                    );
+                }
+            }
+            Err(error) => add_violation(
+                &mut violations,
+                "transaction_fee_unavailable",
+                &format!("transaction fee could not be proven: {error}"),
+            ),
+        }
+    }
+    if violations.is_empty() && ata_creation_count > 0 {
+        match rpc.get_minimum_balance_for_rent_exemption(TOKEN_ACCOUNT_DATA_LEN) {
+            Ok(rent_per_account) => match rent_per_account.checked_mul(ata_creation_count as u64) {
+                Some(rent) => {
+                    native_outflow.account_creation_lamports = rent;
+                    if rent > policy.max_account_creation_lamports {
+                        add_violation(
+                            &mut violations,
+                            "account_creation_limit_exceeded",
+                            &format!(
+                                "worst-case ATA rent {rent} exceeds {} lamports",
+                                policy.max_account_creation_lamports
+                            ),
+                        );
+                    }
+                }
+                None => add_violation(
+                    &mut violations,
+                    "account_creation_rent_overflow",
+                    "aggregate ATA rent overflowed u64",
+                ),
+            },
+            Err(error) => add_violation(
+                &mut violations,
+                "account_creation_rent_unavailable",
+                &format!("ATA rent exemption could not be proven: {error}"),
+            ),
+        }
+    }
+    let total_outflow = native_outflow
+        .transfer_lamports
+        .checked_add(native_outflow.transaction_fee_lamports)
+        .and_then(|total| total.checked_add(native_outflow.account_creation_lamports));
+    match total_outflow {
+        Some(total) => {
+            native_outflow.total_lamports = total;
+            if violations.is_empty() && total > policy.max_total_sol_outflow_lamports {
+                add_violation(
+                    &mut violations,
+                    "total_sol_outflow_limit_exceeded",
+                    &format!(
+                        "worst-case native outflow {total} exceeds {} lamports",
+                        policy.max_total_sol_outflow_lamports
+                    ),
+                );
+            }
+        }
+        None => add_violation(
+            &mut violations,
+            "total_sol_outflow_overflow",
+            "worst-case native outflow overflowed u64",
+        ),
+    }
+
     let mut simulation = SimulationReceipt {
         status: if policy.require_simulation {
             "skipped-policy-denied".to_string()
@@ -498,11 +698,13 @@ fn evaluate_parsed(
             "not-required".to_string()
         },
         units_consumed: None,
+        slot: None,
     };
     if violations.is_empty() && policy.require_simulation {
         match rpc.simulate_transaction(transaction_base64) {
             Ok(result) => {
                 simulation.units_consumed = result.units_consumed;
+                simulation.slot = result.slot;
                 match result.error {
                     Some(error) => {
                         simulation.status = "failed".to_string();
@@ -552,6 +754,8 @@ fn evaluate_parsed(
         writable_accounts: writable_account_count,
         summary,
         transfers,
+        durable_nonce,
+        native_outflow: Some(native_outflow),
         simulation,
         violations,
     })
@@ -570,9 +774,12 @@ fn unparsed_denial(transaction_hash: String, code: &str, detail: &str) -> Decisi
         writable_accounts: 0,
         summary: "transaction was not eligible for policy evaluation".to_string(),
         transfers: Vec::new(),
+        durable_nonce: None,
+        native_outflow: None,
         simulation: SimulationReceipt {
             status: "not-run".to_string(),
             units_consumed: None,
+            slot: None,
         },
         violations: vec![Violation {
             code: code.to_string(),
@@ -593,7 +800,9 @@ fn denial_for_parse(
 
 fn finalize_receipt(mut receipt: DecisionReceipt) -> DecisionReceipt {
     receipt.receipt_hash.clear();
-    receipt.receipt_hash = hash_json(&receipt);
+    let mut canonical = receipt.clone();
+    canonical.simulation.slot = None;
+    receipt.receipt_hash = hash_json(&canonical);
     receipt
 }
 

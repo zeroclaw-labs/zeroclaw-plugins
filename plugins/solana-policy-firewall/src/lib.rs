@@ -94,13 +94,45 @@ mod component {
             }))
         }
 
+        fn get_fee_for_message(&mut self, message_base64: &str) -> Result<Option<u64>, String> {
+            let response = self.post(&json!({
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "getFeeForMessage",
+                "params": [message_base64, {"commitment": "confirmed"}]
+            }))?;
+            let value = &response["result"]["value"];
+            if value.is_null() {
+                return Ok(None);
+            }
+            value
+                .as_u64()
+                .map(Some)
+                .ok_or_else(|| "getFeeForMessage result is not a u64 or null".to_string())
+        }
+
+        fn get_minimum_balance_for_rent_exemption(
+            &mut self,
+            data_len: usize,
+        ) -> Result<u64, String> {
+            let response = self.post(&json!({
+                "jsonrpc": "2.0",
+                "id": 3,
+                "method": "getMinimumBalanceForRentExemption",
+                "params": [data_len, {"commitment": "confirmed"}]
+            }))?;
+            response["result"]
+                .as_u64()
+                .ok_or_else(|| "getMinimumBalanceForRentExemption result is not a u64".to_string())
+        }
+
         fn simulate_transaction(
             &mut self,
             transaction_base64: &str,
         ) -> Result<SimulationResult, String> {
             let response = self.post(&json!({
                 "jsonrpc": "2.0",
-                "id": 2,
+                "id": 4,
                 "method": "simulateTransaction",
                 "params": [transaction_base64, {
                     "encoding": "base64",
@@ -120,6 +152,7 @@ mod component {
             Ok(SimulationResult {
                 error,
                 units_consumed: value.get("unitsConsumed").and_then(Value::as_u64),
+                slot: response["result"]["context"]["slot"].as_u64(),
             })
         }
     }
