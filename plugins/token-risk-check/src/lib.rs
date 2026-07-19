@@ -386,12 +386,7 @@ mod component {
         })
     }
 
-    fn emit(
-        action: PluginAction,
-        outcome: PluginOutcome,
-        message: &str,
-        attrs: Option<String>,
-    ) {
+    fn emit(action: PluginAction, outcome: PluginOutcome, message: &str, attrs: Option<String>) {
         log_record(
             LogLevel::Info,
             &PluginEvent {
