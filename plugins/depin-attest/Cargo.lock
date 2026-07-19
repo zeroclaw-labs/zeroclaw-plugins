@@ -376,6 +376,7 @@ version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
  "borsh 1.8.0",
+ "bs58",
  "ed25519-dalek",
  "palinurus-core",
  "serde",

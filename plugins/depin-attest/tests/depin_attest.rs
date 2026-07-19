@@ -1,13 +1,358 @@
-//! Integration tests for the depin-attest pure core, exercised exactly as the
-//! wasm `execute` entry point drives it. Runs on the host with a plain
-//! `cargo test` — no wasm toolchain, no live network (MockRpc scripts responses).
-//!
-//! This is a placeholder smoke test for slice A (scaffold). Real tests land in
-//! slices B–G (config, nonce, instruction building, execute_t1, memo fallback,
-//! T2 guards, execute_t2).
+//! Integration tests for the depin-attest pure core (slice B: config + reading + nonce).
+//! Host-run with plain `cargo test` — no wasm, no live network.
+
+use std::collections::HashMap;
+use std::str::FromStr;
+
+use depin_attest::depin_attest::{AttestConfig, AttestError, CustodyMode, SensorReading};
+use palinurus_core::Pubkey;
+use sha2::{Digest, Sha256};
+
+// ── Known valid base58 pubkeys for config tests ──
+const SYSTEM: &str = "11111111111111111111111111111111"; // System program
+const MEMO: &str = "MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr"; // Memo program
+const SAS: &str = "22zoJMtdu4tQc2PzL74ZUT7FrwgB1Udec8DdW4yw4BdG"; // SAS program
+const TOKEN: &str = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"; // SPL Token (for a distinct address)
+
+fn section(pairs: &[(&str, &str)]) -> HashMap<String, String> {
+    pairs
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect()
+}
+
+/// A minimal valid T1 config section.
+fn valid_t1_section() -> HashMap<String, String> {
+    section(&[
+        ("rpc_endpoint", "https://devnet.helius.com"),
+        ("credential_pda", SAS),
+        ("schema_pda", MEMO),
+        ("authority", SYSTEM),
+        ("payer", SYSTEM),
+        ("nonce_account", TOKEN),
+        ("nonce_authority", SYSTEM),
+    ])
+}
+
+// ── Config parsing tests ──
 
 #[test]
-fn smoke() {
-    // The pure core compiles + links on the host. Real tests land in slice B
-    // (config, nonce, instruction building, execute_t1, memo fallback, T2).
+fn config_valid_t1() {
+    let cfg = AttestConfig::from_section(&valid_t1_section()).expect("valid T1 config");
+    assert_eq!(cfg.rpc_endpoint, "https://devnet.helius.com");
+    assert_eq!(cfg.credential_pda, Pubkey::from_str(SAS).unwrap());
+    assert_eq!(cfg.schema_pda, Pubkey::from_str(MEMO).unwrap());
+    assert_eq!(cfg.authority, Pubkey::from_str(SYSTEM).unwrap());
+    assert_eq!(cfg.payer, Pubkey::from_str(SYSTEM).unwrap());
+    assert_eq!(cfg.nonce_account, Pubkey::from_str(TOKEN).unwrap());
+    assert_eq!(cfg.nonce_authority, Pubkey::from_str(SYSTEM).unwrap());
+    assert_eq!(cfg.custody_mode, CustodyMode::T1);
+    assert_eq!(cfg.attestation_ttl_secs, 7_776_000); // default 90d
+    assert!(!cfg.memo_fallback); // default false
+    assert_eq!(cfg.network, "devnet"); // default
+    assert!(cfg.session_key.is_none()); // T1 has no session key
+}
+
+#[test]
+fn config_custody_mode_defaults_to_t1_when_absent() {
+    let mut s = valid_t1_section();
+    s.remove("custody_mode");
+    let cfg = AttestConfig::from_section(&s).unwrap();
+    assert_eq!(cfg.custody_mode, CustodyMode::T1);
+}
+
+#[test]
+fn config_custody_mode_explicit_t1() {
+    let mut s = valid_t1_section();
+    s.insert("custody_mode".to_string(), "t1".to_string());
+    let cfg = AttestConfig::from_section(&s).unwrap();
+    assert_eq!(cfg.custody_mode, CustodyMode::T1);
+}
+
+#[test]
+fn config_empty_section_fails_closed() {
+    let s = HashMap::new();
+    let err = AttestConfig::from_section(&s).unwrap_err();
+    assert!(matches!(err, AttestError::Config(ref m) if m.contains("not configured")));
+}
+
+#[test]
+fn config_missing_required_key() {
+    let mut s = valid_t1_section();
+    s.remove("rpc_endpoint");
+    let err = AttestConfig::from_section(&s).unwrap_err();
+    assert!(matches!(err, AttestError::Config(ref m) if m.contains("missing required key: rpc_endpoint")));
+}
+
+#[test]
+fn config_invalid_base58() {
+    let mut s = valid_t1_section();
+    s.insert("credential_pda".to_string(), "not-base58!!".to_string());
+    let err = AttestConfig::from_section(&s).unwrap_err();
+    assert!(matches!(err, AttestError::Config(ref m) if m.contains("invalid base58 for credential_pda")));
+}
+
+#[test]
+fn config_unknown_custody_mode() {
+    let mut s = valid_t1_section();
+    s.insert("custody_mode".to_string(), "t3".to_string());
+    let err = AttestConfig::from_section(&s).unwrap_err();
+    assert!(matches!(err, AttestError::Config(ref m) if m.contains("unknown custody_mode: 't3'")));
+}
+
+#[test]
+fn config_negative_ttl_rejected() {
+    let mut s = valid_t1_section();
+    s.insert("attestation_ttl_secs".to_string(), "-1".to_string());
+    let err = AttestConfig::from_section(&s).unwrap_err();
+    assert!(matches!(err, AttestError::Config(ref m) if m.contains("non-negative")));
+}
+
+#[test]
+fn config_ttl_overflow_guard() {
+    let mut s = valid_t1_section();
+    s.insert("attestation_ttl_secs".to_string(), i64::MAX.to_string());
+    let err = AttestConfig::from_section(&s).unwrap_err();
+    assert!(matches!(err, AttestError::Config(ref m) if m.contains("too large")));
+}
+
+#[test]
+fn config_memo_fallback_true() {
+    let mut s = valid_t1_section();
+    s.insert("memo_fallback".to_string(), "true".to_string());
+    let cfg = AttestConfig::from_section(&s).unwrap();
+    assert!(cfg.memo_fallback);
+}
+
+#[test]
+fn config_network_override() {
+    let mut s = valid_t1_section();
+    s.insert("network".to_string(), "mainnet-beta".to_string());
+    let cfg = AttestConfig::from_section(&s).unwrap();
+    assert_eq!(cfg.network, "mainnet-beta");
+}
+
+#[test]
+fn config_t2_missing_session_key() {
+    let mut s = valid_t1_section();
+    s.insert("custody_mode".to_string(), "t2".to_string());
+    // No session_key provided.
+    let err = AttestConfig::from_section(&s).unwrap_err();
+    assert!(matches!(err, AttestError::Config(ref m) if m.contains("missing required key: session_key")));
+}
+
+#[test]
+fn config_t2_valid_session_key() {
+    // Generate a deterministic test keypair (ed25519-dalek).
+    let secret = [42u8; 32]; // deterministic test key
+    let signing_key = ed25519_dalek::SigningKey::from_bytes(&secret);
+    let key_b58 = bs58::encode(secret).into_string();
+
+    let mut s = valid_t1_section();
+    s.insert("custody_mode".to_string(), "t2".to_string());
+    s.insert("session_key".to_string(), key_b58);
+    s.insert("max_lamports_per_tx".to_string(), "5000".to_string());
+    s.insert("max_attestations_per_day".to_string(), "50".to_string());
+
+    let cfg = AttestConfig::from_section(&s).expect("valid T2 config");
+    assert_eq!(cfg.custody_mode, CustodyMode::T2);
+    assert!(cfg.session_key.is_some());
+    assert_eq!(
+        cfg.session_key.as_ref().unwrap().verifying_key(),
+        signing_key.verifying_key()
+    );
+    assert_eq!(cfg.max_lamports_per_tx, 5000);
+    assert_eq!(cfg.max_attestations_per_day, 50);
+}
+
+#[test]
+fn config_t2_session_key_wrong_length() {
+    let short = [1u8; 16]; // 16 bytes, not 32
+    let key_b58 = bs58::encode(short).into_string();
+
+    let mut s = valid_t1_section();
+    s.insert("custody_mode".to_string(), "t2".to_string());
+    s.insert("session_key".to_string(), key_b58);
+
+    let err = AttestConfig::from_section(&s).unwrap_err();
+    assert!(matches!(err, AttestError::Config(ref m) if m.contains("32 bytes")));
+}
+
+#[test]
+fn config_t2_caps_default_when_absent() {
+    let secret = [7u8; 32];
+    let key_b58 = bs58::encode(secret).into_string();
+
+    let mut s = valid_t1_section();
+    s.insert("custody_mode".to_string(), "t2".to_string());
+    s.insert("session_key".to_string(), key_b58);
+    // max_lamports_per_tx + max_attestations_per_day absent → defaults.
+
+    let cfg = AttestConfig::from_section(&s).unwrap();
+    assert_eq!(cfg.max_lamports_per_tx, 10_000); // default
+    assert_eq!(cfg.max_attestations_per_day, 100); // default
+}
+
+// ── SensorReading::encode tests ──
+
+#[test]
+fn encode_is_deterministic() {
+    let r = SensorReading {
+        sensor_id: "bme280-1".to_string(),
+        value: 24.7,
+        unit: "celsius".to_string(),
+        timestamp: 1_753_000_000,
+    };
+    let a = r.encode();
+    let b = r.encode();
+    assert_eq!(a, b, "encode must be deterministic");
+}
+
+#[test]
+fn encode_round_trips() {
+    let r = SensorReading {
+        sensor_id: "scd41-2".to_string(),
+        value: 412.8,
+        unit: "ppm".to_string(),
+        timestamp: 1_753_010_000,
+    };
+    let bytes = r.encode();
+    // BorshDeserialize round-trip.
+    let decoded: SensorReading = borsh::from_slice(&bytes).expect("decode");
+    assert_eq!(decoded, r);
+}
+
+#[test]
+fn encode_has_expected_borsh_layout() {
+    // Borsh layout: [u32 LE len(sensor_id)] [sensor_id bytes] [f64 LE value]
+    //               [u32 LE len(unit)] [unit bytes] [i64 LE timestamp]
+    let r = SensorReading {
+        sensor_id: "ab".to_string(),
+        value: 1.0,
+        unit: "C".to_string(),
+        timestamp: 1_000,
+    };
+    let bytes = r.encode();
+    // sensor_id "ab" = 2 bytes → u32 LE = [2,0,0,0]
+    assert_eq!(&bytes[0..4], &[2, 0, 0, 0]);
+    assert_eq!(&bytes[4..6], b"ab");
+    // value 1.0 f64 LE = [0,0,0,0,0,0,240,63]
+    assert_eq!(&bytes[6..14], &[0, 0, 0, 0, 0, 0, 0xf0, 0x3f]);
+    // unit "C" = 1 byte → u32 LE = [1,0,0,0]
+    assert_eq!(&bytes[14..18], &[1, 0, 0, 0]);
+    assert_eq!(&bytes[18..19], b"C");
+    // timestamp 1000 i64 LE
+    assert_eq!(&bytes[19..27], &[0xe8, 3, 0, 0, 0, 0, 0, 0]);
+    assert_eq!(bytes.len(), 27);
+}
+
+// ── SensorReading::derive_nonce tests ──
+
+fn expected_nonce(sensor_id: &str, value: f64, unit: &str, timestamp: i64) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    hasher.update(sensor_id.as_bytes());
+    hasher.update(timestamp.to_le_bytes());
+    hasher.update(value.to_le_bytes());
+    hasher.update(unit.as_bytes());
+    hasher.finalize().into()
+}
+
+#[test]
+fn nonce_deterministic() {
+    let r = SensorReading {
+        sensor_id: "bme280-1".to_string(),
+        value: 24.7,
+        unit: "celsius".to_string(),
+        timestamp: 1_753_000_000,
+    };
+    let a = r.derive_nonce();
+    let b = r.derive_nonce();
+    assert_eq!(a.to_bytes(), b.to_bytes());
+}
+
+#[test]
+fn nonce_matches_manual_sha256() {
+    let r = SensorReading {
+        sensor_id: "bme280-1".to_string(),
+        value: 24.7,
+        unit: "celsius".to_string(),
+        timestamp: 1_753_000_000,
+    };
+    let nonce = r.derive_nonce();
+    let expected = expected_nonce("bme280-1", 24.7, "celsius", 1_753_000_000);
+    assert_eq!(nonce.to_bytes(), expected);
+}
+
+#[test]
+fn nonce_unique_per_sensor_id() {
+    let a = SensorReading {
+        sensor_id: "bme280-1".to_string(),
+        value: 24.7,
+        unit: "celsius".to_string(),
+        timestamp: 1_753_000_000,
+    };
+    let b = SensorReading {
+        sensor_id: "bme280-2".to_string(),
+        ..a.clone()
+    };
+    assert_ne!(a.derive_nonce().to_bytes(), b.derive_nonce().to_bytes());
+}
+
+#[test]
+fn nonce_unique_per_value() {
+    let a = SensorReading {
+        sensor_id: "bme280-1".to_string(),
+        value: 24.7,
+        unit: "celsius".to_string(),
+        timestamp: 1_753_000_000,
+    };
+    let b = SensorReading {
+        value: 24.8,
+        ..a.clone()
+    };
+    assert_ne!(a.derive_nonce().to_bytes(), b.derive_nonce().to_bytes());
+}
+
+#[test]
+fn nonce_unique_per_timestamp() {
+    let a = SensorReading {
+        sensor_id: "bme280-1".to_string(),
+        value: 24.7,
+        unit: "celsius".to_string(),
+        timestamp: 1_753_000_000,
+    };
+    let b = SensorReading {
+        timestamp: 1_753_000_001,
+        ..a.clone()
+    };
+    assert_ne!(a.derive_nonce().to_bytes(), b.derive_nonce().to_bytes());
+}
+
+#[test]
+fn nonce_unique_per_unit() {
+    let a = SensorReading {
+        sensor_id: "bme280-1".to_string(),
+        value: 24.7,
+        unit: "celsius".to_string(),
+        timestamp: 1_753_000_000,
+    };
+    let b = SensorReading {
+        unit: "fahrenheit".to_string(),
+        ..a.clone()
+    };
+    assert_ne!(a.derive_nonce().to_bytes(), b.derive_nonce().to_bytes());
+}
+
+#[test]
+fn nonce_identical_readings_collide() {
+    // Natural dedup: two identical readings produce the same nonce → same PDA.
+    // The second attestation fails with PDA-already-exists. This is a feature.
+    let a = SensorReading {
+        sensor_id: "bme280-1".to_string(),
+        value: 24.7,
+        unit: "celsius".to_string(),
+        timestamp: 1_753_000_000,
+    };
+    let b = a.clone();
+    assert_eq!(a.derive_nonce().to_bytes(), b.derive_nonce().to_bytes());
 }
