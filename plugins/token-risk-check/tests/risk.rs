@@ -202,6 +202,20 @@ fn majority_holder_is_red() {
 }
 
 #[test]
+fn pausable_and_scaled_ui_are_amber() {
+    let data = t22_mint(
+        base_mint(None, 1000, 6, None),
+        &[(26, vec![0u8; 33]), (25, vec![0u8; 40])],
+    );
+    let m = parse_mint(&data).unwrap();
+    assert!(m.extensions.contains(&Extension::Pausable));
+    assert!(m.extensions.contains(&Extension::ScaledUiAmount));
+    let r = analyze(&m, TOKEN_2022_PROGRAM, 1000, &[10]).unwrap();
+    assert_eq!(r.verdict, Verdict::Amber);
+    assert_eq!(r.reasons.len(), 2);
+}
+
+#[test]
 fn non_mint_owner_fails_closed() {
     assert!(analyze(&plain(1), "SomeRandomProgram1111111111111111", 1, &[]).is_err());
 }

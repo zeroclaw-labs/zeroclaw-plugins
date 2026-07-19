@@ -110,6 +110,22 @@ pub fn analyze(
                 Verdict::Amber,
                 "interest-bearing: displayed balance drifts from raw amount".into(),
             ),
+            Extension::Pausable => push(
+                Verdict::Amber,
+                "pausable: the issuer can halt ALL transfers at any time".into(),
+            ),
+            Extension::ScaledUiAmount => push(
+                Verdict::Amber,
+                "scaled UI amount: displayed balances use an issuer-set multiplier".into(),
+            ),
+            Extension::ConfidentialMintBurn => push(
+                Verdict::Amber,
+                "confidential mint/burn: supply changes can be hidden".into(),
+            ),
+            Extension::PermissionedBurn => push(
+                Verdict::Amber,
+                "permissioned burn: issuer-mediated burn semantics — review issuer docs".into(),
+            ),
             Extension::Unknown(ty) => push(
                 Verdict::Amber,
                 format!("unrecognized Token-2022 extension type {ty}: behavior unknown"),

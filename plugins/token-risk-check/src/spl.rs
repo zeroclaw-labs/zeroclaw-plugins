@@ -39,6 +39,14 @@ pub enum Extension {
     TokenMetadata,
     GroupPointer,
     GroupMemberPointer,
+    /// Supply can change via confidential (hidden-amount) mint/burn.
+    ConfidentialMintBurn,
+    /// Displayed balances are multiplied by an issuer-set factor.
+    ScaledUiAmount,
+    /// The issuer can pause ALL transfers/mints/burns at once.
+    Pausable,
+    /// Burns are mediated by issuer-set permissions.
+    PermissionedBurn,
     /// Extension type we don't model; carried so the report can say so.
     Unknown(u16),
 }
@@ -153,7 +161,8 @@ fn parse_tlv(mut b: &[u8]) -> Result<Vec<Extension>, String> {
 }
 
 /// Token-2022 `ExtensionType` discriminants we recognize.
-/// NOTE: verify this table against spl-token-2022 source before release.
+/// Verified 2026-07-19 against solana-program/token-2022
+/// `interface/src/extension/mod.rs` (`pub enum ExtensionType`, repr u16, LE).
 fn decode_extension(ty: u16, val: &[u8]) -> Extension {
     match ty {
         1 => Extension::TransferFee {
@@ -183,6 +192,10 @@ fn decode_extension(ty: u16, val: &[u8]) -> Extension {
         19 => Extension::TokenMetadata,
         20 => Extension::GroupPointer,
         22 => Extension::GroupMemberPointer,
+        24 => Extension::ConfidentialMintBurn,
+        25 => Extension::ScaledUiAmount,
+        26 => Extension::Pausable,
+        28 => Extension::PermissionedBurn,
         other => Extension::Unknown(other),
     }
 }
