@@ -79,6 +79,11 @@ mint_aliases = "USDC=<mint1>,PYUSD=<mint2>"
 recipient_allowlist = "<wallet1>,<wallet2>"
 allow_off_curve_recipients = "false"
 allow_token_2022 = "false"
+
+# Optional durable-nonce mode (M4). Omit both keys for the default
+# recent-blockhash behavior. See "Durable-nonce mode" below.
+# blockhash_mode = "durable_nonce"
+# nonce_account_pubkey = "<nonce-account-public-key>"
 ```
 
 The grammar is intentionally strict:
@@ -96,6 +101,12 @@ The grammar is intentionally strict:
 - `recipient_allowlist`, when present, must be non-empty and contain unique
   wallet public keys.
 - Boolean values are exactly `true` or `false`; omission means `false`.
+- `blockhash_mode` is optional and must be exactly `recent` or `durable_nonce`.
+  Omitting it keeps the default recent-blockhash behavior.
+- `nonce_account_pubkey` is required when and only when
+  `blockhash_mode=durable_nonce`. Supplying it in recent mode (a "nonce-only"
+  configuration) is refused rather than silently ignored. The nonce account and
+  the sender both come only from trusted operator configuration.
 - The sender must be an on-curve wallet. Recipients are on-curve by default;
   off-curve recipients require explicit `allow_off_curve_recipients=true`.
 - Ordinary endpoints must be HTTPS. Userinfo, fragments, backslashes,
@@ -233,6 +244,121 @@ Before returning, the plugin sends the unsigned base64 transaction to
 `simulateTransaction` with `encoding="base64"`, `sigVerify=false`, and
 `replaceRecentBlockhash=true`. A non-null transaction error or malformed RPC
 result is a refusal. Logs are ignored and never returned.
+
+## Durable-nonce mode (M4, optional)
+
+Recent-blockhash mode remains the default and is unchanged. Durable-nonce mode
+is an **operator-only** alternative selected with `blockhash_mode="durable_nonce"`
+and `nonce_account_pubkey`. The model cannot select it; the choice lives only in
+the trusted operator config, and a caller `__config` cannot override it.
+
+**Why an approval queue may need it.** A recent-blockhash transaction expires
+after roughly 60–90 seconds. If proposals must wait in a human or custody
+approval queue for minutes or longer, recent-blockhash transactions can expire
+before signing. A durable nonce lets a proposal stay valid across a long
+approval delay, because its validity is bound to on-chain nonce state rather
+than to a blockhash window. Durable nonces are for *delayed approval and
+signing*; they do **not** improve transaction inclusion probability, priority,
+or fees.
+
+**Nonce-account setup (operator, one time, outside this plugin).** This plugin
+never creates, funds, withdraws from, or re-authorizes a nonce account. The
+operator creates one with the Solana CLI, with the nonce authority equal to the
+configured sender:
+
+```bash
+solana-keygen new --outfile <nonce-keypair>
+solana create-nonce-account <nonce-keypair> 0.0015 \
+  --nonce-authority <sender-pubkey>
+solana nonce-account <nonce-account-pubkey>   # authority must equal sender
+```
+
+**Same sender / nonce-authority limitation (intentional).** M4 supports only the
+simplest auditable arrangement: the configured sender is the fee payer, token
+transfer authority, **and** nonce authority — the transaction's only required
+signer. If the fetched nonce account's authority differs from `sender_pubkey`,
+the plugin refuses. A separate nonce-authority signer is deliberately **not**
+supported, because it would broaden the signer set and make approval harder to
+review. This is a design limitation of this plugin, not a Solana protocol
+requirement.
+
+**Exact durable transaction shape.** Instruction order is:
+
+1. System Program `AdvanceNonceAccount` (must be instruction zero).
+2. Associated Token Account `CreateIdempotent` for the recipient owner.
+3. `TransferChecked` from the sender ATA, authorized by the configured sender.
+4. An optional Memo v3 instruction.
+
+The message is version 0 with static keys only, no address lookup tables, no
+compute-budget instruction, exactly one required signer (the sender), and one
+all-zero signature slot. The message blockhash field is set to the nonce
+account's stored durable nonce, not to a recent blockhash. `AdvanceNonceAccount`
+being instruction zero is what makes the runtime treat the transaction as a
+durable-nonce transaction.
+
+**Validity condition.** The transaction is valid only while the configured nonce
+account remains initialized with this exact nonce value and authority. Advancing
+the nonce (by this or any other transaction that uses it) or changing the nonce
+account invalidates the built transaction. It does not "never expire".
+
+**Nonce-consumption-on-later-failure warning.** Once nonce validation succeeds,
+the nonce is advanced and the transaction fee is charged **even if a later
+instruction fails**. A failed transfer is therefore not necessarily free and not
+safe to blindly retry with the same built bytes. Conversely, if nonce validation
+itself fails (stale nonce, wrong authority, non-writable nonce account,
+malformed/uninitialized account, or a missing instruction-zero advance), the
+transaction is dropped without consuming the nonce or charging a fee.
+
+**RPC trust boundary.** The nonce account is read with the same bounded
+`getAccountInfo` path as the mint. The plugin verifies the account exists, is
+owned by the System Program, is not executable, decodes as an initialized,
+current-version nonce account, has authority equal to the configured sender, and
+has a canonical nonce. A dishonest RPC remains a documented trust boundary: the
+plugin nevertheless guarantees the returned transaction is internally consistent
+with the exact nonce state it accepted (message blockhash equals the parsed
+nonce; the advance instruction references the configured nonce account and
+sender authority; a byte-equivalent recompile must succeed).
+
+**Simulation behavior.** Durable simulation uses `sigVerify=false` and
+`replaceRecentBlockhash=false`, so the nonce value stays in the message and the
+durable path is actually exercised. `replaceRecentBlockhash=true` is never used
+in durable mode because it would swap in a fresh cluster blockhash and simulate a
+different lifetime mechanism than the returned bytes. If the RPC unexpectedly
+reports a replaced blockhash, or the simulation reports an error or is malformed,
+the plugin refuses. There is no silent fallback to recent-blockhash replacement.
+
+**Durable output.** A durable result replaces `last_valid_block_height` with the
+nonce fields:
+
+```json
+{
+  "transaction_base64": "AQAAAA...",
+  "summary": "SEND 25.01 USDC (EPjF…Dt1v) to owner FnHy... · blockhash_mode durable_nonce · nonce account 7rtV…ugjn · nonce 4vMZ…vDkN · Durable nonce: valid only while the configured nonce account remains initialized with this exact nonce and authority. Advancing or changing the nonce account invalidates this transaction. · Execution warning: once nonce validation succeeds, a later instruction failure can still consume the nonce and charge the transaction fee. · UNSIGNED: external approval and signing required; not submitted",
+  "blockhash_mode": "durable_nonce",
+  "nonce_account": "7rtVuvFRhiUCcVHQeiEsqgQAb7UgCEiHWvRdK1qNugjn",
+  "nonce": "4vMZqWuEMy9gAa5PWaYVWkQhvLKFquKH62fnzfKcvDkN",
+  "reference": "ECvLKMSgRzVdJjZsdiGAPcRSjwVjS9f7HxizfC256Kei"
+}
+```
+
+**External signing, stale nonce, and no retries.** As in recent mode, the plugin
+returns an unsigned transaction and never signs or submits. Before signing
+externally, re-read the nonce account and confirm the nonce and authority are
+unchanged; if the nonce has advanced, the built transaction is stale and must be
+rebuilt, not signed. The plugin performs no automatic retries and does no nonce
+creation or management.
+
+**Potential future deprecation.** Solana's own documentation notes that durable
+nonces may be deprecated in a future release (an open SIMD discussion, not an
+activated change). The recent-blockhashes sysvar that `AdvanceNonceAccount`
+references is already deprecated for on-chain reads but is still a required
+account. Operators adopting durable mode should track this.
+
+**Disabling M4.** Recent mode is the default; simply omit `blockhash_mode` and
+`nonce_account_pubkey`. To remove durable support entirely, deploy the frozen
+M3.5 build by checking out the `m35-security-freeze-95e10dc` tag of
+`zeroclaw-plugins` (which pins `nanosol` `989cd0d…`), which contains no
+durable-nonce code.
 
 ## RPC trust and prompt-injection model
 
@@ -372,5 +498,10 @@ disposable signing key.
 - Self-transfers are refused because shared global account privileges would
   complicate the exact verifier shape without creating useful value.
 
-Durable nonce support is explicitly deferred to M4. M3 contains no durable
-nonce account parsing, nonce authority, nonce instruction, or nonce summary.
+Durable-nonce support is available as an isolated, operator-only mode (M4; see
+"Durable-nonce mode" above). Recent-blockhash mode remains the default and is
+behaviorally unchanged. Durable mode supports only the sender-equals-nonce-
+authority arrangement and performs no nonce creation, withdrawal, or authority
+management. Signing and submission are still external, and no private key ever
+enters the plugin. To ship without durable support, use the frozen
+`m35-security-freeze-95e10dc` tag.

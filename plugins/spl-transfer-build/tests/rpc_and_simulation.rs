@@ -43,7 +43,7 @@ fn successful_flow_uses_exact_rpc_order_ids_endpoint_and_simulation_options() {
     assert_eq!(simulation["params"][1]["replaceRecentBlockhash"], true);
 
     let output: TransferOutput = serde_json::from_str(&result.output).expect("output");
-    assert_eq!(output.last_valid_block_height, 500000);
+    assert_eq!(output.last_valid_block_height, Some(500000));
     let transaction = nanosol::message::Transaction::from_base64(&output.transaction_base64)
         .expect("returned transaction");
     assert_eq!(
