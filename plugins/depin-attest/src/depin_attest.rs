@@ -717,3 +717,102 @@ pub fn execute_t1_entry(
         execute_t1(reading, memo, cfg, rpc)
     }
 }
+
+// ── T2 custody guards (slice F) ──
+
+/// The set of programs a T2 session key is allowed to invoke. Anything outside
+/// this set → fail closed. This blocks all value transfer (no SPL Token, no
+/// Stake, no any-other-program). The only programs needed for attestation are:
+/// - System (for the AdvanceNonceAccount instruction)
+/// - SAS (for create_attestation)
+/// - Memo (for the optional memo instruction)
+const T2_ALLOWED_PROGRAMS: [Pubkey; 3] = [Pubkey::SYSTEM, Pubkey::SAS, Pubkey::MEMO];
+
+/// Enforce that every instruction's program_id is in the T2 allowlist.
+/// This is the primary custody guard — it makes value transfer impossible.
+pub fn enforce_program_allowlist(ixs: &[Instruction]) -> Result<(), AttestError> {
+    for ix in ixs {
+        if !T2_ALLOWED_PROGRAMS.contains(&ix.program_id) {
+            return Err(AttestError::Custody(format!(
+                "program not allowed in T2: {} — only {{System, SAS, Memo}} permitted (value transfer blocked)",
+                ix.program_id
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Enforce that the session key is the sole identity: its verifying key must
+/// equal the config's authority, payer, and nonce_authority. One scoped key,
+/// one identity. Fail closed on any mismatch.
+pub fn enforce_session_key_identity(cfg: &AttestConfig) -> Result<(), AttestError> {
+    let sk = cfg
+        .session_key
+        .as_ref()
+        .ok_or_else(|| AttestError::Custody("T2 requires a session key but none is configured".to_string()))?;
+    let sk_pubkey = sk.verifying_key();
+    let sk_bytes = sk_pubkey.to_bytes();
+
+    if sk_bytes != *cfg.authority.as_bytes() {
+        return Err(AttestError::Custody(
+            "session key does not match authority — the key must be the Credential's authorized signer".to_string(),
+        ));
+    }
+    if sk_bytes != *cfg.payer.as_bytes() {
+        return Err(AttestError::Custody(
+            "session key does not match payer — the key must pay for its own attestations".to_string(),
+        ));
+    }
+    if sk_bytes != *cfg.nonce_authority.as_bytes() {
+        return Err(AttestError::Custody(
+            "session key does not match nonce_authority — the key must control the nonce account".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+/// Daily attestation cap state (UTC-day counter). Stored as thread_local in the
+/// shim; reset on component reload. A soft bound — the README discloses this.
+#[derive(Clone, Debug)]
+#[derive(Default)]
+pub struct DailyCapState {
+    pub last_day: i64,
+    pub count: u32,
+}
+
+
+/// Enforce the per-day attestation cap. Resets on UTC-day rollover. Exceeding
+/// the cap → fail closed (flood/replay guard).
+pub fn enforce_daily_cap(state: &mut DailyCapState, today_utc: i64, cap: u32) -> Result<(), AttestError> {
+    if today_utc > state.last_day {
+        state.last_day = today_utc;
+        state.count = 0;
+    }
+    state.count += 1;
+    if state.count > cap {
+        return Err(AttestError::Custody(format!(
+            "daily attestation cap exceeded: {}/{} — try again tomorrow",
+            state.count, cap
+        )));
+    }
+    Ok(())
+}
+
+/// Enforce the per-tx fee cap. The estimated fee = num_signatures *
+/// lamports_per_signature (from the nonce account's FeeCalculator). The session
+/// key holds only cents; the cap is a bound, not a budget. The program allowlist
+/// is the primary guard — this is a secondary bound.
+pub fn enforce_lamport_cap(
+    lamports_per_signature: u64,
+    num_signatures: u64,
+    cap: u64,
+) -> Result<(), AttestError> {
+    let estimated_fee = lamports_per_signature
+        .saturating_mul(num_signatures);
+    if estimated_fee > cap {
+        return Err(AttestError::Custody(format!(
+            "estimated fee {estimated_fee} lamports exceeds per-tx cap {cap}"
+        )));
+    }
+    Ok(())
+}

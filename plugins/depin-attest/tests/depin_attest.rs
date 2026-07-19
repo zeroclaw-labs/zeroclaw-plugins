@@ -787,3 +787,146 @@ fn sas_path_used_when_memo_fallback_false() {
     let out = execute_t1_entry(&test_reading(), None, &cfg, &rpc).unwrap();
     assert!(!out.used_memo_fallback, "should use SAS path");
 }
+
+// ── Slice F: T2 custody guard tests ──
+
+use depin_attest::depin_attest::{
+    enforce_daily_cap, enforce_lamport_cap, enforce_program_allowlist,
+    enforce_session_key_identity, DailyCapState,
+};
+
+/// Build a T2 config where the session key is authority + payer + nonce_authority.
+fn t2_test_config() -> AttestConfig {
+    let secret = [99u8; 32];
+    let signing_key = ed25519_dalek::SigningKey::from_bytes(&secret);
+    let pubkey_bytes = signing_key.verifying_key().to_bytes();
+    let pubkey_b58 = bs58::encode(pubkey_bytes).into_string();
+
+    let mut s = valid_t1_section();
+    s.insert("custody_mode".to_string(), "t2".to_string());
+    s.insert("session_key".to_string(), bs58::encode(secret).into_string());
+    // Override authority, payer, nonce_authority to the session key's pubkey.
+    s.insert("authority".to_string(), pubkey_b58.clone());
+    s.insert("payer".to_string(), pubkey_b58.clone());
+    s.insert("nonce_authority".to_string(), pubkey_b58);
+    AttestConfig::from_section(&s).unwrap()
+}
+
+#[test]
+fn allowlist_allows_system_sas_memo() {
+    let ixs = vec![
+        palinurus_core::Instruction {
+            program_id: Pubkey::from_str(SYSTEM).unwrap(),
+            accounts: vec![],
+            data: vec![],
+        },
+        palinurus_core::Instruction {
+            program_id: Pubkey::from_str(SAS).unwrap(),
+            accounts: vec![],
+            data: vec![],
+        },
+        palinurus_core::Instruction {
+            program_id: Pubkey::from_str(MEMO).unwrap(),
+            accounts: vec![],
+            data: vec![],
+        },
+    ];
+    assert!(enforce_program_allowlist(&ixs).is_ok());
+}
+
+#[test]
+fn allowlist_rejects_spl_token() {
+    let ixs = vec![palinurus_core::Instruction {
+        program_id: Pubkey::from_str(TOKEN).unwrap(),
+        accounts: vec![],
+        data: vec![],
+    }];
+    let err = enforce_program_allowlist(&ixs).unwrap_err();
+    assert!(matches!(err, AttestError::Custody(ref m) if m.contains("not allowed")));
+}
+
+#[test]
+fn allowlist_rejects_random_program() {
+    let random = Pubkey::from_bytes([0xAB; 32]);
+    let ixs = vec![palinurus_core::Instruction {
+        program_id: random,
+        accounts: vec![],
+        data: vec![],
+    }];
+    let err = enforce_program_allowlist(&ixs).unwrap_err();
+    assert!(matches!(err, AttestError::Custody(ref m) if m.contains("not allowed")));
+}
+
+#[test]
+fn identity_allows_all_match() {
+    let cfg = t2_test_config();
+    assert!(enforce_session_key_identity(&cfg).is_ok());
+}
+
+#[test]
+fn identity_rejects_authority_mismatch() {
+    let mut cfg = t2_test_config();
+    // Change authority to a different key.
+    cfg.authority = Pubkey::from_bytes([0xFF; 32]);
+    let err = enforce_session_key_identity(&cfg).unwrap_err();
+    assert!(matches!(err, AttestError::Custody(ref m) if m.contains("authority")));
+}
+
+#[test]
+fn identity_rejects_payer_mismatch() {
+    let mut cfg = t2_test_config();
+    cfg.payer = Pubkey::from_bytes([0xFF; 32]);
+    let err = enforce_session_key_identity(&cfg).unwrap_err();
+    assert!(matches!(err, AttestError::Custody(ref m) if m.contains("payer")));
+}
+
+#[test]
+fn identity_rejects_nonce_authority_mismatch() {
+    let mut cfg = t2_test_config();
+    cfg.nonce_authority = Pubkey::from_bytes([0xFF; 32]);
+    let err = enforce_session_key_identity(&cfg).unwrap_err();
+    assert!(matches!(err, AttestError::Custody(ref m) if m.contains("nonce_authority")));
+}
+
+#[test]
+fn identity_rejects_missing_session_key() {
+    let cfg = test_config(); // T1 config, no session key
+    let err = enforce_session_key_identity(&cfg).unwrap_err();
+    assert!(matches!(err, AttestError::Custody(ref m) if m.contains("requires a session key")));
+}
+
+#[test]
+fn daily_cap_allows_under_cap() {
+    let mut state = DailyCapState::default();
+    for _ in 0..5 {
+        assert!(enforce_daily_cap(&mut state, 100, 10).is_ok());
+    }
+    assert_eq!(state.count, 5);
+}
+
+#[test]
+fn daily_cap_rejects_over_cap() {
+    let mut state = DailyCapState { last_day: 100, count: 10 };
+    let err = enforce_daily_cap(&mut state, 100, 10).unwrap_err();
+    assert!(matches!(err, AttestError::Custody(ref m) if m.contains("cap exceeded")));
+}
+
+#[test]
+fn daily_cap_resets_on_day_rollover() {
+    let mut state = DailyCapState { last_day: 100, count: 10 };
+    // New day → resets.
+    assert!(enforce_daily_cap(&mut state, 101, 10).is_ok());
+    assert_eq!(state.count, 1);
+    assert_eq!(state.last_day, 101);
+}
+
+#[test]
+fn lamport_cap_allows_small_fee() {
+    assert!(enforce_lamport_cap(5000, 1, 10000).is_ok());
+}
+
+#[test]
+fn lamport_cap_rejects_over_cap() {
+    let err = enforce_lamport_cap(5000, 3, 10000).unwrap_err();
+    assert!(matches!(err, AttestError::Custody(ref m) if m.contains("exceeds per-tx cap")));
+}
