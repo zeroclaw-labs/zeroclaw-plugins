@@ -891,7 +891,8 @@ checksum = "c08d65885ee38876c4f86fa503fb49d7b507c2b62552df7c70b2fce627e06381"
 [[package]]
 name = "palinurus-core"
 version = "0.1.0"
-source = "git+https://github.com/RECTOR-LABS/palinurus?branch=main#67e9f5c77d89182103fa9352bf6bf69684e37714"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "af7ff1d47ab51e9addf9240d5850ad6ca6efb7cbb7a67e918e5c80db8cc9c53a"
 dependencies = [
  "base64 0.22.1",
  "borsh 1.8.0",

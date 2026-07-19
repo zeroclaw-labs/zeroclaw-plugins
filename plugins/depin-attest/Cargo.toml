@@ -20,7 +20,7 @@ crate-type = ["cdylib", "rlib"]
 # The wasm32-wasip2-friendly Solana substrate (PDA, borsh, versioned-tx,
 # durable-nonce, RPC over waki, response shaping). Git dep during dev;
 # flipped to `palinurus-core = "0.1"` (crates.io) at end of Phase 2.
-palinurus-core = { git = "https://github.com/RECTOR-LABS/palinurus", branch = "main" }
+palinurus-core = "0.1"
 wit-bindgen = "0.46"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
