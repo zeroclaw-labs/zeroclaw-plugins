@@ -211,9 +211,11 @@ policy, and the plugin denied the unapproved recipient before simulation. No
 signature was created and no transaction was broadcast.
 
 The tool was also called through ZeroClaw's official Telegram channel. The bot
-delivered a hash-linked `DENY` for an expired-blockhash fixture back to the
-allowlisted peer, proving the real channel-to-agent-to-WASM-to-channel path.
-Credentials and peer identifiers are not part of the repository.
+delivered `ALLOW`, simulation `passed`, 150 compute units, and receipt
+`3bc83b7d2df727ace9a5bc2897a6c38306b7f892dbc19a0c3024b1506eec4aa0`
+for a fresh fixture. It delivered `DENY` for an expired fixture, proving both
+sides of the real channel-to-agent-to-WASM-to-channel path. Credentials and
+peer identifiers are not part of the repository.
 
 ## Custody
 
