@@ -1,0 +1,7 @@
+name = "token-risk-check"
+version = "0.1.0"
+description = "Red/amber/green risk verdict on a Solana SPL token mint: freeze authority, mint authority, and holder concentration"
+author = "Francis Somtochukwu Unachukwu"
+wasm_path = "token_risk_check.wasm"
+capabilities = ["tool"]
+permissions = ["http_client", "config_read"]
