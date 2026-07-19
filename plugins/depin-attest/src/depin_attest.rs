@@ -6,12 +6,11 @@
 //! `AttestError` (specific + actionable errors).
 
 use std::collections::HashMap;
-
 use std::str::FromStr;
 
 use borsh::BorshSerialize;
 use ed25519_dalek::SigningKey;
-use palinurus_core::Pubkey;
+use palinurus_core::{find_program_address, AccountMeta, CreateAttestationIxData, Instruction, Pubkey};
 use sha2::{Digest, Sha256};
 
 // ── Constants ──
@@ -321,3 +320,80 @@ fn parse_bool(section: &HashMap<String, String>, key: &str, default: bool) -> bo
         .unwrap_or(default)
 }
 
+
+// ── Instruction building (slice C) ──
+
+/// The SAS "attestation" PDA seed (verified from sas-lib `ATTESTATION_SEED`).
+const ATTESTATION_SEED: &[u8] = b"attestation";
+
+/// Build the SAS `create_attestation` instruction for a sensor reading.
+///
+/// Returns `(instruction, attestation_pda, expiry)`:
+/// - `instruction`: 6 accounts (payer W-signer, authority R-signer, credential R,
+///   schema R, attestation W, system_program R) + `CreateAttestationIxData` bytes.
+/// - `attestation_pda`: `find_program_address(["attestation", credential, schema, nonce], SAS)`.
+/// - `expiry`: `reading.timestamp + cfg.attestation_ttl_secs`.
+///
+/// Verified against sas-lib@1.0.10 `getCreateAttestationInstruction` +
+/// `deriveAttestationPda` (tools/verify-attest-ix.mjs oracle).
+pub fn build_attest_ix(
+    reading: &SensorReading,
+    cfg: &AttestConfig,
+) -> Result<(Instruction, Pubkey, i64), AttestError> {
+    let nonce = reading.derive_nonce();
+
+    // Derive the attestation PDA: ["attestation", credential, schema, nonce].
+    let (attestation_pda, _bump) = find_program_address(
+        &[
+            ATTESTATION_SEED,
+            cfg.credential_pda.as_bytes(),
+            cfg.schema_pda.as_bytes(),
+            nonce.as_bytes(),
+        ],
+        &Pubkey::SAS,
+    );
+
+    // Expiry = timestamp + ttl (overflow-checked; TTL itself is bounded by config validation).
+    let expiry = reading
+        .timestamp
+        .checked_add(cfg.attestation_ttl_secs)
+        .ok_or_else(|| AttestError::InvalidReading("expiry overflow: timestamp + ttl exceeds i64".to_string()))?;
+
+    // Instruction data: [disc=6][nonce 32B][u32 LE len][data bytes][i64 LE expiry].
+    let data = CreateAttestationIxData::new(nonce, reading.encode(), expiry).to_ix_bytes();
+
+    // Accounts (6, in order — matches sas-lib Codama layout):
+    //   0. payer          — WritableSigner   (pays for attestation account creation)
+    //   1. authority      — ReadonlySigner   (Credential's authorized signer)
+    //   2. credential     — Readonly         (Credential PDA from sas-setup)
+    //   3. schema         — Readonly         (Schema PDA from sas-setup)
+    //   4. attestation    — Writable         (the PDA being created)
+    //   5. system_program — Readonly         (System program, default 111...111)
+    let accounts = vec![
+        AccountMeta::signer_writable(cfg.payer),
+        AccountMeta::signer_readonly(cfg.authority),
+        AccountMeta::readonly(cfg.credential_pda),
+        AccountMeta::readonly(cfg.schema_pda),
+        AccountMeta::writable(attestation_pda),
+        AccountMeta::readonly(Pubkey::SYSTEM),
+    ];
+
+    let ix = Instruction {
+        program_id: Pubkey::SAS,
+        accounts,
+        data,
+    };
+
+    Ok((ix, attestation_pda, expiry))
+}
+
+/// Build a memo instruction (program `MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr`,
+/// data = raw UTF-8, no accounts). The memo program logs the text on-chain;
+/// it takes no accounts and performs no state change.
+pub fn build_memo_ix(memo: &str) -> Instruction {
+    Instruction {
+        program_id: Pubkey::MEMO,
+        accounts: Vec::new(),
+        data: memo.as_bytes().to_vec(),
+    }
+}

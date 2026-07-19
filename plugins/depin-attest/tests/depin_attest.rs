@@ -356,3 +356,151 @@ fn nonce_identical_readings_collide() {
     let b = a.clone();
     assert_eq!(a.derive_nonce().to_bytes(), b.derive_nonce().to_bytes());
 }
+// ── Slice C: instruction building tests ──
+
+use depin_attest::depin_attest::{build_attest_ix, build_memo_ix};
+use palinurus_core::{find_program_address, CreateAttestationIxData};
+
+/// A valid config for instruction-building tests (uses distinct pubkeys so
+/// account ordering is testable).
+fn test_config() -> AttestConfig {
+    AttestConfig::from_section(&section(&[
+        ("rpc_endpoint", "https://devnet.helius.com"),
+        ("credential_pda", SAS),      // credential = SAS addr (stand-in)
+        ("schema_pda", MEMO),         // schema = MEMO addr (stand-in)
+        ("authority", TOKEN),         // authority = TOKEN addr (distinct)
+        ("payer", TOKEN),             // payer = same as authority
+        ("nonce_account", SYSTEM),    // nonce_account = System (stand-in)
+        ("nonce_authority", TOKEN),   // nonce_authority = TOKEN
+    ]))
+    .expect("valid test config")
+}
+
+fn test_reading() -> SensorReading {
+    SensorReading {
+        sensor_id: "bme280-1".to_string(),
+        value: 24.7,
+        unit: "celsius".to_string(),
+        timestamp: 1_753_000_000,
+    }
+}
+
+#[test]
+fn attest_ix_program_is_sas() {
+    let cfg = test_config();
+    let (ix, _, _) = build_attest_ix(&test_reading(), &cfg).unwrap();
+    assert_eq!(ix.program_id, Pubkey::from_str(SAS).unwrap());
+}
+
+#[test]
+fn attest_ix_has_six_accounts_in_correct_order() {
+    let cfg = test_config();
+    let (ix, _, _) = build_attest_ix(&test_reading(), &cfg).unwrap();
+    assert_eq!(ix.accounts.len(), 6, "must have exactly 6 accounts");
+
+    let cred = Pubkey::from_str(SAS).unwrap();
+    let schema = Pubkey::from_str(MEMO).unwrap();
+    let auth = Pubkey::from_str(TOKEN).unwrap();
+    let system = Pubkey::from_str(SYSTEM).unwrap();
+
+    // 0: payer — W signer
+    assert_eq!(ix.accounts[0].pubkey, auth, "payer");
+    assert!(ix.accounts[0].is_signer, "payer must be signer");
+    assert!(ix.accounts[0].is_writable, "payer must be writable");
+
+    // 1: authority — R signer
+    assert_eq!(ix.accounts[1].pubkey, auth, "authority");
+    assert!(ix.accounts[1].is_signer, "authority must be signer");
+    assert!(!ix.accounts[1].is_writable, "authority must be readonly");
+
+    // 2: credential — R non-signer
+    assert_eq!(ix.accounts[2].pubkey, cred, "credential");
+    assert!(!ix.accounts[2].is_signer, "credential must not be signer");
+    assert!(!ix.accounts[2].is_writable, "credential must be readonly");
+
+    // 3: schema — R non-signer
+    assert_eq!(ix.accounts[3].pubkey, schema, "schema");
+    assert!(!ix.accounts[3].is_signer, "schema must not be signer");
+    assert!(!ix.accounts[3].is_writable, "schema must be readonly");
+
+    // 4: attestation — W non-signer (the PDA being created)
+    assert!(!ix.accounts[4].is_signer, "attestation must not be signer");
+    assert!(ix.accounts[4].is_writable, "attestation must be writable");
+
+    // 5: system_program — R non-signer
+    assert_eq!(ix.accounts[5].pubkey, system, "system_program");
+    assert!(!ix.accounts[5].is_signer, "system must not be signer");
+    assert!(!ix.accounts[5].is_writable, "system must be readonly");
+}
+
+#[test]
+fn attest_pda_matches_find_program_address() {
+    let cfg = test_config();
+    let reading = test_reading();
+    let (ix, pda, _) = build_attest_ix(&reading, &cfg).unwrap();
+
+    // Independently derive the PDA to cross-check.
+    let nonce = reading.derive_nonce();
+    let (expected_pda, _bump) = find_program_address(
+        &[
+            b"attestation",
+            cfg.credential_pda.as_bytes(),
+            cfg.schema_pda.as_bytes(),
+            nonce.as_bytes(),
+        ],
+        &Pubkey::from_str(SAS).unwrap(),
+    );
+    assert_eq!(pda, expected_pda);
+
+    // The attestation account in the ix must match the returned PDA.
+    assert_eq!(ix.accounts[4].pubkey, pda);
+}
+
+#[test]
+fn attest_ix_data_matches_create_attestation_ix_data() {
+    let cfg = test_config();
+    let reading = test_reading();
+    let (ix, _pda, expiry) = build_attest_ix(&reading, &cfg).unwrap();
+
+    let nonce = reading.derive_nonce();
+    let expected_data = CreateAttestationIxData::new(nonce, reading.encode(), expiry).to_ix_bytes();
+    assert_eq!(ix.data, expected_data, "ix data must match CreateAttestationIxData encoding");
+}
+
+#[test]
+fn attest_ix_expiry_is_timestamp_plus_ttl() {
+    let cfg = test_config();
+    let reading = test_reading();
+    let (_ix, _, expiry) = build_attest_ix(&reading, &cfg).unwrap();
+    assert_eq!(expiry, reading.timestamp + cfg.attestation_ttl_secs);
+}
+
+#[test]
+fn attest_ix_expiry_overflow_detected() {
+    let mut cfg = test_config();
+    cfg.attestation_ttl_secs = i64::MAX - 1_000_000_000; // huge but passes config validation
+    let reading = SensorReading {
+        sensor_id: "x".to_string(),
+        value: 1.0,
+        unit: "C".to_string(),
+        timestamp: i64::MAX - 1, // near overflow
+    };
+    let err = build_attest_ix(&reading, &cfg).unwrap_err();
+    assert!(matches!(err, AttestError::InvalidReading(ref m) if m.contains("expiry overflow")));
+}
+
+#[test]
+fn memo_ix_is_raw_utf8_no_accounts() {
+    let ix = build_memo_ix("sensor reading ok");
+    assert_eq!(ix.program_id, Pubkey::from_str(MEMO).unwrap());
+    assert!(ix.accounts.is_empty(), "memo ix takes no accounts");
+    assert_eq!(ix.data, b"sensor reading ok");
+}
+
+#[test]
+fn memo_ix_empty_string() {
+    let ix = build_memo_ix("");
+    assert_eq!(ix.program_id, Pubkey::from_str(MEMO).unwrap());
+    assert!(ix.accounts.is_empty());
+    assert!(ix.data.is_empty());
+}
