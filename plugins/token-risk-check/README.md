@@ -136,6 +136,21 @@ python tools/build-registry.py --source-plugins plugins --check-metadata registr
 
 Do not hand-edit `registry.json`; the repository workflow generates it.
 
+### Deterministic offline demo
+
+The demo executable exercises the same scoring core as the component with
+green, malicious Token-2022, and missing-evidence fixtures. It makes no network
+request and needs no key or wallet:
+
+```bash
+cargo run --locked --example demo -- green
+cargo run --locked --example demo -- red
+cargo run --locked --example demo -- incomplete
+```
+
+The host tests separately exercise the JSON-RPC and market response parsers;
+the release component wires those parsers to host-mediated `wasi:http`.
+
 ## Install and use
 
 After building, keep `token_risk_check.wasm` next to `manifest.toml`, then:
