@@ -1,0 +1,37 @@
+name: token-risk-check
+
+on:
+  push:
+    paths:
+      - "plugins/token-risk-check/**"
+      - "wit/v0/**"
+      - ".github/workflows/token-risk-check.yml"
+  pull_request:
+    paths:
+      - "plugins/token-risk-check/**"
+      - "wit/v0/**"
+      - ".github/workflows/token-risk-check.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  test-and-build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: plugins/token-risk-check
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-wasip2
+          components: rustfmt, clippy
+      - name: Format check
+        run: cargo fmt --check
+      - name: Host tests
+        run: cargo test
+      - name: Host lint
+        run: cargo clippy --all-targets -- -D warnings
+      - name: WASI component build
+        run: cargo build --release --target wasm32-wasip2
