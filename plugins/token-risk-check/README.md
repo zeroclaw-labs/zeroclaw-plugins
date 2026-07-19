@@ -144,6 +144,40 @@ Layout follows `plugins/redact-text`: all logic lives in plain Rust modules
 verdict + rendering) with zero wasm dependency; `lib.rs` holds the
 `#[cfg(target_family = "wasm")]` shim (waki HTTP + WIT glue) and nothing else.
 
+## Running inside ZeroClaw (verified end-to-end)
+
+⚠️ **The shipped release binaries (≤ v0.8.3) cannot load WASM plugins.** The
+plugin host is behind the `plugins-wasm` cargo feature, which is not in the
+default or dist feature set — the release binary accepts all `[plugins]`
+config silently and never loads anything. Build the host with the feature on:
+
+```
+git clone --depth 1 https://github.com/zeroclaw-labs/zeroclaw
+cd zeroclaw
+cargo build --release --locked --bin zeroclaw \
+  --no-default-features --features "agent-runtime,plugins-wasm-cranelift"
+```
+
+Install the plugin and enable the subsystem:
+
+```
+mkdir -p ~/.zeroclaw/plugins/token-risk-check
+cp target/wasm32-wasip2/release/token_risk_check.wasm manifest.toml \
+   ~/.zeroclaw/plugins/token-risk-check/
+zeroclaw config set plugins.enabled true
+zeroclaw config set plugins.auto_discover true
+```
+
+Verified 2026-07-19 against a source-built v0.8.3 host on an aarch64 phone
+(Samsung S25, Termux/proot): the component registers alongside the 50 built-in
+tools, the *supervised* risk profile demands human approval before the first
+call (`🔧 Agent wants to execute: token_risk_check … [Y]es / [N]o / [A]lways`),
+and on approval the host executes the component with real mainnet RPC over its
+permission-gated `wasi:http` — returning the PYUSD RED verdict above, including
+the explicit degradation note when the public RPC throttles holder data. Deny
+the prompt and the agent receives `Denied by user.` — the T0 posture and the
+host's approval gate compose exactly as designed.
+
 ## What fought us on wasm32-wasip2 (field notes)
 
 1. **We never let `solana-sdk` into the fight.** The advice in the bounty brief
