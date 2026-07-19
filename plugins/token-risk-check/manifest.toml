@@ -1,0 +1,9 @@
+name = "token-risk-check"
+version = "0.1.0"
+description = "Read-only Solana token risk check: authorities, holder concentration, Token-2022 hazards, and liquidity"
+author = "AntonsBB"
+wasm_path = "token_risk_check.wasm"
+capabilities = ["tool"]
+# http_client: read-only Solana JSON-RPC and market-data requests.
+# config_read: this plugin's jailed rpc_url, market_base_url, and thresholds.
+permissions = ["http_client", "config_read"]
