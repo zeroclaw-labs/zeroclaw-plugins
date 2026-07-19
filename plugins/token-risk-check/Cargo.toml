@@ -1,0 +1,37 @@
+# Standalone crate (own [workspace]): built for wasm32-wasip2 as a tool plugin
+# component; the pure `risk` core (rlib) is host-tested with plain `cargo test`.
+# `waki` (the blocking wasi:http client used by the shared RPC transport) is a
+# wasm-only dep so the host test build never tries to compile it.
+[package]
+name = "token-risk-check"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "ZeroClaw WIT tool plugin: analyze a Solana SPL / Token-2022 mint for rug and footgun risk and return a Red/Amber/Green verdict."
+publish = false
+
+# cdylib for the wasm component; rlib so the pure risk core is testable on the
+# host with a plain `cargo test`.
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# SDK-less Solana primitives (account decode, extension parsing, RPC transport).
+# Path dependency for local development; a sibling of the zeroclaw-plugins repo.
+zeroclaw-solana-core = "0.1.0"
+wit-bindgen = "0.46"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# wasi:http client, only compiled for the wasm component, never on the host.
+[target.'cfg(target_family = "wasm")'.dependencies]
+waki = { version = "0.5.1", features = ["json"] }
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true
+codegen-units = 1
+
+# Standalone crate: built for wasm32-wasip2, not part of the host workspace.
+[workspace]

@@ -1,0 +1,15 @@
+name = "lending-health"
+version = "0.1.0"
+description = "Solana DeFi liquidation-risk sentinel for Kamino Lend: reads a wallet's obligations and returns a health-factor verdict (Healthy / At-risk / Liquidatable) so a cron SOP can alert before a position is liquidated."
+author = "RaYYeR220"
+wasm_path = "lending_health.wasm"
+capabilities = ["tool"]
+# http_client: read-only Solana JSON-RPC (getProgramAccounts to discover the
+# wallet's Kamino obligations, plus account reads); TLS is performed host-side.
+# config_read: read the optional `rpc_url` override from this plugin's own jailed
+# config section.
+#
+# NOTE: discovery uses a filtered getProgramAccounts on the Kamino Lend program.
+# Some public RPCs rate-limit or disable gPA on large programs; a gPA-capable
+# endpoint (e.g. Helius) set via `rpc_url` is recommended for reliable live use.
+permissions = ["http_client", "config_read"]

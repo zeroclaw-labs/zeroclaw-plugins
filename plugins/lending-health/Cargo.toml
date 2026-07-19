@@ -1,0 +1,37 @@
+# Standalone crate (own [workspace]): built for wasm32-wasip2 as a tool plugin
+# component; the pure `kamino` + `fraction` cores (rlib) are host-tested with a
+# plain `cargo test`. `waki` (the blocking wasi:http client used by the shared
+# RPC transport) is a wasm-only dep so the host test build never compiles it.
+[package]
+name = "lending-health"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "ZeroClaw WIT tool plugin: a Solana DeFi liquidation-risk sentinel for Kamino Lend. Reads a wallet's obligations and returns a health-factor status (Healthy / At-risk / Liquidatable) so a cron SOP can alert before a position is liquidated."
+publish = false
+
+# cdylib for the wasm component; rlib so the pure decode/health core is testable
+# on the host with a plain `cargo test`.
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# SDK-less Solana primitives (account decode, base58/base64, RPC transport).
+# Path dependency for local development; a sibling of the zeroclaw-plugins repo.
+zeroclaw-solana-core = "0.1.0"
+wit-bindgen = "0.46"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# wasi:http client, only compiled for the wasm component, never on the host.
+[target.'cfg(target_family = "wasm")'.dependencies]
+waki = { version = "0.5.1", features = ["json"] }
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true
+codegen-units = 1
+
+# Standalone crate: built for wasm32-wasip2, not part of the host workspace.
+[workspace]
