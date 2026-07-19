@@ -21,7 +21,7 @@ mod component {
     use crate::core::{
         build_attestation_plan, compile_market, parameters_schema, parse_execute_args,
         parse_stat_validation_response, stat_validation_url, unknown_report, verified_report,
-        PluginConfig, MAX_RESPONSE_BODY_BYTES,
+        PluginConfig, VerifiedAttestation, MAX_RESPONSE_BODY_BYTES,
     };
     use crate::quorum::{
         classify_quorum, inspect_provider, quorum_request_bodies, verify_attestation_response,
@@ -202,17 +202,20 @@ mod component {
                     ));
                 }
             };
+            let attestation = VerifiedAttestation {
+                signature: &parsed.attestation_signature,
+                finalized_slot: binding.finalized_slot,
+                transaction_sha256: &binding.transaction_sha256,
+                memo_receipt_sha256: &binding.memo_receipt_sha256,
+                quorum: &quorum,
+            };
             let output = match verified_report(
                 parsed.fixture_id,
                 parsed.sequence,
                 &proof,
                 &market,
                 &plan,
-                &parsed.attestation_signature,
-                binding.finalized_slot,
-                &binding.transaction_sha256,
-                &binding.memo_receipt_sha256,
-                &quorum,
+                &attestation,
             ) {
                 Ok(value) => value,
                 Err(error) => return Ok(unknown_result(error.code(), fixture_id, sequence)),

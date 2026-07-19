@@ -704,17 +704,21 @@ pub fn evaluate_market(
     })
 }
 
+pub struct VerifiedAttestation<'a> {
+    pub signature: &'a str,
+    pub finalized_slot: u64,
+    pub transaction_sha256: &'a str,
+    pub memo_receipt_sha256: &'a str,
+    pub quorum: &'a Value,
+}
+
 pub fn verified_report(
     fixture_id: u64,
     sequence: u64,
     proof: &ParsedProof,
     market: &CompiledMarket,
     plan: &AttestationPlan,
-    attestation_signature: &str,
-    finalized_slot: u64,
-    transaction_sha256: &str,
-    memo_receipt_sha256: &str,
-    quorum: &Value,
+    attestation: &VerifiedAttestation<'_>,
 ) -> Result<String, CoreError> {
     let outcome = if plan.predicate_result { "win" } else { "lose" };
     let predicate_reason = if plan.predicate_result {
@@ -737,10 +741,10 @@ pub fn verified_report(
         "proof_payload_sha256": proof.payload_sha256,
         "instruction_sha256": plan.instruction_sha256,
         "daily_scores_pda": plan.daily_scores_pda,
-        "attestation_signature": attestation_signature,
-        "finalized_slot": finalized_slot,
-        "transaction_sha256": transaction_sha256,
-        "memo_receipt_sha256": memo_receipt_sha256
+        "attestation_signature": attestation.signature,
+        "finalized_slot": attestation.finalized_slot,
+        "transaction_sha256": attestation.transaction_sha256,
+        "memo_receipt_sha256": attestation.memo_receipt_sha256
     });
     let receipt_sha256 = hash_canonical_json(&receipt_body)?;
     let report = json!({
@@ -770,15 +774,15 @@ pub fn verified_report(
             "pda_bump": plan.pda_bump,
             "instruction_bytes": plan.instruction_len,
             "instruction_sha256": plan.instruction_sha256,
-            "attestation_signature": attestation_signature,
-            "finalized_slot": finalized_slot,
-            "transaction_sha256": transaction_sha256,
-            "memo_receipt_sha256": memo_receipt_sha256,
+            "attestation_signature": attestation.signature,
+            "finalized_slot": attestation.finalized_slot,
+            "transaction_sha256": attestation.transaction_sha256,
+            "memo_receipt_sha256": attestation.memo_receipt_sha256,
             "predicate_result": plan.predicate_result,
             "attestation_transaction_finalized": true,
             "transaction_submitted_by_plugin": false
         },
-        "quorum": quorum,
+        "quorum": attestation.quorum,
         "receipt": {
             "hash_algorithm": "SHA-256",
             "canonicalization": "recursive-key-sort-v1",

@@ -271,12 +271,9 @@ fn synthetic_rpc(
     }
     message.extend_from_slice(&[3u8; 32]);
     shortvec(&mut message, 3);
-    instruction(
-        &mut message,
-        3,
-        &[],
-        &[&[2], &COMPUTE_UNIT_LIMIT.to_le_bytes()].concat(),
-    );
+    let mut compute_data = vec![2];
+    compute_data.extend_from_slice(&COMPUTE_UNIT_LIMIT.to_le_bytes());
+    instruction(&mut message, 3, &[], &compute_data);
     instruction(&mut message, 4, &[0], memo.as_bytes());
     instruction(&mut message, 2, &[1], &plan.instruction);
 
