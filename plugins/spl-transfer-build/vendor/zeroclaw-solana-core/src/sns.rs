@@ -32,34 +32,61 @@ pub fn sol_tld_authority() -> Pubkey {
 /// maximum.
 const MAX_LABEL_LEN: usize = 63;
 
-/// Normalize a user-supplied domain: trim, lowercase, strip a single trailing
-/// `.sol`. Rejects empty, absurdly long, subdomain (`a.b.sol`), and non-label
-/// characters — a `.sol` label is `[a-z0-9-]`.
-pub fn normalize_domain(input: &str) -> Result<String, String> {
+/// Normalize a user-supplied domain into its labels, sub-label first: trim,
+/// lowercase, strip a trailing `.sol`, split on `.`. `bonfida.sol` → `["bonfida"]`;
+/// `dev.bonfida.sol` → `["dev", "bonfida"]`. Rejects empty/over-long/invalid
+/// labels and more than one level of subdomain (SNS derives one level).
+pub fn normalize_domain(input: &str) -> Result<Vec<String>, String> {
     let d = input.trim().trim_start_matches('@').to_ascii_lowercase();
     let d = d.strip_suffix(".sol").unwrap_or(&d);
     if d.is_empty() {
         return Err("empty domain".to_string());
     }
-    if d.len() > MAX_LABEL_LEN {
-        return Err("domain is too long".to_string());
+    let labels: Vec<&str> = d.split('.').collect();
+    if labels.len() > 2 {
+        return Err(
+            "only one level of subdomain is supported, e.g. \"dev.bonfida.sol\"".to_string(),
+        );
     }
-    if d.contains('.') {
-        return Err("subdomains are not supported; use a bare name like \"lucas.sol\"".to_string());
+    for label in &labels {
+        if label.is_empty() {
+            return Err("invalid domain: empty label".to_string());
+        }
+        if label.len() > MAX_LABEL_LEN {
+            return Err("domain is too long".to_string());
+        }
+        if !label.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+            return Err("invalid domain: only letters, digits, and '-' are allowed".to_string());
+        }
     }
-    if !d.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
-        return Err("invalid domain: only letters, digits, and '-' are allowed".to_string());
-    }
-    Ok(d.to_string())
+    Ok(labels.into_iter().map(String::from).collect())
 }
 
-/// Derive the registry account key for a normalized `.sol` domain label.
-pub fn derive_domain_key(label: &str) -> Result<Pubkey, String> {
-    let hashed = sha256(&[HASH_PREFIX.as_bytes(), label.as_bytes()]);
+/// Derive the registry account key for a name under a given parent.
+fn derive_under(hashed_name: &[u8; 32], parent: &Pubkey) -> Result<Pubkey, String> {
     let class = [0u8; 32];
-    let parent = sol_tld_authority();
-    let (key, _) = find_program_address(&[&hashed, &class, &parent.0], &name_program())?;
+    let (key, _) = find_program_address(&[hashed_name, &class, &parent.0], &name_program())?;
     Ok(key)
+}
+
+/// Derive the registry account key for normalized labels (sub-first). A top
+/// domain hashes `"SPL Name Service" + label` under the SOL TLD; a subdomain
+/// hashes `"SPL Name Service" + "\0" + sub` under the *parent domain's* key —
+/// exactly `@bonfida/spl-name-service`'s `getDomainKeySync`.
+pub fn derive_domain_key(labels: &[String]) -> Result<Pubkey, String> {
+    match labels {
+        [label] => {
+            let hashed = sha256(&[HASH_PREFIX.as_bytes(), label.as_bytes()]);
+            derive_under(&hashed, &sol_tld_authority())
+        }
+        [sub, parent_label] => {
+            let parent_hashed = sha256(&[HASH_PREFIX.as_bytes(), parent_label.as_bytes()]);
+            let parent = derive_under(&parent_hashed, &sol_tld_authority())?;
+            let sub_hashed = sha256(&[HASH_PREFIX.as_bytes(), &[0u8], sub.as_bytes()]);
+            derive_under(&sub_hashed, &parent)
+        }
+        _ => Err("invalid domain: expected one or two labels".to_string()),
+    }
 }
 
 /// The registry header: parent(32) · owner(32) · class(32), then record data.
@@ -87,19 +114,35 @@ pub fn parse_registry_owner(data: &[u8]) -> Result<Pubkey, String> {
 mod tests {
     use super::*;
 
+    fn labels(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| s.to_string()).collect()
+    }
+
     #[test]
     fn normalizes_domains() {
-        assert_eq!(normalize_domain("lucas.sol").unwrap(), "lucas");
-        assert_eq!(normalize_domain("  LUCAS.SOL  ").unwrap(), "lucas");
-        assert_eq!(normalize_domain("@bonfida").unwrap(), "bonfida");
-        assert_eq!(normalize_domain("my-name.sol").unwrap(), "my-name");
+        assert_eq!(normalize_domain("lucas.sol").unwrap(), labels(&["lucas"]));
+        assert_eq!(
+            normalize_domain("  LUCAS.SOL  ").unwrap(),
+            labels(&["lucas"])
+        );
+        assert_eq!(normalize_domain("@bonfida").unwrap(), labels(&["bonfida"]));
+        assert_eq!(
+            normalize_domain("my-name.sol").unwrap(),
+            labels(&["my-name"])
+        );
+        // one level of subdomain is now supported (sub-first)
+        assert_eq!(
+            normalize_domain("dev.bonfida.sol").unwrap(),
+            labels(&["dev", "bonfida"])
+        );
     }
 
     #[test]
     fn rejects_bad_domains() {
         assert!(normalize_domain("").is_err());
         assert!(normalize_domain(".sol").is_err());
-        assert!(normalize_domain("a.b.sol").is_err());
+        assert!(normalize_domain("a.b.c.sol").is_err()); // >1 subdomain level
+        assert!(normalize_domain("a..sol").is_err()); // empty label
         assert!(normalize_domain("bad name").is_err());
         assert!(normalize_domain("emoji😀.sol").is_err());
         assert!(normalize_domain(&"x".repeat(70)).is_err()); // above the flood guard
@@ -108,15 +151,16 @@ mod tests {
 
     #[test]
     fn domain_key_is_deterministic_and_off_curve() {
-        let a = derive_domain_key("bonfida").unwrap();
-        let b = derive_domain_key("bonfida").unwrap();
+        let a = derive_domain_key(&labels(&["bonfida"])).unwrap();
+        let b = derive_domain_key(&labels(&["bonfida"])).unwrap();
         assert_eq!(a, b);
-        assert_ne!(
-            derive_domain_key("bonfida").unwrap(),
-            derive_domain_key("lucas").unwrap()
-        );
+        assert_ne!(a, derive_domain_key(&labels(&["lucas"])).unwrap());
         // A registry account is a PDA, so it must be off the curve.
         assert!(!a.is_on_curve());
+        // A subdomain derives to a different (off-curve) key than its parent.
+        let sub = derive_domain_key(&labels(&["dev", "bonfida"])).unwrap();
+        assert_ne!(sub, a);
+        assert!(!sub.is_on_curve());
     }
 
     #[test]
@@ -137,7 +181,9 @@ mod tests {
         // algorithm (prefix, class, parent, program) — a regression here means
         // the derivation drifted from the on-chain reality.
         assert_eq!(
-            derive_domain_key("bonfida").unwrap().to_base58(),
+            derive_domain_key(&labels(&["bonfida"]))
+                .unwrap()
+                .to_base58(),
             "Crf8hzfthWGbGbLTVCiqRqV5MVnbpHB1L9KQMd6gsinb"
         );
     }

@@ -178,6 +178,158 @@ pub fn get_token_largest_accounts<T: HttpTransport>(
         .collect())
 }
 
+/// One entry of `getSignaturesForAddress`.
+pub struct SignatureInfo {
+    pub signature: String,
+    pub slot: u64,
+    /// True when the transaction failed on-chain (non-null `err`).
+    pub failed: bool,
+    /// `"processed" | "confirmed" | "finalized"`, or empty if unknown.
+    pub confirmation: String,
+}
+
+/// `getSignaturesForAddress` — signatures of transactions that reference an
+/// address. For Solana Pay, the payment `reference` is added to the transfer
+/// as a read-only account, so querying it surfaces the settling transaction.
+pub fn get_signatures_for_address<T: HttpTransport>(
+    transport: &T,
+    url: &str,
+    address: &Pubkey,
+    limit: u64,
+) -> Result<Vec<SignatureInfo>, String> {
+    let limit = limit.clamp(1, 25);
+    let result = rpc_call(
+        transport,
+        url,
+        "getSignaturesForAddress",
+        json!([address.to_base58(), {"limit": limit, "commitment": "confirmed"}]),
+    )?;
+    let entries = result
+        .as_array()
+        .ok_or("getSignaturesForAddress: expected an array result")?;
+    Ok(entries
+        .iter()
+        .take(limit as usize)
+        .filter_map(|e| {
+            Some(SignatureInfo {
+                signature: e["signature"].as_str()?.to_string(),
+                slot: e["slot"].as_u64().unwrap_or(0),
+                failed: !e["err"].is_null(),
+                confirmation: e["confirmationStatus"].as_str().unwrap_or("").to_string(),
+            })
+        })
+        .collect())
+}
+
+/// The credit a specific wallet received in one transaction, and who paid.
+pub struct Credit {
+    /// Amount credited to the watched wallet, in base units (lamports for SOL,
+    /// token base units for an SPL mint).
+    pub amount: u64,
+    /// Best-effort payer (the account whose balance dropped the most).
+    pub payer: Option<String>,
+}
+
+/// `getTransaction` → how much `recipient` received in this transaction.
+/// `mint = None` measures native SOL (lamport balance delta); `mint = Some`
+/// measures that SPL token (token-balance delta for the recipient's owner).
+/// Returns `Ok(None)` if the transaction is missing, failed, or did not credit
+/// the recipient.
+pub fn get_transaction_credit<T: HttpTransport>(
+    transport: &T,
+    url: &str,
+    signature: &str,
+    recipient: &Pubkey,
+    mint: Option<&Pubkey>,
+) -> Result<Option<Credit>, String> {
+    let result = rpc_call(
+        transport,
+        url,
+        "getTransaction",
+        json!([signature, {"encoding": "jsonParsed", "commitment": "confirmed", "maxSupportedTransactionVersion": 0}]),
+    )?;
+    if result.is_null() {
+        return Ok(None);
+    }
+    let meta = &result["meta"];
+    if !meta["err"].is_null() {
+        return Ok(None);
+    }
+    let recipient_b58 = recipient.to_base58();
+
+    match mint {
+        None => {
+            let keys = result["transaction"]["message"]["accountKeys"]
+                .as_array()
+                .ok_or("getTransaction: missing accountKeys")?;
+            let idx = keys.iter().position(|k| {
+                k.get("pubkey")
+                    .and_then(Value::as_str)
+                    .unwrap_or_else(|| k.as_str().unwrap_or(""))
+                    == recipient_b58
+            });
+            let idx = match idx {
+                Some(i) => i,
+                None => return Ok(None),
+            };
+            let pre = meta["preBalances"][idx].as_u64().unwrap_or(0);
+            let post = meta["postBalances"][idx].as_u64().unwrap_or(0);
+            let credit = post.saturating_sub(pre);
+            if credit == 0 {
+                return Ok(None);
+            }
+            // Payer = the account with the largest balance drop.
+            let payer = keys
+                .iter()
+                .enumerate()
+                .max_by_key(|(i, _)| {
+                    let p = meta["preBalances"][*i].as_u64().unwrap_or(0);
+                    let q = meta["postBalances"][*i].as_u64().unwrap_or(0);
+                    p.saturating_sub(q)
+                })
+                .map(|(_, k)| {
+                    k.get("pubkey")
+                        .and_then(Value::as_str)
+                        .unwrap_or_else(|| k.as_str().unwrap_or(""))
+                        .to_string()
+                });
+            Ok(Some(Credit {
+                amount: credit,
+                payer,
+            }))
+        }
+        Some(mint) => {
+            let mint_b58 = mint.to_base58();
+            let bal_for = |arr: &Value| -> u64 {
+                arr.as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter(|b| {
+                        b["mint"].as_str() == Some(&mint_b58)
+                            && b["owner"].as_str() == Some(&recipient_b58)
+                    })
+                    .filter_map(|b| {
+                        b["uiTokenAmount"]["amount"]
+                            .as_str()
+                            .and_then(|s| s.parse::<u64>().ok())
+                    })
+                    .next()
+                    .unwrap_or(0)
+            };
+            let pre = bal_for(&meta["preTokenBalances"]);
+            let post = bal_for(&meta["postTokenBalances"]);
+            let credit = post.saturating_sub(pre);
+            if credit == 0 {
+                return Ok(None);
+            }
+            Ok(Some(Credit {
+                amount: credit,
+                payer: None,
+            }))
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

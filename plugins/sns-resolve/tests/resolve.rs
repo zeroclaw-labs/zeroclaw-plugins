@@ -64,12 +64,26 @@ fn resolves_a_registered_domain_to_its_owner() {
     let res = resolve_domain(&rpc, "bonfida.sol", &cfg()).unwrap();
     assert_eq!(res.domain, "bonfida.sol");
     assert_eq!(res.owner, Pubkey(owner).to_base58());
+    // Non-circular anchor: the registry PDA the resolver derived must equal the
+    // real on-chain bonfida.sol key, not merely "derive == derive".
+    assert_eq!(res.registry, "Crf8hzfthWGbGbLTVCiqRqV5MVnbpHB1L9KQMd6gsinb");
+    assert!(res.text.contains("bonfida.sol →"));
+    assert!(res.text.contains(&res.owner)); // full owner address is in the text
+    assert!(res.text.len() < 400); // bounded output (address + explorer link)
+    assert!(res.text.contains("solscan.io/account/"));
+}
+
+#[test]
+fn derivation_matches_the_canonical_onchain_bonfida_key() {
+    // The derivation itself, isolated from the RPC path: pins the algorithm to
+    // a value observed on mainnet, so any drift fails inside the plugin's own
+    // `cargo test` (not only in the vendored core's unit tests).
     assert_eq!(
-        res.registry,
-        derive_domain_key("bonfida").unwrap().to_base58()
+        derive_domain_key(&["bonfida".to_string()])
+            .unwrap()
+            .to_base58(),
+        "Crf8hzfthWGbGbLTVCiqRqV5MVnbpHB1L9KQMd6gsinb"
     );
-    assert!(res.text.contains("bonfida.sol resolves to"));
-    assert!(res.text.len() < 200); // bounded output
 }
 
 #[test]
@@ -102,7 +116,7 @@ fn derived_collision_with_a_non_registry_account_is_rejected() {
 #[test]
 fn malformed_inputs_fail_closed() {
     let rpc = MockRpc::with_registry([1u8; 32]);
-    for bad in ["", ".sol", "a.b.sol", "bad name", &"x".repeat(70)] {
+    for bad in ["", ".sol", "a.b.c.sol", "bad name", &"x".repeat(70)] {
         assert!(
             resolve_domain(&rpc, bad, &cfg()).is_err(),
             "{bad:?} should fail"

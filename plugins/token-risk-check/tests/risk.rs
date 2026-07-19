@@ -130,7 +130,7 @@ fn clean_dispersed_token_is_green() {
     ]);
     let report = assess(&rpc);
     assert_eq!(report.verdict, Verdict::Green);
-    assert!(report.text.starts_with("RISK: GREEN"));
+    assert!(report.text.starts_with("🟢 RISK: GREEN"));
     assert!(report.text.contains("#1 holds 3.00%"));
     assert!(report.text.contains("supply 1000000"));
 }

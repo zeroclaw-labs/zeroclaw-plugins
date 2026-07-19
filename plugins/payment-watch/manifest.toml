@@ -1,0 +1,12 @@
+name = "payment-watch"
+version = "0.1.0"
+description = "Watch the operator's receiving wallet for a recent incoming Solana payment (SOL or SPL), optionally matching an expected amount — closes the loop on solana-pay-request. Returns the confirming transaction if paid, or pending. T0: read-only, zero custody."
+author = "Petr Pogoraev"
+wasm_path = "payment_watch.wasm"
+capabilities = ["tool"]
+# http_client: JSON-RPC reads against the operator's rpc_url —
+# getSignaturesForAddress on the receiving wallet, then getTransaction on the
+# few newest signatures to measure the incoming credit; TLS host-side.
+# config_read: `recipient` (required — the watched wallet), plus optional
+# `rpc_url` and `tokens` overrides, injected as `__config`.
+permissions = ["http_client", "config_read"]

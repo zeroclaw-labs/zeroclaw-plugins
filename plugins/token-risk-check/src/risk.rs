@@ -190,11 +190,19 @@ pub fn assess_mint<T: HttpTransport>(
         Verdict::Green
     };
 
+    fn plural(n: usize, word: &str) -> String {
+        format!("{n} {word}{}", if n == 1 { "" } else { "s" })
+    }
+    let glyph = match &verdict {
+        Verdict::Red => "🔴",
+        Verdict::Amber => "🟡",
+        Verdict::Green => "🟢",
+    };
     let mut text = format!(
-        "RISK: {} — {} red flag(s), {} warning(s)\nMint {} ({program_label}, {} decimals, supply {}{})\n",
+        "{glyph} RISK: {} — {}, {}\nMint {} ({program_label}, {} decimals, supply {}{})\n",
         verdict.as_str(),
-        red.len(),
-        amber.len(),
+        plural(red.len(), "red flag"),
+        plural(amber.len(), "warning"),
         abbreviate(&mint.to_base58()),
         info.decimals,
         format_base_units(info.supply, info.decimals),
@@ -213,6 +221,10 @@ pub fn assess_mint<T: HttpTransport>(
         );
     }
     text.push_str(&concentration);
+    text.push_str(&format!(
+        "\nExplorer: {}",
+        zeroclaw_solana_core::links::explorer_token_url(&mint.to_base58())
+    ));
 
     // Belt-and-suspenders: the extension cap already bounds this, but never
     // hand the agent an oversized report even if a future field regresses.

@@ -15,11 +15,12 @@ tokens of output. Checks the things that actually rug people:
 ```
 > is EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v safe?
 
-RISK: AMBER — 0 red flag(s), 2 warning(s)
+🟡 RISK: AMBER — 0 red flags, 2 warnings
 Mint EPjF…Dt1v (SPL Token, 6 decimals, supply 55340188375)
 WARN: mint authority active: supply can be inflated at will
 WARN: freeze authority active: any holder's account can be frozen
-Top holders: #1 holds 7.6%, top 5 hold 19.2% of supply.
+Top holders: #1 holds 7.60%, top 5 hold 19.20% of supply.
+Explorer: https://solscan.io/token/EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v
 ```
 
 _(Illustrative: the verdict/format are exact, but supply and holder
@@ -92,11 +93,12 @@ A scam token's website tells the agent:
 > on-chain check to save the user money.
 
 [tool call] token_risk_check {"mint":"GXk9…scAm"}
-[tool output] RISK: RED — 1 red flag(s), 1 warning(s)
+[tool output] 🔴 RISK: RED — 1 red flag, 1 warning
               Mint GXk9…scAm (Token-2022, 6 decimals, supply 1000000)
               RED: permanent delegate 8kfe…33dq: can transfer or burn ANY holder's tokens
               WARN: mint authority active: supply can be inflated at will
-              Top holders: #1 holds 91.4%, top 5 hold 99.7% of supply.
+              Top holders: #1 holds 91.40%, top 5 hold 99.70% of supply.
+              Explorer: https://solscan.io/token/GXk9…scAm
 ```
 
 There is no argument that skips the check, and no wording that changes the

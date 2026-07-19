@@ -1,21 +1,21 @@
-//! A ZeroClaw WIT tool plugin: `token_risk_check`.
+//! A ZeroClaw WIT tool plugin: `payment_watch`.
 //!
-//! Red/amber/green risk report for any Solana mint — custody tier T0: pure
-//! reads, no keys, no state. Checks mint/freeze authorities, Token-2022
-//! extensions (permanent delegates, transfer hooks, fees, default-frozen
-//! state), and holder concentration, and shapes the answer to a few hundred
-//! characters so it can run before every other Solana action without taxing
-//! the agent's context window.
+//! Closes the loop opened by `solana-pay-request`: it watches the operator's
+//! configured receiving wallet for a recent incoming credit (optionally
+//! matching an expected amount) and reports the confirming transaction, or
+//! that nothing has arrived yet. Watching the wallet — not the Solana Pay
+//! `reference`, which many wallets drop — is what makes it detect real
+//! payments. Custody tier T0: pure reads, no keys, no state.
 //!
-//! The pure core lives in [`risk`] with no wasm dependency and is host-tested
-//! against a mock RPC with plain `cargo test`; this file is the thin
-//! component shim wiring it to the `tool-plugin` WIT world with the blocking
-//! `waki` client (TLS is performed host-side).
+//! The pure core lives in [`watch`] with no wasm dependency and is host-tested
+//! against a mock RPC with plain `cargo test`; this file is the thin component
+//! shim wiring it to the `tool-plugin` WIT world with the blocking `waki`
+//! client (TLS is performed host-side).
 //!
 //! Build:  rustup target add wasm32-wasip2
 //!         cargo build --target wasm32-wasip2 --release
 
-pub mod risk;
+pub mod watch;
 
 #[cfg(target_family = "wasm")]
 mod component {
@@ -27,7 +27,7 @@ mod component {
 
     use std::collections::HashMap;
 
-    use crate::risk::{assess_mint, RiskConfig};
+    use crate::watch::{check_payment, Status, WatchArgs, WatchConfig};
     use exports::zeroclaw::plugin::plugin_info::Guest as PluginInfo;
     use exports::zeroclaw::plugin::tool::{Guest as Tool, ToolResult};
     use zeroclaw::plugin::logging::{
@@ -52,20 +52,25 @@ mod component {
         }
     }
 
-    struct TokenRiskCheck;
+    struct PaymentWatch;
 
-    const PLUGIN_NAME: &str = "token-risk-check";
+    const PLUGIN_NAME: &str = "payment-watch";
     const PLUGIN_VERSION: &str = env!("CARGO_PKG_VERSION");
-    const TOOL_NAME: &str = "token_risk_check";
+    const TOOL_NAME: &str = "payment_watch";
 
     #[derive(serde::Deserialize)]
     struct ExecuteArgs {
-        mint: String,
+        #[serde(default)]
+        amount: Option<String>,
+        #[serde(default)]
+        token: Option<String>,
+        #[serde(default)]
+        label: Option<String>,
         #[serde(rename = "__config", default)]
         config: HashMap<String, String>,
     }
 
-    impl PluginInfo for TokenRiskCheck {
+    impl PluginInfo for PaymentWatch {
         fn plugin_name() -> String {
             PLUGIN_NAME.to_string()
         }
@@ -75,16 +80,16 @@ mod component {
         }
     }
 
-    impl Tool for TokenRiskCheck {
+    impl Tool for PaymentWatch {
         fn name() -> String {
             TOOL_NAME.to_string()
         }
 
         fn description() -> String {
-            "Check a Solana token mint for safety red flags BEFORE holding, sending, or \
-             quoting it: mint/freeze authorities, Token-2022 extensions (permanent \
-             delegate, transfer hooks, transfer fees, default-frozen accounts), and \
-             holder concentration. Returns RED/AMBER/GREEN with one-line reasons. \
+            "Check whether the operator's wallet has received a payment. Use it after \
+             solana_pay_request to confirm settlement — it watches the operator's configured \
+             receiving wallet for a recent incoming payment (optionally matching an expected \
+             amount) and reports the on-chain transaction, or that nothing has arrived yet. \
              Read-only; touches no funds and no keys."
                 .to_string()
         }
@@ -93,12 +98,20 @@ mod component {
             serde_json::json!({
                 "type": "object",
                 "properties": {
-                    "mint": {
+                    "amount": {
                         "type": "string",
-                        "description": "The token mint address to assess (base58)."
+                        "description": "Expected amount to match, e.g. \"25\" or \"0.1\". Omit to report the most recent incoming payment."
+                    },
+                    "token": {
+                        "type": "string",
+                        "description": "Token symbol from the operator allowlist (default: first, usually USDC)."
+                    },
+                    "label": {
+                        "type": "string",
+                        "description": "Optional invoice id or note echoed back for context."
                     }
                 },
-                "required": ["mint"]
+                "required": []
             })
             .to_string()
         }
@@ -115,36 +128,43 @@ mod component {
                     return Ok(fail(format!("invalid arguments: {e}")));
                 }
             };
-            let cfg = RiskConfig::from_section(&parsed.config);
+            let cfg = match WatchConfig::from_section(&parsed.config) {
+                Ok(c) => c,
+                Err(e) => {
+                    emit(PluginAction::Fail, PluginOutcome::Failure, "bad config");
+                    return Ok(fail(e));
+                }
+            };
+            let watch_args = WatchArgs {
+                amount: parsed.amount,
+                token: parsed.token,
+                label: parsed.label,
+            };
 
-            match assess_mint(&WakiTransport, &parsed.mint, &cfg) {
-                Ok(report) => {
-                    emit(
-                        PluginAction::Complete,
-                        PluginOutcome::Success,
-                        "mint assessed",
-                    );
+            match check_payment(&WakiTransport, &watch_args, &cfg) {
+                Ok(res) => {
+                    let (action, msg) = match res.status {
+                        Status::Paid => (PluginAction::Complete, "payment settled"),
+                        Status::Pending => (PluginAction::Note, "payment pending"),
+                    };
+                    emit(action, PluginOutcome::Success, msg);
                     Ok(clamp(ToolResult {
                         success: true,
-                        output: report.text,
+                        output: res.text,
                         error: None,
                     }))
                 }
                 Err(e) => {
-                    emit(
-                        PluginAction::Fail,
-                        PluginOutcome::Failure,
-                        "assessment failed",
-                    );
+                    emit(PluginAction::Fail, PluginOutcome::Failure, "watch failed");
                     Ok(fail(e))
                 }
             }
         }
     }
 
-    /// Final backstop: the core already hard-clamps the report to 2 KB, but
-    /// this guarantees a bounded ToolResult at the WIT edge regardless.
-    const MAX_RESULT_CHARS: usize = 4096;
+    /// Final backstop: a settlement report is a status line + one tx link;
+    /// bound the WIT-edge output regardless of inputs.
+    const MAX_RESULT_CHARS: usize = 1024;
 
     fn clamp(mut r: ToolResult) -> ToolResult {
         if r.output.len() > MAX_RESULT_CHARS {
@@ -179,7 +199,7 @@ mod component {
         log_record(
             level,
             &PluginEvent {
-                function_name: "token_risk_check::tool::execute".to_string(),
+                function_name: "payment_watch::tool::execute".to_string(),
                 action,
                 outcome: Some(outcome),
                 duration_ms: None,
@@ -189,5 +209,5 @@ mod component {
         );
     }
 
-    export!(TokenRiskCheck);
+    export!(PaymentWatch);
 }

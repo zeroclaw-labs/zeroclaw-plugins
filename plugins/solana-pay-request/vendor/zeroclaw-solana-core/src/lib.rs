@@ -24,6 +24,7 @@
 pub mod amount;
 pub mod encoding;
 pub mod instruction;
+pub mod links;
 pub mod message;
 pub mod nonce;
 pub mod pubkey;

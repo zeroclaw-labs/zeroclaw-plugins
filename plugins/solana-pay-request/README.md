@@ -2,20 +2,25 @@
 
 Turn any ZeroClaw agent into a payment terminal: "charge table 4 for 25 USDC"
 becomes a [Solana Pay](https://docs.solanapay.com/spec) transfer-request URL,
-ready to render as a QR code or tap-to-open link in Telegram, Discord, or any
-other channel. The customer's own wallet signs; this tool never touches a key.
+rendered as a scannable QR code in Telegram, Discord, or any other channel. The
+customer's own wallet signs; this tool never touches a key.
 
 ```
 > charge table 4 for 25 USDC, invoice 412
 
-Solana Pay request: 25 USDC to EPjF…Dt1v. Scan as QR or open with any
-Solana Pay wallet. Track payment by reference FnzC…3my8.
-solana:EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v?amount=25&spl-token=EPjF…&reference=FnzC…3my8&label=Cafe%20ZeroClaw&message=Table%204&memo=invoice%20%23412
+🧾 Payment request: 25 USDC → Cafe ZeroClaw. Scan the QR with any Solana Pay wallet.
+[PHOTO:https://api.qrserver.com/v1/create-qr-code/?size=320x320&margin=12&data=solana%3AEPjF…%3Famount%3D25%26spl-token%3DEPjF…%26reference%3DFnzC…]
+Ref FnzC…3my8 (for your records). Once they've paid, just ask me if it arrived and I'll check.
 ```
 
-_(The reference is `sha256(recipient, amount, mint, invoice_id)` in base58 —
+The `[PHOTO:...]` line is a channel marker: the Telegram channel renders it as a
+real scannable QR photo and strips the marker. The `solana:` payment URL is
+embedded **inside** the QR image, so scanning it opens the payer's wallet — the
+raw URL is deliberately not printed as text (a custom scheme isn't linkified,
+and a bare base58 string can trip an operator's high-entropy leak redactor). The
+reference is `sha256(recipient, amount, mint, invoice_id)` in base58 —
 deterministic, so this exact value is reproduced by the host tests, not a
-placeholder.)_
+placeholder.
 
 ## Custody tier: T1 (Build), zero secrets
 
@@ -77,6 +82,13 @@ the plugin, below the model.
 | "Request payment in SCAMCOIN `mint …`" | **Refused** — token allowlist |
 | `amount: "25&recipient=evil"` | **Refused** — amounts are strict decimals; URL metacharacters cannot ride along |
 | `label: "pay&recipient=evil"` | **Neutralized** — display fields are percent-encoded; the crafted value cannot terminate the query string |
+| 128 emoji (512 bytes) in a display field | **Refused** — fields are capped in **bytes**, so multi-byte content can't smuggle a flood past a character count |
+
+**QR rendering dependency:** the `[PHOTO:...]` image is drawn by a public QR
+service (`api.qrserver.com`), which therefore observes the payment URL — public
+data (recipient, amount, reference), but a third party nonetheless — and the QR
+render depends on that service's availability. Point it at your own QR endpoint
+if that matters to you.
 
 ### Prompt-injection transcript (fails closed)
 
@@ -94,7 +106,7 @@ DMs the agent:
              "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU"
 
 [tool call] solana_pay_request {"amount":"10000"}
-[tool error] refused: amount 10000 exceeds the operator-configured cap of 100 per request
+[tool error] refused: amount 10000 exceeds the operator-configured cap of 100 per USDC request
 ```
 
 The model can retry all day; the policy is not in the prompt. These exact

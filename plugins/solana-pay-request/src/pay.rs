@@ -129,6 +129,8 @@ pub struct PayArgs {
 #[derive(Debug)]
 pub struct PayRequest {
     pub url: String,
+    /// A QR-image URL that renders `url` as a scannable Solana Pay code.
+    pub qr: String,
     pub reference: String,
     pub summary: String,
 }
@@ -199,11 +201,15 @@ fn percent_encode(s: &str) -> String {
 
 /// Build a Solana Pay transfer request under the configured policy.
 /// Every guardrail failure is an `Err` — the tool never "corrects" a request.
-/// Cap on each caller-supplied display field. Solana Pay wallets render these
-/// in tight UI; anything longer is a flood/injection attempt, not a real
-/// label. Bounding here keeps `execute` output size independent of caller
-/// input — the URL is the one part that scales with these fields.
-const MAX_DISPLAY_FIELD_CHARS: usize = 128;
+/// Cap on each caller-supplied display field, in **bytes** (not chars, so a
+/// field of 80 multi-byte emoji can't smuggle 320 bytes past a char count).
+/// Solana Pay wallets render these in tight UI; anything longer is a
+/// flood/injection attempt, not a real label. Bounding here keeps `execute`
+/// output size independent of caller input: the URL — and the QR URL that
+/// re-encodes it — are the parts that scale with these fields, so this cap is
+/// what guarantees the rendered output stays well under the shim's hard clamp
+/// and never truncates the load-bearing `[PHOTO:...]` marker.
+const MAX_DISPLAY_FIELD_BYTES: usize = 80;
 
 pub fn build_request(args: &PayArgs, cfg: &PayConfig) -> Result<PayRequest, String> {
     validate_decimal(&args.amount)?;
@@ -222,9 +228,9 @@ pub fn build_request(args: &PayArgs, cfg: &PayConfig) -> Result<PayRequest, Stri
         ("recipient", args.recipient.as_deref()),
     ] {
         if let Some(v) = value {
-            if v.chars().count() > MAX_DISPLAY_FIELD_CHARS {
+            if v.len() > MAX_DISPLAY_FIELD_BYTES {
                 return Err(format!(
-                    "refused: {name} exceeds {MAX_DISPLAY_FIELD_CHARS} characters"
+                    "refused: {name} exceeds {MAX_DISPLAY_FIELD_BYTES} bytes"
                 ));
             }
         }
@@ -294,19 +300,49 @@ pub fn build_request(args: &PayArgs, cfg: &PayConfig) -> Result<PayRequest, Stri
         url.push_str(&format!("&memo={}", percent_encode(memo)));
     }
 
+    let qr = zeroclaw_solana_core::links::qr_image_url(&url);
+
+    // Headline the payee by its human label when the operator set one (a shop
+    // name reads better than an address); otherwise show the abbreviated
+    // pinned address. We deliberately do NOT print the raw `solana:` URL: it is
+    // carried inside the QR, channels don't linkify a custom scheme, and a bare
+    // base58 string can trip an operator's high-entropy leak redactor.
+    let payee = args
+        .label
+        .as_deref()
+        .or(cfg.label.as_deref())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| abbreviate(&recipient.to_base58()));
     let summary = format!(
-        "Solana Pay request: {} {} to {}. Scan as QR or open with any Solana Pay wallet. Track payment by reference {}.",
+        "🧾 Payment request: {} {} → {}. Scan the QR with any Solana Pay wallet.",
         args.amount.trim(),
         symbol,
-        abbreviate(&recipient.to_base58()),
-        abbreviate(&reference),
+        payee,
     );
 
     Ok(PayRequest {
         url,
+        qr,
         reference,
         summary,
     })
+}
+
+/// The exact chat message the wasm shim relays verbatim: the summary line, the
+/// `[PHOTO:...]` QR marker (the channel turns it into a scannable image), the
+/// reference for the operator's records, and the next step. Pure so it is
+/// host-tested — and bounded by construction, since every field feeding `req`
+/// is byte-capped in [`build_request`], so this never approaches the shim's
+/// hard result clamp and the `[PHOTO:...]` marker is always intact.
+pub fn render_output(req: &PayRequest) -> String {
+    format!(
+        "{}\n[PHOTO:{}]\nRef {} (for your records). Once they've paid, just ask me if it arrived and I'll check.",
+        req.summary,
+        req.qr,
+        abbreviate(&req.reference),
+    )
 }
 
 fn resolve_recipient(requested: Option<&str>, cfg: &PayConfig) -> Result<Pubkey, String> {

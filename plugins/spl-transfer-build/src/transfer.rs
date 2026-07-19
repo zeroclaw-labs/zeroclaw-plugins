@@ -321,6 +321,16 @@ pub fn build_transfer<T: HttpTransport>(
              {MAX_TRANSACTION_BYTES}-byte limit — shorten the memo"
         ));
     }
+    // Defense-in-depth cue: with no recipient allowlist configured, the only
+    // guards left are the amount cap and the human signer — so flag the
+    // destination for that signer to eyeball before approving.
+    if cfg.allowed_recipients.is_empty() {
+        notes.push(
+            "recipient is not on a config allowlist — confirm the destination before signing"
+                .to_string(),
+        );
+    }
+
     let summary = format!(
         "UNSIGNED transfer of {} {} from {} to {}.{} Verify the recipient, then sign with the owner wallet.",
         format_base_units(amount_base, decimals),

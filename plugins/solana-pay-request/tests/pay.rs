@@ -4,7 +4,9 @@
 
 use std::collections::HashMap;
 
-use solana_pay_request::pay::{build_request, PayArgs, PayConfig, NATIVE_SOL, USDC_MINT};
+use solana_pay_request::pay::{
+    build_request, render_output, PayArgs, PayConfig, NATIVE_SOL, USDC_MINT,
+};
 
 const MERCHANT: &str = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 const ATTACKER: &str = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU";
@@ -236,6 +238,42 @@ fn injection_cannot_flood_output_through_a_giant_amount() {
         err.len() < 200,
         "core error must stay short, got {} chars",
         err.len()
+    );
+}
+
+#[test]
+fn display_fields_are_byte_capped_not_char_capped() {
+    // 128 emoji is "128 characters" but 512 bytes — a char count would wave it
+    // through. The cap is in bytes, so it must fail closed.
+    let mut a = args("5");
+    a.label = Some("🧾".repeat(128)); // 512 bytes
+    let err = build_request(&a, &pinned_cfg()).unwrap_err();
+    assert!(
+        err.contains("refused") && err.contains("bytes"),
+        "must refuse in bytes, got: {err}"
+    );
+}
+
+#[test]
+fn rendered_output_stays_intact_under_worst_case_fields() {
+    // Every display field stuffed to the byte cap with multi-byte content: the
+    // final rendered message (summary + [PHOTO:<qr>] + reference + next step),
+    // including the QR URL that RE-encodes the whole solana: URL, must stay well
+    // under the shim's 4096-char hard clamp so the [PHOTO:...] marker — which
+    // the channel needs whole to render the QR — is never truncated.
+    let blob = "🧾".repeat(20); // 20 × 4 bytes = 80 bytes, exactly the cap
+    assert_eq!(blob.len(), 80);
+    let mut a = args("25");
+    a.label = Some(blob.clone());
+    a.message = Some(blob.clone());
+    a.memo = Some(blob);
+    let req = build_request(&a, &pinned_cfg()).unwrap();
+    let out = render_output(&req);
+    assert!(out.len() < 4096, "output must stay bounded, got {} chars", out.len());
+    let open = out.find("[PHOTO:").expect("must carry a [PHOTO: marker");
+    assert!(
+        out[open..].contains(']'),
+        "the [PHOTO:...] marker must be closed (not truncated)"
     );
 }
 

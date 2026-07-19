@@ -42,27 +42,32 @@ pub fn resolve_domain<T: HttpTransport>(
     input: &str,
     cfg: &ResolveConfig,
 ) -> Result<Resolution, String> {
-    let label = normalize_domain(input)?;
-    let registry = derive_domain_key(&label)?;
+    let labels = normalize_domain(input)?;
+    let display = format!("{}.sol", labels.join("."));
+    let registry = derive_domain_key(&labels)?;
 
     let account = get_account(transport, &cfg.rpc_url, &registry)?
-        .ok_or_else(|| format!("{label}.sol is not registered"))?;
+        .ok_or_else(|| format!("{display} is not registered"))?;
 
     // A registered .sol domain's registry account is owned by the SPL Name
     // Service program; anything else means the derived address collided with
     // an unrelated account and must not be treated as a resolution.
     if account.owner != zeroclaw_solana_core::sns::name_program() {
-        return Err(format!("{label}.sol does not resolve to a name registry"));
+        return Err(format!("{display} does not resolve to a name registry"));
     }
 
     let owner = parse_registry_owner(&account.data)?;
     let owner_b58 = owner.to_base58();
+    use zeroclaw_solana_core::links::explorer_account_url;
+    // The owner address is shown in FULL — it is the payable/verify target a
+    // downstream tool needs. The registry PDA is not payable, so it stays in
+    // the struct field for programmatic use but is kept out of the chat text.
     let text = format!(
-        "{label}.sol resolves to {owner_b58}\n(registry account {})",
-        registry.to_base58()
+        "✅ {display} → {owner_b58}\nVerify on Solscan: {}",
+        explorer_account_url(&owner_b58),
     );
     Ok(Resolution {
-        domain: format!("{label}.sol"),
+        domain: display,
         owner: owner_b58,
         registry: registry.to_base58(),
         text,

@@ -77,7 +77,10 @@ mod component {
              customer to pay the operator's configured address. Use when someone should PAY \
              the operator — e.g. an invoice or a bill. The receiving address, allowed tokens, \
              and maximum amount are fixed by operator config; requests outside that policy \
-             are refused. This tool moves no funds and holds no keys."
+             are refused. This tool moves no funds and holds no keys. \
+             IMPORTANT: relay this tool's output to the user VERBATIM, keeping the \
+             [PHOTO:...] marker exactly as-is on its own line — the channel turns it into a \
+             scannable QR image. Do not paraphrase it, wrap it, or describe the URL."
                 .to_string()
         }
 
@@ -157,9 +160,16 @@ mod component {
                         PluginOutcome::Success,
                         "pay request built",
                     );
+                    // The output (summary + [PHOTO:<qr>] marker + reference +
+                    // next step) is composed in the pure core so it is
+                    // host-tested and bounded by construction; the Telegram
+                    // channel turns the [PHOTO:...] line into a real photo
+                    // (sendPhoto) and strips the marker. The solana: URL is
+                    // embedded IN the QR, so we never dump it as raw text —
+                    // scanning the photo opens the wallet to pay.
                     Ok(clamp(ToolResult {
                         success: true,
-                        output: format!("{}\n{}", req.summary, req.url),
+                        output: crate::pay::render_output(&req),
                         error: None,
                     }))
                 }
@@ -204,8 +214,15 @@ mod component {
     }
 
     fn emit(action: PluginAction, outcome: PluginOutcome, message: &str) {
+        // Refusals/failures log at WARN so operators can grep them; successes
+        // and notes stay at INFO.
+        let level = if matches!(outcome, PluginOutcome::Failure) {
+            LogLevel::Warn
+        } else {
+            LogLevel::Info
+        };
         log_record(
-            LogLevel::Info,
+            level,
             &PluginEvent {
                 function_name: "solana_pay_request::tool::execute".to_string(),
                 action,

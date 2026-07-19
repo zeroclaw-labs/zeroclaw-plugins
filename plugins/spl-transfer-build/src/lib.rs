@@ -160,7 +160,8 @@ mod component {
                     Ok(clamp(ToolResult {
                         success: true,
                         output: format!(
-                            "{}\nunsigned_transaction_base64: {}",
+                            "✍️ {}\nTo sign: paste the transaction below into the owner wallet \
+                             (e.g. Squads) or a CLI signer — nothing moves until you sign.\n\n{}",
                             built.summary, built.transaction_base64
                         ),
                         error: None,
@@ -208,8 +209,15 @@ mod component {
     }
 
     fn emit(action: PluginAction, outcome: PluginOutcome, message: &str) {
+        // Refusals/failures log at WARN so operators can grep them; successes
+        // and notes stay at INFO.
+        let level = if matches!(outcome, PluginOutcome::Failure) {
+            LogLevel::Warn
+        } else {
+            LogLevel::Info
+        };
         log_record(
-            LogLevel::Info,
+            level,
             &PluginEvent {
                 function_name: "spl_transfer_build::tool::execute".to_string(),
                 action,
