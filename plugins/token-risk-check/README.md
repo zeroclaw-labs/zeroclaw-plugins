@@ -35,6 +35,8 @@ ZeroClaw's declarative cron runner can turn this into a daily Telegram watchlist
 
 The job runs at 08:00 Europe/Belgrade, uses an isolated stateless session, and its per-job allowlist contains only `token_risk_check`; it cannot invoke shell, files, browser, or arbitrary host HTTP tools. It deliberately sends a compact daily report instead of persisting verdict state, so the monitoring path remains read-only and auditably simple.
 
+A one-minute live delivery test was completed before restoring the daily schedule; its redacted execution evidence is in [`examples/watchlist-cron-test-evidence.md`](examples/watchlist-cron-test-evidence.md).
+
 ```toml
 [cron.token-risk-watchlist]
 name = "Daily Solana token-risk watchlist"
