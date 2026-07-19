@@ -13,7 +13,7 @@ on:
       - ".github/workflows/token-risk-check.yml"
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   test-and-build:
@@ -30,19 +30,8 @@ jobs:
       - name: Format check
         run: cargo fmt --check
       - name: Host tests
-        run: cargo test
+        run: cargo test --locked
       - name: Host lint
-        run: cargo clippy --all-targets -- -D warnings
+        run: cargo clippy --locked --all-targets -- -D warnings
       - name: WASI component build
-        run: cargo build --release --target wasm32-wasip2
-      - name: Commit generated lockfile
-        if: github.event_name == 'push'
-        working-directory: ${{ github.workspace }}
-        run: |
-          if [[ -n "$(git status --porcelain -- plugins/token-risk-check/Cargo.lock)" ]]; then
-            git config user.name "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git add plugins/token-risk-check/Cargo.lock
-            git commit -m "chore(token-risk-check): lock dependencies"
-            git push origin "HEAD:${GITHUB_REF_NAME}"
-          fi
+        run: cargo build --locked --release --target wasm32-wasip2
