@@ -1,0 +1,7 @@
+name = "caixa-watch"
+version = "0.1.0"
+description = "Watch a merchant address for an expected USDC invoice payment and emit a short alert (T0)"
+author = "Caixa"
+wasm_path = "caixa_watch.wasm"
+capabilities = ["tool"]
+permissions = ["http_client", "config_read"]

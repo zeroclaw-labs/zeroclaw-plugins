@@ -1,0 +1,8 @@
+name = "caixa-charge"
+version = "0.1.0"
+description = "Brazil-first Solana Pay charge: BRL invoice → USDC transfer URL + QR payload (T1, zero signing keys)"
+author = "Caixa"
+wasm_path = "caixa_charge.wasm"
+capabilities = ["tool"]
+# http_client: optional BRL→USDC FX quote. config_read: merchant defaults + allowlists.
+permissions = ["http_client", "config_read"]

@@ -1,0 +1,7 @@
+name = "caixa-transfer-build"
+version = "0.1.0"
+description = "Build unsigned SPL USDC transfers with durable nonce for approval-gated queues (T1, no keys)"
+author = "Caixa"
+wasm_path = "caixa_transfer_build.wasm"
+capabilities = ["tool"]
+permissions = ["http_client", "config_read"]

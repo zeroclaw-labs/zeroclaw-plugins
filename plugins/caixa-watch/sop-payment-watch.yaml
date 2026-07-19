@@ -1,0 +1,20 @@
+# ZeroClaw SOP — poll Caixa invoices and alert on Telegram.
+# Adapt trigger / channel names to your agent config.
+#
+# Flow:
+#   1) Merchant DMs: "Cobra mesa 4: R$ 25"
+#   2) Agent calls caixa_charge → Solana Pay URL/QR
+#   3) This SOP calls caixa_watch until paid
+
+name: caixa-payment-watch
+description: Close the loop on Caixa Solana Pay invoices
+trigger:
+  cron: "*/1 * * * *"
+steps:
+  - tool: caixa_watch
+    args:
+      invoice_id: "{{memory.last_invoice_id}}"
+      amount_usdc: "{{memory.last_invoice_usdc}}"
+    on_success:
+      notify_channel: telegram
+      message: "{{tool.output}}"
