@@ -254,7 +254,7 @@ fn verify_first_signature(transaction: &[u8], expected: &str) -> Result<(), Core
         .get(message_offset..)
         .filter(|message| !message.is_empty())
         .ok_or(CoreError("INVALID_FINALIZED_TRANSACTION_WIRE_FORMAT"))?;
-    let version_prefix_len = if message[0] & 0x80 == 0 { 0 } else { 1 };
+    let version_prefix_len: usize = if message[0] & 0x80 == 0 { 0 } else { 1 };
     let header_end = version_prefix_len
         .checked_add(3)
         .ok_or(CoreError("INVALID_FINALIZED_TRANSACTION_WIRE_FORMAT"))?;
