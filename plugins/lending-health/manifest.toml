@@ -1,0 +1,7 @@
+name = "lending-health"
+version = "0.1.0"
+description = "Check lending position health factor on Kamino, MarginFi, or Drift. Triggers SOP when health drops below threshold."
+author = "ZeroClaw Plugins"
+wasm_path = "lending_health.wasm"
+capabilities = ["tool"]
+permissions = ["http_client", "config_read"]

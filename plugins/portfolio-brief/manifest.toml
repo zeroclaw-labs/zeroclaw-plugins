@@ -1,0 +1,7 @@
+name = "portfolio-brief"
+version = "0.1.0"
+description = "Get a wallet's token balances, current prices, and 24h change — shaped into ~200 tokens for a daily briefing SOP."
+author = "ZeroClaw Plugins"
+wasm_path = "portfolio_brief.wasm"
+capabilities = ["tool"]
+permissions = ["http_client", "config_read"]

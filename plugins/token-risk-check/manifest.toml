@@ -1,0 +1,7 @@
+name = "token-risk-check"
+version = "0.1.0"
+description = "Assess Token-2022 risk profile: mint/freeze authority, holder concentration, LP status, transfer hooks, permanent delegate. Returns red/amber/green."
+author = "ZeroClaw Plugins"
+wasm_path = "token_risk_check.wasm"
+capabilities = ["tool"]
+permissions = ["http_client", "config_read"]

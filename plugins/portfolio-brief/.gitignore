@@ -1,0 +1,4 @@
+target/
+*.wasm
+*.cwasm
+Cargo.lock
