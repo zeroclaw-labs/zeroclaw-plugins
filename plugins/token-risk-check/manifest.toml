@@ -1,0 +1,9 @@
+name = "token-risk-check"
+version = "0.1.0"
+description = "T0 read-only Solana mint risk check (authorities, Token-2022 flags) with 8-locale output"
+author = "Hamet Diallo / DIALLOUBE-RESEARCH"
+wasm_path = "token_risk_check.wasm"
+capabilities = ["tool"]
+# http_client: live getAccountInfo against allowlisted HTTPS RPC (fail-closed).
+# config_read: optional rpc_url / locale from plugin config.
+permissions = ["http_client", "config_read"]

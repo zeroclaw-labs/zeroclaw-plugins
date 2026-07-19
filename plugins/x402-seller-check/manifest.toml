@@ -1,0 +1,7 @@
+name = "x402-seller-check"
+version = "0.1.0"
+description = "T0 x402 seller security heuristics (GO/NO-GO) — inspired by solana-x402-seller-security-skill"
+author = "Hamet Diallo / DIALLOUBE-RESEARCH"
+wasm_path = "x402_seller_check.wasm"
+capabilities = ["tool"]
+permissions = ["config_read"]

@@ -1,0 +1,7 @@
+name = "solana-pay-request"
+version = "0.1.0"
+description = "T1 build Solana Pay URL/QR payload — agent proposes, human pays"
+author = "Hamet Diallo / DIALLOUBE-RESEARCH"
+wasm_path = "solana_pay_request.wasm"
+capabilities = ["tool"]
+permissions = ["config_read"]
