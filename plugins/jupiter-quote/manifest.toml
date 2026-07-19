@@ -1,0 +1,12 @@
+name = "jupiter-quote"
+version = "0.1.0"
+description = "Fetch a read-only Jupiter swap quote (out amount, price impact, route) via the Jupiter Quote API. Quote only, no swap."
+author = "kosmas"
+wasm_path = "jupiter_quote.wasm"
+capabilities = ["tool"]
+# http_client: the tool GETs the Jupiter Quote API over wasi:http. Without it
+#   the component has no network surface at all.
+# config_read: the host injects this plugin's own config section (the optional
+#   `jupiter_base_url` override) into execute args as `__config`. Without it the
+#   plugin still works, defaulting to the key-free lite-api.jup.ag host.
+permissions = ["http_client", "config_read"]

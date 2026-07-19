@@ -1,0 +1,43 @@
+[package]
+name = "sol-get-balance"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "ZeroClaw WIT tool plugin: read a Solana account's SOL balance (lamports + SOL) via JSON-RPC getBalance. Read-only."
+publish = false
+
+# cdylib for the wasm component; rlib so the pure balance core is testable on
+# the host with a plain `cargo test`.
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+wit-bindgen = "0.46"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# Pure-Rust base58 codec, used by the natively-testable core to validate that
+# an address decodes to a 32-byte Solana public key. Compiles for both native
+# and wasm32-wasip2.
+bs58 = "0.5"
+
+# waki is the HTTP client that works inside a wasi component; reqwest does not,
+# because a component has no socket surface, only `wasi:http`. Gate it to the
+# wasm target so the pure-logic module stays natively testable.
+[target.'cfg(target_family = "wasm")'.dependencies]
+waki = "0.5"
+
+[dev-dependencies]
+# Native blocking HTTP client, used only by the live-RPC smoke test on the host.
+# waki is wasm-only and cannot run under `cargo test`, so the host-side live
+# check uses ureq to exercise the real request body and response parser.
+ureq = { version = "2", features = ["tls"] }
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true
+codegen-units = 1
+
+# Standalone crate: built for wasm32-wasip2, not part of any host workspace.
+# The empty table stops cargo from absorbing this crate into a parent workspace.
+[workspace]

@@ -1,0 +1,13 @@
+name = "sol-token-balances"
+version = "0.1.0"
+description = "List an owner's SPL Token balances via JSON-RPC getTokenAccountsByOwner, with optional USD enrichment from Jupiter's price API. Read-only."
+author = "kosmas"
+wasm_path = "sol_token_balances.wasm"
+capabilities = ["tool"]
+# http_client: the tool POSTs to a Solana JSON-RPC endpoint and (when
+#   include_usd is set) GETs Jupiter's price API, both over wasi:http. Without
+#   it the component has no network surface at all.
+# config_read: the host injects this plugin's own config section (the optional
+#   `rpc_url` and `jupiter_base_url` overrides) into execute args as `__config`.
+#   Without it the plugin still works, defaulting to public endpoints.
+permissions = ["http_client", "config_read"]

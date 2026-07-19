@@ -1,0 +1,12 @@
+name = "sol-get-balance"
+version = "0.1.0"
+description = "Read a Solana account's native balance (lamports + SOL) via JSON-RPC getBalance. Read-only."
+author = "kosmas"
+wasm_path = "sol_get_balance.wasm"
+capabilities = ["tool"]
+# http_client: the tool POSTs to a Solana JSON-RPC endpoint over wasi:http.
+#   Without it the component has no network surface at all.
+# config_read: the host injects this plugin's own config section (the optional
+#   `rpc_url` override) into execute args as `__config`. Without it the plugin
+#   still works, defaulting to Solana mainnet-beta.
+permissions = ["http_client", "config_read"]
