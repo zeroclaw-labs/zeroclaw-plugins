@@ -1,7 +1,0 @@
-name = "settlement-proof-narrate"
-version = "0.1.0"
-description = "T0 narrate settlement / Merkle proof fields into a short chat sentence (i18n)"
-author = "Hamet Diallo / DIALLOUBE-RESEARCH"
-wasm_path = "settlement_proof_narrate.wasm"
-capabilities = ["tool"]
-permissions = ["config_read"]

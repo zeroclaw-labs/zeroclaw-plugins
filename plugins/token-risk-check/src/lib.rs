@@ -11,23 +11,34 @@ pub fn fetch_mint_facts_host(rpc_url: &str, mint: &str) -> Result<risk::MintFact
     if !rpc::rpc_url_allowed(rpc_url) {
         return Err("rpc_url_not_allowlisted".into());
     }
-    let body = rpc::build_get_account_info_body(mint);
     let client = reqwest::blocking::Client::builder()
         .timeout(std::time::Duration::from_secs(12))
         .build()
         .map_err(|e| format!("rpc_client: {e}"))?;
-    let resp = client
-        .post(rpc_url)
-        .header("Content-Type", "application/json")
-        .body(body)
-        .send()
-        .map_err(|e| format!("rpc_http: {e}"))?;
-    let status = resp.status();
-    let text = resp.text().map_err(|e| format!("rpc_body: {e}"))?;
-    if !status.is_success() {
-        return Err(format!("rpc_http_status:{status}:{text}"));
+
+    let post = |body: String| -> Result<String, String> {
+        let resp = client
+            .post(rpc_url)
+            .header("Content-Type", "application/json")
+            .body(body)
+            .send()
+            .map_err(|e| format!("rpc_http: {e}"))?;
+        let status = resp.status();
+        let text = resp.text().map_err(|e| format!("rpc_body: {e}"))?;
+        if !status.is_success() {
+            return Err(format!("rpc_http_status:{status}:{text}"));
+        }
+        Ok(text)
+    };
+
+    let mut facts =
+        rpc::mint_facts_from_rpc_json(mint, &post(rpc::build_get_account_info_body(mint))?)?;
+    // Holder concentration — fail-closed soft: if this call fails, keep facts but leave pct None
+    // (assess will still flag unverified LP for non-bluechips).
+    if let Ok(body) = post(rpc::build_get_token_largest_accounts_body(mint)) {
+        let _ = rpc::apply_largest_accounts(&mut facts, &body);
     }
-    rpc::mint_facts_from_rpc_json(mint, &text)
+    Ok(facts)
 }
 
 #[cfg(target_family = "wasm")]
@@ -41,7 +52,8 @@ mod component {
     use crate::i18n::{self, Locale};
     use crate::risk::{assess, detect_prompt_injection, MintFacts};
     use crate::rpc::{
-        build_get_account_info_body, mint_facts_from_rpc_json, rpc_url_allowed, DEFAULT_RPC_URL,
+        apply_largest_accounts, build_get_account_info_body, build_get_token_largest_accounts_body,
+        mint_facts_from_rpc_json, rpc_url_allowed, DEFAULT_RPC_URL,
     };
     use exports::zeroclaw::plugin::plugin_info::Guest as PluginInfo;
     use exports::zeroclaw::plugin::tool::{Guest as Tool, ToolResult};
@@ -89,9 +101,9 @@ mod component {
         }
 
         fn description() -> String {
-            "T0 read-only Solana mint risk triage via public RPC (allowlisted). \
-             Returns green/amber/red. Locale: en,fr,es,pt,de,ru,ja,zh. \
-             Fail-closed on prompt injection. Never signs or moves funds."
+            "T0 read-only Solana mint risk: authorities, Token-2022 flags, \
+             holder concentration (top10/largest), honest LP unverified signal. \
+             Short summary for chat. Fail-closed on prompt injection. Never signs."
                 .into()
         }
 
@@ -199,25 +211,36 @@ mod component {
         if !rpc_url_allowed(&rpc_url) {
             return Err("rpc_url_not_allowlisted".into());
         }
-        let body: serde_json::Value =
-            serde_json::from_str(&build_get_account_info_body(&parsed.mint))
-                .map_err(|e| format!("rpc_body_json: {e}"))?;
-        let resp = waki::Client::new()
-            .post(&rpc_url)
-            .header("Content-Type", "application/json")
-            .connect_timeout(std::time::Duration::from_secs(8))
-            .json(&body)
-            .send()
-            .map_err(|e| format!("rpc_http: {e}"))?;
-        let status = resp.status_code();
-        let text = resp
-            .body()
-            .map_err(|e| format!("rpc_read: {e}"))
-            .and_then(|b| String::from_utf8(b).map_err(|e| format!("rpc_utf8: {e}")))?;
-        if status >= 400 {
-            return Err(format!("rpc_http_status:{status}:{text}"));
+
+        let post_json = |body_str: &str| -> Result<String, String> {
+            let body: serde_json::Value =
+                serde_json::from_str(body_str).map_err(|e| format!("rpc_body_json: {e}"))?;
+            let resp = waki::Client::new()
+                .post(&rpc_url)
+                .header("Content-Type", "application/json")
+                .connect_timeout(std::time::Duration::from_secs(8))
+                .json(&body)
+                .send()
+                .map_err(|e| format!("rpc_http: {e}"))?;
+            let status = resp.status_code();
+            let text = resp
+                .body()
+                .map_err(|e| format!("rpc_read: {e}"))
+                .and_then(|b| String::from_utf8(b).map_err(|e| format!("rpc_utf8: {e}")))?;
+            if status >= 400 {
+                return Err(format!("rpc_http_status:{status}:{text}"));
+            }
+            Ok(text)
+        };
+
+        let mut facts = mint_facts_from_rpc_json(
+            &parsed.mint,
+            &post_json(&build_get_account_info_body(&parsed.mint))?,
+        )?;
+        if let Ok(body) = post_json(&build_get_token_largest_accounts_body(&parsed.mint)) {
+            let _ = apply_largest_accounts(&mut facts, &body);
         }
-        mint_facts_from_rpc_json(&parsed.mint, &text)
+        Ok(facts)
     }
 
     fn emit(action: PluginAction, outcome: PluginOutcome, message: &str) {

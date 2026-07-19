@@ -31,7 +31,8 @@ mod component {
             "solana_pay_request".into()
         }
         fn description() -> String {
-            "T1: build a Solana Pay transfer URL/QR payload. Agent proposes; human wallet pays. Never signs."
+            "T1: build a Solana Pay transfer URL + QR payload (amount, SPL mint, reference, memo). \
+             Agent proposes; human wallet pays. Never signs. Pair with payment_watch."
                 .into()
         }
         fn parameters_schema() -> String {
@@ -41,6 +42,7 @@ mod component {
                     "recipient": { "type": "string" },
                     "amount": { "type": "string" },
                     "spl_token": { "type": "string" },
+                    "reference": { "type": "string", "description": "Solana Pay reference pubkey" },
                     "memo": { "type": "string" },
                     "label": { "type": "string" },
                     "message": { "type": "string" },

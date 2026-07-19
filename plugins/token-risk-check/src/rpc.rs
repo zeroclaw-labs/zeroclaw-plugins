@@ -36,6 +36,83 @@ pub fn build_get_account_info_body(mint: &str) -> String {
     .to_string()
 }
 
+pub fn build_get_token_largest_accounts_body(mint: &str) -> String {
+    json!({
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "getTokenLargestAccounts",
+        "params": [mint, { "commitment": "confirmed" }]
+    })
+    .to_string()
+}
+
+/// Merge holder concentration from `getTokenLargestAccounts` into facts.
+pub fn apply_largest_accounts(facts: &mut MintFacts, response_body: &str) -> Result<(), String> {
+    let v: Value = serde_json::from_str(response_body).map_err(|e| format!("rpc_json: {e}"))?;
+    if let Some(err) = v.get("error") {
+        return Err(format!("rpc_error: {err}"));
+    }
+    let arr = v
+        .pointer("/result/value")
+        .and_then(|x| x.as_array())
+        .ok_or_else(|| "rpc_missing_largest_accounts".to_string())?;
+
+    let supply = facts.supply.unwrap_or(0);
+    if supply == 0 {
+        return Ok(());
+    }
+
+    let mut amounts: Vec<u64> = Vec::new();
+    for item in arr.iter().take(10) {
+        let amt = item
+            .get("uiAmount")
+            .and_then(|a| a.as_f64())
+            .map(|a| a as u64)
+            .or_else(|| {
+                item.get("amount")
+                    .and_then(|a| a.as_str())
+                    .and_then(|s| s.parse::<u64>().ok())
+            })
+            .unwrap_or(0);
+        amounts.push(amt);
+    }
+
+    // Prefer raw token amounts when present (more accurate than uiAmount).
+    let mut raw_sum = 0u64;
+    let mut raw_amounts = Vec::new();
+    for item in arr.iter().take(10) {
+        if let Some(s) = item.get("amount").and_then(|a| a.as_str()) {
+            if let Ok(n) = s.parse::<u64>() {
+                raw_amounts.push(n);
+                raw_sum = raw_sum.saturating_add(n);
+            }
+        }
+    }
+
+    let (top10, largest) = if !raw_amounts.is_empty() && supply > 0 {
+        let largest = *raw_amounts.iter().max().unwrap_or(&0);
+        (
+            (raw_sum as f64) * 100.0 / (supply as f64),
+            (largest as f64) * 100.0 / (supply as f64),
+        )
+    } else if !amounts.is_empty() {
+        // uiAmount path — supply is raw; skip pct if decimals mismatch risk.
+        // Use relative share across returned accounts only as weak signal → skip.
+        return Ok(());
+    } else {
+        return Ok(());
+    };
+
+    facts.top10_holder_pct = Some(top10.min(100.0));
+    facts.largest_holder_pct = Some(largest.min(100.0));
+    if crate::risk::is_bluechip_mint(&facts.mint) {
+        facts.lp_status = crate::risk::LpStatus::BluechipSkip;
+    } else {
+        facts.lp_status = crate::risk::LpStatus::Unverified;
+    }
+    Ok(())
+}
+
 /// Parse `getAccountInfo` JSON body into mint facts.
 pub fn mint_facts_from_rpc_json(mint: &str, response_body: &str) -> Result<MintFacts, String> {
     let v: Value = serde_json::from_str(response_body).map_err(|e| format!("rpc_json: {e}"))?;
@@ -114,6 +191,13 @@ pub fn decode_mint_account(mint: &str, owner: &str, data_b64: &str) -> Result<Mi
         permanent_delegate,
         transfer_hook_or_fee,
         is_token_2022,
+        top10_holder_pct: None,
+        largest_holder_pct: None,
+        lp_status: if crate::risk::is_bluechip_mint(mint) {
+            crate::risk::LpStatus::BluechipSkip
+        } else {
+            crate::risk::LpStatus::Unverified
+        },
     })
 }
 

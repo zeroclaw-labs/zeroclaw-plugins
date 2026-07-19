@@ -10,6 +10,9 @@ pub struct PayRequestInput {
     pub spl_token: Option<String>,
     #[serde(default)]
     pub memo: Option<String>,
+    /// Solana Pay `reference` (pubkey) — used by payment-watch to detect settlement.
+    #[serde(default)]
+    pub reference: Option<String>,
     #[serde(default)]
     pub label: Option<String>,
     #[serde(default)]
@@ -23,9 +26,18 @@ fn default_locale() -> String {
 }
 
 #[derive(Clone, Debug, Serialize)]
+pub struct QrPayload {
+    /// Exact string to encode in a QR (the solana: URL).
+    pub text: String,
+    pub mime_hint: &'static str,
+}
+
+#[derive(Clone, Debug, Serialize)]
 pub struct PayRequestOutput {
     pub solana_pay_url: String,
+    pub qr: QrPayload,
     pub human_summary: String,
+    pub reference: Option<String>,
     pub custody_tier: &'static str,
     pub requires_human_signature: bool,
 }
@@ -35,6 +47,7 @@ const INJECT: &[&str] = &[
     "private key",
     "send all funds",
     "jailbreak",
+    "bypass safety",
 ];
 
 pub fn detect_prompt_injection(raw: &str) -> bool {
@@ -43,6 +56,21 @@ pub fn detect_prompt_injection(raw: &str) -> bool {
 }
 
 pub fn build_pay_request(input: &PayRequestInput) -> Result<PayRequestOutput, String> {
+    if detect_prompt_injection(&input.recipient)
+        || input
+            .memo
+            .as_deref()
+            .map(detect_prompt_injection)
+            .unwrap_or(false)
+        || input
+            .message
+            .as_deref()
+            .map(detect_prompt_injection)
+            .unwrap_or(false)
+    {
+        return Err("prompt_injection_fail_closed".into());
+    }
+
     if input.recipient.len() < 32 {
         return Err("recipient_invalid".into());
     }
@@ -55,11 +83,25 @@ pub fn build_pay_request(input: &PayRequestInput) -> Result<PayRequestOutput, St
     {
         return Err("amount_invalid".into());
     }
+    if let Some(r) = &input.reference {
+        if r.len() < 32 {
+            return Err("reference_invalid".into());
+        }
+    }
+    if let Some(t) = &input.spl_token {
+        if t.len() < 32 {
+            return Err("spl_token_invalid".into());
+        }
+    }
 
     let mut url = format!("solana:{}?amount={}", input.recipient, input.amount);
     if let Some(t) = &input.spl_token {
         url.push_str("&spl-token=");
         url.push_str(&urlencoding::encode(t));
+    }
+    if let Some(r) = &input.reference {
+        url.push_str("&reference=");
+        url.push_str(&urlencoding::encode(r));
     }
     if let Some(m) = &input.memo {
         url.push_str("&memo=");
@@ -74,27 +116,49 @@ pub fn build_pay_request(input: &PayRequestInput) -> Result<PayRequestOutput, St
         url.push_str(&urlencoding::encode(m));
     }
 
+    let token_bit = input
+        .spl_token
+        .as_ref()
+        .map(|t| format!(" ({})", truncate(t, 6)))
+        .unwrap_or_default();
+    let ref_bit = input
+        .reference
+        .as_ref()
+        .map(|r| format!(" ref={}", truncate(r, 6)))
+        .unwrap_or_default();
+
     let summary = match input.locale.as_str() {
         "fr" => format!(
-            "Paiement Solana Pay: {} → {} (humain doit approuver)",
+            "Solana Pay {}{} → {}{} — humain signe / scan QR",
             input.amount,
-            truncate(&input.recipient, 8)
+            token_bit,
+            truncate(&input.recipient, 8),
+            ref_bit
         ),
         "pt" => format!(
-            "Pagamento Solana Pay: {} → {} (humano deve aprovar)",
+            "Solana Pay {}{} → {}{} — humano assina / QR",
             input.amount,
-            truncate(&input.recipient, 8)
+            token_bit,
+            truncate(&input.recipient, 8),
+            ref_bit
         ),
         _ => format!(
-            "Solana Pay request: {} to {} (human must approve)",
+            "Solana Pay {}{} → {}{} — human must approve / scan QR",
             input.amount,
-            truncate(&input.recipient, 8)
+            token_bit,
+            truncate(&input.recipient, 8),
+            ref_bit
         ),
     };
 
     Ok(PayRequestOutput {
+        qr: QrPayload {
+            text: url.clone(),
+            mime_hint: "text/plain",
+        },
         solana_pay_url: url,
         human_summary: summary,
+        reference: input.reference.clone(),
         custody_tier: "T1",
         requires_human_signature: true,
     })
