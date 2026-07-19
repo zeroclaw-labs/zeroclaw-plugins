@@ -5,6 +5,8 @@ Solana SPL or Token-2022 mint before an agent recommends interacting with it.
 It gathers public on-chain and market evidence, applies deterministic rules,
 and returns a compact red/amber/green JSON report.
 
+**Demo (2:07):** https://antonsbb.github.io/token-risk-check-demo/
+
 It never accepts a recovery phrase or private key, never connects a wallet,
 and cannot construct, sign, simulate, or submit a transaction. The report is
 evidence for a human decision, not financial advice or a guarantee of safety.

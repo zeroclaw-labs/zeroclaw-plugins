@@ -1,5 +1,9 @@
 # token-risk-check — one-page bounty write-up
 
+Demo video (2:07): https://antonsbb.github.io/token-risk-check-demo/
+
+Upstream pull request: https://github.com/zeroclaw-labs/zeroclaw-plugins/pull/93
+
 ## Problem
 
 An agent can be handed a Solana mint that looks normal while the token still has
