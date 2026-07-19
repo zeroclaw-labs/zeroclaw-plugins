@@ -115,8 +115,7 @@ pub fn validate_mint_address(mint: &str) -> Result<(), String> {
 }
 
 fn base58_digit(byte: u8) -> Option<u8> {
-    const ALPHABET: &[u8; 58] =
-        b"123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+    const ALPHABET: &[u8; 58] = b"123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
     ALPHABET
         .iter()
         .position(|candidate| *candidate == byte)
@@ -257,8 +256,12 @@ pub fn assess(input: &RiskInput) -> RiskReport {
                 Severity::Medium,
                 "new token accounts may start in a restricted state",
             ),
-            "metadatapointer" | "tokenmetadata" | "interestbearingconfig"
-            | "scaleduiconfig" | "grouppointer" | "groupmemberpointer" => findings.push(Finding {
+            "metadatapointer"
+            | "tokenmetadata"
+            | "interestbearingconfig"
+            | "scaleduiconfig"
+            | "grouppointer"
+            | "groupmemberpointer" => findings.push(Finding {
                 code: "token2022_extension_present".to_string(),
                 severity: Severity::Info,
                 message: format!("Token-2022 extension present: {}", ext.kind),
@@ -321,7 +324,10 @@ pub fn assess(input: &RiskInput) -> RiskReport {
                     12,
                     "top10_concentrated",
                     Severity::High,
-                    format!("ten largest token accounts control {}% of supply", top10 / 100),
+                    format!(
+                        "ten largest token accounts control {}% of supply",
+                        top10 / 100
+                    ),
                 );
             }
             (Some(top1), Some(top10))
