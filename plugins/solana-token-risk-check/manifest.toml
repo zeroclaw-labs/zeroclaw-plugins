@@ -1,0 +1,9 @@
+name = "solana-token-risk-check"
+version = "0.1.0"
+description = "Read-only Solana mint authority, extension, and ownership-concentration risk checks"
+author = "etgpao"
+wasm_path = "solana_token_risk_check.wasm"
+capabilities = ["tool"]
+# The RPC endpoint comes only from this plugin's jailed config section. HTTP is
+# used exclusively for unsigned Solana JSON-RPC reads.
+permissions = ["http_client", "config_read"]
