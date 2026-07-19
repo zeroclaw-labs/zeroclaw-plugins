@@ -35,3 +35,10 @@ jobs:
         run: cargo clippy --locked --all-targets -- -D warnings
       - name: WASI component build
         run: cargo build --locked --release --target wasm32-wasip2
+      - name: Upload WASI component
+        uses: actions/upload-artifact@v4
+        with:
+          name: token-risk-check-wasm
+          path: plugins/token-risk-check/target/wasm32-wasip2/release/token_risk_check.wasm
+          if-no-files-found: error
+          retention-days: 7
