@@ -1,8 +1,9 @@
 # M4 Results — Durable Nonce Mode (isolated experiment)
 
-**Verdict: M4 PASS.** Recommended to be audited for promotion (a focused
-read-only M4 security audit is the final promotion gate). PR #54 and the frozen
-tags were not modified.
+**Verdict: M4 PASS.** All 20 promotion-gate conditions met, including the
+focused read-only M4 security audit (zero Critical, zero High). Eligible to be
+proposed for promotion; PR #54 and the frozen tags were not modified, and
+promotion remains a separate maintainer decision.
 
 This is an isolated experiment on disposable branches. The frozen M3.5 submission
 and its fallbacks are untouched.
@@ -126,7 +127,34 @@ For `nanosol`, `solana-pay-request`, and `spl-transfer-build`, all of:
 - SHA-256: `b170e503a09ca544e1ed31862d3550d284025894082473a775c3f8395a42cb25`
 
 (The artifact is rebuilt by CI and not committed; the hash identifies the tested
-build environment.)
+build environment. The strict CI validator's isolated rebuild produced 706776
+bytes — Cargo artifact bytes differ with absolute source paths, as documented for
+M3.)
+
+## Additional validation (CI parity)
+
+- M0 oracle: `spikes/pda-oracle` 9 tests pass; `spikes/wasm-build` wasm release
+  builds.
+- Repository tooling unittests 17 pass; CI tooling unittests 36 pass.
+- `plan_matrix.py --event pull_request` selects exactly `spl-transfer-build`
+  (strict).
+- Strict `tools/ci/validate_components.sh` (fresh `CARGO_HOME`, isolated target):
+  `spl-transfer-build` test_rc=0 (71), clippy_rc=0, wasm_clippy_rc=0, build_rc=0,
+  source-mutation guard clean; `solana-pay-request` test_rc=0 (29), all rc=0.
+- WIT drift: vendored `wit/v0` is byte-identical to upstream
+  `zeroclaw-labs/zeroclaw@e112ce6b5ccdac9e1cb166bab217e730dd7e24c2` (`wit/` was not
+  modified).
+- Clean clone with a fresh `CARGO_HOME`: a `git clone --depth 1` of the fork
+  branch built `spl-transfer-build` `--locked` for `wasm32-wasip2`, resolving the
+  pinned nanosol git rev `5d95014` from GitHub.
+- **Fork GitHub Actions**: `Validate plugin repository` run
+  [29670417765](https://github.com/Fianko-codes/zeroclaw-plugins/actions/runs/29670417765)
+  on `agent/m4-durable-nonce-experiment` — conclusion **success**, including the
+  required **Validate Required Gate** (Format, Registry contract, Plan matrix, WIT
+  drift, Components shards 0–3, Package dry run). The only fmt annotations are
+  pre-existing debt in other untouched plugins.
+- Packaging/registry: `registry.json` was not modified; the plugins are not in the
+  registry and packaging remains a separate maintainer decision, kept out of M4.
 
 ## Real host and agent invocation (durable)
 
@@ -241,13 +269,28 @@ discussion #415 — a discussion, not an activated change). The recent-blockhash
 sysvar is deprecated for on-chain reads yet still required as an
 `AdvanceNonceAccount` account. Operators adopting durable mode should track this.
 
+## Focused M4 security audit (promotion gate condition 20)
+
+A focused, read-only adversarial audit of the M4 diff (nanosol nonce/instruction/
+inspect/rpc changes and the plugin durable path) returned **zero Critical, zero
+High** findings. All nine audited properties hold: no signing/submission/private-
+key path; the single-signer invariant (exactly one required signature, one
+all-zero slot, authority == sender == fee payer, no second signer is structurally
+possible); durable `verify_final_bytes` (AdvanceNonce at index 0 for the
+configured nonce/authority/sysvar, message blockhash == parsed nonce, byte-
+equivalent canonical recompile — every divergence attack rejected); operator-only
+mode selection (`deny_unknown_fields` + host `__config` strip); the nonce trust
+boundary (internally consistent accepted transaction); a total, non-panicking
+strict parser; bounded output/errors; unchanged recent mode; and an honest
+approval summary. Three Low/informational notes only: the host `__config`-strip
+dependency (identical to the M3.5 T1 boundary), the RPC-controlled nonce value
+(impact bounded because nothing is signed and every transfer field is derived from
+policy), and two provably-unreachable `.expect()`s guarded by the length check.
+
 ## Promotion recommendation
 
-M4 meets the technical promotion criteria: Phase-A passed, official oracles pass,
-simulation uses no blockhash replacement, delayed signing finalized, nonce
-before/after is proven, final-byte verification covers durable mode, all durable
-mutations fail closed, recent mode is unchanged, all M0–M3.5 regressions pass, the
-component loads in ZeroClaw, the real durable agent invocation passed, output and
-errors remain bounded, and no signing/submission/second-signer path exists. The
-remaining gate is a focused read-only M4 security audit reporting zero
-Critical/High findings. **Do not update PR #54 before that audit.**
+M4 meets **all 20 promotion-gate conditions**, including the read-only security
+audit (zero Critical/High). It is therefore **eligible to be proposed for the
+bounty PR**. Per the experiment's terms, this branch does **not** update PR #54 or
+touch the frozen tags; promotion (opening/updating the PR) is a separate,
+explicit maintainer decision.
