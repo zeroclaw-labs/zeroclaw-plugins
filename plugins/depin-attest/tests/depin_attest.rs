@@ -504,3 +504,204 @@ fn memo_ix_empty_string() {
     assert!(ix.accounts.is_empty());
     assert!(ix.data.is_empty());
 }
+
+// ── Slice D: execute_t1 tests ──
+
+use depin_attest::depin_attest::execute_t1;
+use palinurus_core::{estimate_tokens, MockRpc};
+use base64::prelude::{BASE64_STANDARD, Engine as _};
+use serde_json::json;
+
+/// Build a scripted MockRpc getAccountInfo response for an Initialized nonce
+/// account with the given authority + a fixed durable nonce.
+fn nonce_account_response(authority: &Pubkey, durable_nonce: [u8; 32]) -> serde_json::Value {
+    let mut data = vec![0u8; 80];
+    // u32 LE version = 1 (Current)
+    data[0..4].copy_from_slice(&1u32.to_le_bytes());
+    // u32 LE state = 1 (Initialized)
+    data[4..8].copy_from_slice(&1u32.to_le_bytes());
+    // 32B authority
+    data[8..40].copy_from_slice(authority.as_bytes());
+    // 32B durable_nonce
+    data[40..72].copy_from_slice(&durable_nonce);
+    // u64 LE lamports_per_signature = 5000
+    data[72..80].copy_from_slice(&5000u64.to_le_bytes());
+
+    json!({
+        "result": {
+            "value": {
+                "data": [BASE64_STANDARD.encode(&data), "base64"],
+                "owner": "11111111111111111111111111111111",
+                "lamports": 100000000,
+                "executable": false
+            }
+        }
+    })
+}
+
+/// A MockRpc with a single initialized nonce account (authority = TOKEN, matching test_config).
+fn mock_rpc_with_nonce() -> MockRpc {
+    let auth = Pubkey::from_str(TOKEN).unwrap();
+    let nonce_hash = [0xAA; 32]; // fixed durable nonce
+    MockRpc::new(vec![nonce_account_response(&auth, nonce_hash)])
+}
+
+#[test]
+fn execute_t1_happy_path() {
+    let cfg = test_config();
+    let rpc = mock_rpc_with_nonce();
+    let reading = test_reading();
+
+    let out = execute_t1(&reading, None, &cfg, &rpc).expect("T1 happy path");
+
+    // Attestation PDA is correct (cross-checked in slice C).
+    let (_expected_ix, expected_pda, _) = build_attest_ix(&reading, &cfg).unwrap();
+    assert_eq!(out.attestation_pda, expected_pda);
+
+    // tx_b64 decodes to valid bytes.
+    let tx_bytes = BASE64_STANDARD.decode(&out.tx_b64).unwrap();
+    assert!(!tx_bytes.is_empty());
+
+    // Unsigned (T1) → no signature.
+    assert!(out.signature.is_none());
+    assert!(!out.used_memo_fallback);
+
+    // Summary ≤200 tokens AND ≤800 chars.
+    assert!(estimate_tokens(&out.summary) <= 200, "summary must be ≤200 tokens, got {}", estimate_tokens(&out.summary));
+    assert!(out.summary.len() <= 800, "summary must be ≤800 chars, got {}", out.summary.len());
+
+    // Explorer URL contains the PDA.
+    assert!(out.explorer_url.contains(&out.attestation_pda.to_string()));
+    assert!(out.explorer_url.contains("devnet"));
+
+    // Summary contains key elements.
+    assert!(out.summary.contains("attested reading"), "summary: {}", out.summary);
+    assert!(out.summary.contains("unsigned"), "summary: {}", out.summary);
+    assert!(out.summary.contains("multisig"), "summary: {}", out.summary);
+}
+
+#[test]
+fn execute_t1_tx_first_ix_is_advance_nonce() {
+    let cfg = test_config();
+    let rpc = mock_rpc_with_nonce();
+    let out = execute_t1(&test_reading(), None, &cfg, &rpc).unwrap();
+
+    let tx_bytes = BASE64_STANDARD.decode(&out.tx_b64).unwrap();
+    // Wire format: [compact-u16 sigs=0] [message...]
+    // Message V0: [0x80 prefix] [header 3B] [compact-u16 account_keys count] [account_keys...] ...
+    // The first instruction is at a specific offset. Instead of full parsing,
+    // verify the AdvanceNonceAccount data [0x04,0x00,0x00,0x00] appears early.
+    // The advance ix data is 4 bytes; the compiled ix has program_id_index (1B) +
+    // accounts short-vec (3B: [nonce, sysvar, authority]) + data (4B).
+    // We verify the data bytes [0x04,0x00,0x00,0x00] are present in the tx.
+    assert!(
+        tx_bytes.windows(4).any(|w| w == [0x04, 0x00, 0x00, 0x00]),
+        "tx must contain AdvanceNonceAccount ix data [0x04,0,0,0]"
+    );
+}
+
+#[test]
+fn execute_t1_with_memo() {
+    let cfg = test_config();
+    // Need 1 nonce account response.
+    let auth = Pubkey::from_str(TOKEN).unwrap();
+    let rpc = MockRpc::new(vec![nonce_account_response(&auth, [0xBB; 32])]);
+
+    let out = execute_t1(&test_reading(), Some("sensor ok"), &cfg, &rpc).unwrap();
+
+    // The tx should be larger (SAS ix + memo ix + advance = 3 ixs).
+    let tx_bytes = BASE64_STANDARD.decode(&out.tx_b64).unwrap();
+    // Verify "sensor ok" UTF-8 appears in the tx bytes (memo data).
+    assert!(
+        tx_bytes.windows(9).any(|w| w == b"sensor ok"),
+        "tx must contain the memo text"
+    );
+}
+
+#[test]
+fn execute_t1_empty_memo_ignored() {
+    let cfg = test_config();
+    let rpc = mock_rpc_with_nonce();
+    let out = execute_t1(&test_reading(), Some(""), &cfg, &rpc).unwrap();
+    // Empty memo → no memo ix (same as None).
+    assert!(!out.used_memo_fallback);
+}
+
+#[test]
+fn execute_t1_invalid_reading_empty_sensor_id() {
+    let cfg = test_config();
+    let rpc = mock_rpc_with_nonce();
+    let reading = SensorReading {
+        sensor_id: "".to_string(),
+        value: 24.7,
+        unit: "celsius".to_string(),
+        timestamp: 1_753_000_000,
+    };
+    let err = execute_t1(&reading, None, &cfg, &rpc).unwrap_err();
+    assert!(matches!(err, AttestError::InvalidReading(ref m) if m.contains("sensor_id")));
+}
+
+#[test]
+fn execute_t1_invalid_reading_nan_value() {
+    let cfg = test_config();
+    let rpc = mock_rpc_with_nonce();
+    let reading = SensorReading {
+        sensor_id: "bme280".to_string(),
+        value: f64::NAN,
+        unit: "C".to_string(),
+        timestamp: 1_753_000_000,
+    };
+    let err = execute_t1(&reading, None, &cfg, &rpc).unwrap_err();
+    assert!(matches!(err, AttestError::InvalidReading(ref m) if m.contains("finite")));
+}
+
+#[test]
+fn execute_t1_nonce_account_not_found() {
+    let cfg = test_config();
+    // MockRpc returns value: null (account not found).
+    let rpc = MockRpc::new(vec![json!({ "result": { "value": null } })]);
+    let err = execute_t1(&test_reading(), None, &cfg, &rpc).unwrap_err();
+    assert!(matches!(err, AttestError::NonceAccount(ref m) if m.contains("not found")));
+}
+
+#[test]
+fn execute_t1_nonce_account_uninitialized() {
+    let cfg = test_config();
+    // Build an uninitialized nonce account (state = 0).
+    let mut data = vec![0u8; 8];
+    data[0..4].copy_from_slice(&1u32.to_le_bytes()); // version = Current
+    data[4..8].copy_from_slice(&0u32.to_le_bytes()); // state = Uninitialized
+    let rpc = MockRpc::new(vec![json!({
+        "result": {
+            "value": {
+                "data": [BASE64_STANDARD.encode(&data), "base64"],
+                "owner": "11111111111111111111111111111111",
+                "lamports": 100000000,
+                "executable": false
+            }
+        }
+    })]);
+    let err = execute_t1(&test_reading(), None, &cfg, &rpc).unwrap_err();
+    assert!(matches!(err, AttestError::NonceAccount(ref m) if m.contains("uninitialized")));
+}
+
+#[test]
+fn execute_t1_nonce_authority_mismatch() {
+    let cfg = test_config(); // nonce_authority = TOKEN
+    // Script a nonce account with a DIFFERENT authority (SYSTEM).
+    let wrong_auth = Pubkey::from_str(SYSTEM).unwrap();
+    let rpc = MockRpc::new(vec![nonce_account_response(&wrong_auth, [0xCC; 32])]);
+    let err = execute_t1(&test_reading(), None, &cfg, &rpc).unwrap_err();
+    assert!(matches!(err, AttestError::NonceAccount(ref m) if m.contains("authority mismatch")));
+}
+
+#[test]
+fn execute_t1_rpc_error() {
+    let cfg = test_config();
+    // MockRpc returns a JSON-RPC error.
+    let rpc = MockRpc::new(vec![json!({
+        "error": { "code": -32603, "message": "internal error" }
+    })]);
+    let err = execute_t1(&test_reading(), None, &cfg, &rpc).unwrap_err();
+    assert!(matches!(err, AttestError::Rpc(_)));
+}

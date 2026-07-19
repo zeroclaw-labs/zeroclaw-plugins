@@ -13,6 +13,11 @@ use ed25519_dalek::SigningKey;
 use palinurus_core::{find_program_address, AccountMeta, CreateAttestationIxData, Instruction, Pubkey};
 use sha2::{Digest, Sha256};
 
+use base64::prelude::{BASE64_STANDARD, Engine as _};
+use palinurus_core::{
+    build_with_durable_nonce, parse_nonce_account, serialize_tx, short_pubkey, NonceState, Rpc,
+};
+
 // ── Constants ──
 
 /// Default attestation time-to-live: 90 days in seconds.
@@ -396,4 +401,226 @@ pub fn build_memo_ix(memo: &str) -> Instruction {
         accounts: Vec::new(),
         data: memo.as_bytes().to_vec(),
     }
+}
+
+// ── Output + response shaping (slice D) ──
+
+/// The result of an attestation `execute` call. The `summary` field is the
+/// ~200-token string that goes into `ToolResult.output`; the structured fields
+/// are for the host / tests / future programmatic consumption.
+#[derive(Debug)]
+pub struct AttestOutput {
+    /// The attestation PDA (the on-chain account that will hold the attestation).
+    pub attestation_pda: Pubkey,
+    /// The serialized versioned tx, base64-encoded. T1: unsigned (0 signatures).
+    /// T2: signed. The host / multisig signs and submits this (T1) or the plugin
+    /// already signed + submitted it (T2).
+    pub tx_b64: String,
+    /// The on-chain transaction signature (T2 only, after send_transaction).
+    pub signature: Option<String>,
+    /// The attestation expiry (unix timestamp).
+    pub expiry: i64,
+    /// Whether the memo-fallback path was used (no SAS instruction).
+    pub used_memo_fallback: bool,
+    /// The explorer URL for the attestation PDA (T1) or the tx signature (T2).
+    pub explorer_url: String,
+    /// The ~200-token shaped summary → `ToolResult.output`.
+    pub summary: String,
+}
+
+/// Shape the T1 output: attestation PDA + nonce + expiry + truncated tx_b64 +
+/// explorer URL + sign-with hint. Target ≤200 tokens, ≤800 chars.
+fn shape_t1(
+    attestation_pda: &Pubkey,
+    nonce: &Pubkey,
+    expiry: i64,
+    tx_b64: &str,
+    cfg: &AttestConfig,
+) -> String {
+    let cluster = &cfg.network;
+    let pda_short = short_pubkey(attestation_pda);
+    let nonce_short = short_pubkey(nonce);
+    let auth_short = short_pubkey(&cfg.authority);
+    // Truncate the tx_b64 preview to 48 chars (enough to identify, not flood context).
+    let tx_preview = if tx_b64.len() > 48 {
+        format!("{}…", &tx_b64[..48])
+    } else {
+        tx_b64.to_string()
+    };
+    format!(
+        "✓ attested reading → attestation PDA {pda_short}\n\
+         nonce: {nonce_short}  expiry: {expiry}\n\
+         tx (unsigned, base64, durable-nonce): {tx_preview}\n\
+         explorer: https://explorer.solana.com/address/{pda}?cluster={cluster}\n\
+         sign with: multisig approve (authority {auth_short})",
+        pda = attestation_pda,
+    )
+}
+
+/// Shape the memo-fallback output.
+#[allow(dead_code)]
+fn shape_memo_fallback(
+    nonce_account: &Pubkey,
+    memo_text: &str,
+    tx_b64: &str,
+    cfg: &AttestConfig,
+) -> String {
+    let cluster = &cfg.network;
+    let tx_preview = if tx_b64.len() > 48 {
+        format!("{}…", &tx_b64[..48])
+    } else {
+        tx_b64.to_string()
+    };
+    let memo_preview = if memo_text.len() > 60 {
+        format!("{}…", &memo_text[..60])
+    } else {
+        memo_text.to_string()
+    };
+    format!(
+        "✓ memo attestation (SAS unavailable) → tx (unsigned, base64): {tx_preview}\n\
+         memo: \"{memo_preview}\"\n\
+         explorer after sign: https://explorer.solana.com/address/{na}?cluster={cluster}",
+        na = nonce_account,
+    )
+}
+
+/// Shape the T2 output (signed + submitted).
+#[allow(dead_code)]
+fn shape_t2(
+    attestation_pda: &Pubkey,
+    nonce: &Pubkey,
+    expiry: i64,
+    signature: &str,
+    cfg: &AttestConfig,
+) -> String {
+    let cluster = &cfg.network;
+    let pda_short = short_pubkey(attestation_pda);
+    let nonce_short = short_pubkey(nonce);
+    let sig_preview = if signature.len() > 32 {
+        format!("{}…", &signature[..32])
+    } else {
+        signature.to_string()
+    };
+    format!(
+        "✓ attested + submitted → attestation PDA {pda_short}\n\
+         sig: {sig_preview}  nonce: {nonce_short}  expiry: {expiry}\n\
+         explorer: https://explorer.solana.com/tx/{sig}?cluster={cluster}",
+        sig = signature,
+    )
+}
+
+// ── execute_t1 (slice D) ──
+
+/// Execute the T1 attestation flow: build an unsigned durable-nonce versioned
+/// transaction containing the SAS `create_attestation` instruction (+ optional
+/// memo), ready for a human / Squads multisig to sign.
+///
+/// The pure core does NOT log (it returns `Result`s); the shim in `lib.rs`
+/// wires `log-record` + the actual `WakiRpc`. Host tests use `MockRpc`.
+pub fn execute_t1(
+    reading: &SensorReading,
+    memo: Option<&str>,
+    cfg: &AttestConfig,
+    rpc: &dyn Rpc,
+) -> Result<AttestOutput, AttestError> {
+    // 1. Validate the reading.
+    validate_reading(reading)?;
+
+    // 2-3. Build the SAS instruction + derive the nonce + PDA + expiry.
+    let nonce = reading.derive_nonce();
+    let (sas_ix, attestation_pda, expiry) = build_attest_ix(reading, cfg)?;
+
+    // 4. Assemble user instructions (SAS ix + optional memo).
+    let mut user_ixs = vec![sas_ix];
+    if let Some(m) = memo {
+        if !m.is_empty() {
+            user_ixs.push(build_memo_ix(m));
+        }
+    }
+
+    // 5-8. Fetch + parse the nonce account.
+    let acct = rpc
+        .get_account_info(&cfg.nonce_account)
+        .map_err(AttestError::Rpc)?;
+    let acct = acct.ok_or_else(|| {
+        AttestError::NonceAccount(format!(
+            "nonce account not found: {}",
+            cfg.nonce_account
+        ))
+    })?;
+
+    let nonce_acct = parse_nonce_account(&acct.data).map_err(|e| {
+        AttestError::NonceAccount(format!("failed to parse nonce account: {e:?}"))
+    })?;
+
+    let nonce_data = match nonce_acct.state {
+        NonceState::Initialized(d) => d,
+        palinurus_core::NonceState::Uninitialized => {
+            return Err(AttestError::NonceAccount(
+                "nonce account is uninitialized — create + initialize it first".to_string(),
+            ));
+        }
+    };
+
+    // Verify the nonce authority matches config (fail closed if not ours).
+    if nonce_data.authority != cfg.nonce_authority {
+        return Err(AttestError::NonceAccount(format!(
+            "nonce authority mismatch: expected {}, got {}",
+            cfg.nonce_authority, nonce_data.authority
+        )));
+    }
+
+    // 9. Build the unsigned durable-nonce versioned tx.
+    let tx = build_with_durable_nonce(
+        &user_ixs,
+        cfg.payer,
+        cfg.nonce_account,
+        nonce_data.durable_nonce,
+        cfg.nonce_authority,
+    );
+
+    // 10-11. Serialize + base64-encode.
+    let tx_bytes = serialize_tx(&tx);
+    let tx_b64 = BASE64_STANDARD.encode(&tx_bytes);
+
+    // 12-13. Shape the result + build the explorer URL.
+    let summary = shape_t1(&attestation_pda, &nonce, expiry, &tx_b64, cfg);
+    let explorer_url = format!(
+        "https://explorer.solana.com/address/{}?cluster={}",
+        attestation_pda, cfg.network
+    );
+
+    Ok(AttestOutput {
+        attestation_pda,
+        tx_b64,
+        signature: None,
+        expiry,
+        used_memo_fallback: false,
+        explorer_url,
+        summary,
+    })
+}
+
+/// Validate a sensor reading. Fail closed on empty sensor_id, non-finite value,
+/// empty unit, or non-positive timestamp.
+fn validate_reading(reading: &SensorReading) -> Result<(), AttestError> {
+    if reading.sensor_id.is_empty() {
+        return Err(AttestError::InvalidReading("sensor_id is empty".to_string()));
+    }
+    if !reading.value.is_finite() {
+        return Err(AttestError::InvalidReading(format!(
+            "value is not finite: {}",
+            reading.value
+        )));
+    }
+    if reading.unit.is_empty() {
+        return Err(AttestError::InvalidReading("unit is empty".to_string()));
+    }
+    if reading.timestamp <= 0 {
+        return Err(AttestError::InvalidReading(format!(
+            "timestamp must be positive, got {}",
+            reading.timestamp
+        )));
+    }
+    Ok(())
 }
