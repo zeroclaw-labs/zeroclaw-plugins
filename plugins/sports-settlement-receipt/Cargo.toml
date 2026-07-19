@@ -13,6 +13,7 @@ crate-type = ["cdylib", "rlib"]
 base64 = "0.22"
 bs58 = "0.5"
 curve25519-dalek = { version = "4", default-features = false, features = ["alloc"] }
+ed25519-dalek = { version = "2", default-features = false }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"

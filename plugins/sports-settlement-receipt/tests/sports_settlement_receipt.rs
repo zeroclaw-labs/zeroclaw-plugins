@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine;
+use ed25519_dalek::{Signer, SigningKey};
 use serde_json::{json, Value};
 use sports_settlement_receipt::core::{
     build_attestation_plan, build_validate_stat_instruction, compile_market,
@@ -22,7 +23,12 @@ const SEQUENCE: u64 = 1_315;
 const SLOT: u64 = 476_311_319;
 
 fn signature() -> String {
-    bs58::encode([7u8; 64]).into_string()
+    let signature = signing_key(99).sign(b"sports-settlement-receipt-input-v1");
+    bs58::encode(signature.to_bytes()).into_string()
+}
+
+fn signing_key(seed: u8) -> SigningKey {
+    SigningKey::from_bytes(&[seed; 32])
 }
 
 fn valid_args() -> String {
@@ -90,6 +96,11 @@ fn arguments_config_and_targets_are_fail_closed() {
     let parsed_config = PluginConfig::from_section(&config).unwrap();
     assert_eq!(parsed_config.rpc_urls.len(), 3);
     config.insert("rpc_url_2".into(), "https://rpc-one.example/other".into());
+    assert_eq!(
+        PluginConfig::from_section(&config).unwrap_err().code(),
+        "DUPLICATE_RPC_PROVIDER"
+    );
+    config.insert("rpc_url_2".into(), "https://rpc-one.example./other".into());
     assert_eq!(
         PluginConfig::from_section(&config).unwrap_err().code(),
         "DUPLICATE_RPC_PROVIDER"
@@ -165,16 +176,15 @@ fn rpc_methods_are_fixed_and_finalized() {
 #[test]
 fn exact_finalized_attestation_reaches_two_provider_quorum() {
     let plan = build_attestation_plan(&proof(), &home_market()).unwrap();
-    let (status, transaction) = synthetic_rpc(&plan, None);
+    let (signature, status, transaction) = synthetic_rpc(&plan, None, 7);
     let binding =
-        verify_attestation_response(&transaction, &signature(), FIXTURE_ID, SEQUENCE, &plan)
-            .unwrap();
+        verify_attestation_response(&transaction, &signature, FIXTURE_ID, SEQUENCE, &plan).unwrap();
     assert_eq!(binding.finalized_slot, SLOT);
     assert_eq!(binding.memo_receipt_sha256, "ab".repeat(32));
     assert!(binding.predicate_result);
 
-    let first = inspect_provider(1, &signature(), Ok(&status), Ok(&transaction));
-    let second = inspect_provider(2, &signature(), Ok(&status), Ok(&transaction));
+    let first = inspect_provider(1, &signature, Ok(&status), Ok(&transaction));
+    let second = inspect_provider(2, &signature, Ok(&status), Ok(&transaction));
     assert_eq!(first.state, ProviderState::Complete);
     let decision = classify_quorum(vec![first, second]);
     assert_eq!(decision.verdict, QuorumVerdict::Consistent);
@@ -184,19 +194,24 @@ fn exact_finalized_attestation_reaches_two_provider_quorum() {
 #[test]
 fn any_attestation_or_provider_disagreement_stays_unknown() {
     let plan = build_attestation_plan(&proof(), &home_market()).unwrap();
-    let (status, valid) = synthetic_rpc(&plan, None);
-    let (_, bad_memo) = synthetic_rpc(&plan, Some("fixture=999"));
+    let (signature, status, valid) = synthetic_rpc(&plan, None, 7);
+    let (bad_memo_signature, _, bad_memo) = synthetic_rpc(&plan, Some("fixture=999"), 7);
     assert_eq!(
-        verify_attestation_response(&bad_memo, &signature(), FIXTURE_ID, SEQUENCE, &plan)
+        verify_attestation_response(&bad_memo, &bad_memo_signature, FIXTURE_ID, SEQUENCE, &plan,)
             .unwrap_err()
             .code(),
         "ATTESTATION_MEMO_MISMATCH"
     );
-    let good = inspect_provider(1, &signature(), Ok(&status), Ok(&valid));
-    let bad = inspect_provider(2, &signature(), Ok(&status), Ok(&bad_memo))
-        .binding_diverged("ATTESTATION_MEMO_MISMATCH");
-    let decision = classify_quorum(vec![good, bad]);
+    let good_one = inspect_provider(1, &signature, Ok(&status), Ok(&valid));
+    let good_two = inspect_provider(2, &signature, Ok(&status), Ok(&valid));
+    let (_, wrong_status, wrong_transaction) = synthetic_rpc(&plan, None, 8);
+    let wrong = inspect_provider(3, &signature, Ok(&wrong_status), Ok(&wrong_transaction));
+    assert_eq!(wrong.state, ProviderState::Diverged);
+    assert_eq!(wrong.code, "FINALIZED_TRANSACTION_SIGNATURE_MISMATCH");
+    let decision = classify_quorum(vec![good_one, good_two, wrong]);
     assert_eq!(decision.verdict, QuorumVerdict::Diverged);
+    assert_eq!(decision.complete, 2);
+    assert_eq!(decision.diverged, 1);
 
     let unknown: Value = serde_json::from_str(&unknown_report(
         &decision.code,
@@ -206,6 +221,31 @@ fn any_attestation_or_provider_disagreement_stays_unknown() {
     .unwrap();
     assert_eq!(unknown["verdict"], "unknown");
     assert_eq!(unknown["settlement_ready"], false);
+}
+
+#[test]
+fn signed_transaction_rejects_message_tampering() {
+    let plan = build_attestation_plan(&proof(), &home_market()).unwrap();
+    let (signature, status, transaction) = synthetic_rpc(&plan, None, 7);
+    let mut envelope: Value = serde_json::from_str(&transaction).unwrap();
+    let encoded = envelope["result"]["transaction"][0].as_str().unwrap();
+    let mut wire = BASE64_STANDARD.decode(encoded).unwrap();
+    *wire.last_mut().unwrap() ^= 1;
+    envelope["result"]["transaction"][0] = json!(BASE64_STANDARD.encode(wire));
+    let tampered = envelope.to_string();
+
+    assert_eq!(
+        verify_attestation_response(&tampered, &signature, FIXTURE_ID, SEQUENCE, &plan)
+            .unwrap_err()
+            .code(),
+        "FINALIZED_TRANSACTION_SIGNATURE_VERIFICATION_FAILED"
+    );
+    let evidence = inspect_provider(1, &signature, Ok(&status), Ok(&tampered));
+    assert_eq!(evidence.state, ProviderState::Diverged);
+    assert_eq!(
+        evidence.code,
+        "FINALIZED_TRANSACTION_SIGNATURE_VERIFICATION_FAILED"
+    );
 }
 
 #[test]
@@ -250,9 +290,10 @@ fn public_devnet_reference_matches_the_attestation_shape() {
 fn synthetic_rpc(
     plan: &sports_settlement_receipt::core::AttestationPlan,
     memo_override: Option<&str>,
-) -> (String, String) {
-    let signature_bytes = [7u8; 64];
-    let payer = [9u8; 32];
+    signer_seed: u8,
+) -> (String, String, String) {
+    let signer = signing_key(signer_seed);
+    let payer = signer.verifying_key().to_bytes();
     let accounts = [
         payer,
         plan.daily_scores_pda_bytes,
@@ -282,6 +323,8 @@ fn synthetic_rpc(
     instruction(&mut message, 4, &[0], memo.as_bytes());
     instruction(&mut message, 2, &[1], &plan.instruction);
 
+    let signature_bytes = signer.sign(&message).to_bytes();
+    let signature = bs58::encode(signature_bytes).into_string();
     let mut transaction = vec![1];
     transaction.extend_from_slice(&signature_bytes);
     transaction.extend_from_slice(&message);
@@ -306,7 +349,7 @@ fn synthetic_rpc(
         }
     })
     .to_string();
-    (status, transaction)
+    (signature, status, transaction)
 }
 
 fn decode_key(value: &str) -> [u8; 32] {

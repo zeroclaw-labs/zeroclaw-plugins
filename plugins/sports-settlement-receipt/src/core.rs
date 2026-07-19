@@ -122,10 +122,14 @@ impl PluginConfig {
         for rpc_url in &rpc_urls {
             validate_rpc_url(rpc_url)?;
             let parsed = Url::parse(rpc_url).map_err(|_| CoreError("INVALID_RPC_URL"))?;
-            let host = parsed
-                .host_str()
-                .ok_or(CoreError("INVALID_RPC_URL"))?
-                .to_ascii_lowercase();
+            let host = parsed.host_str().ok_or(CoreError("INVALID_RPC_URL"))?;
+            // A terminal dot denotes the same absolute DNS name. Normalize it
+            // before enforcing provider diversity so `rpc.example` and
+            // `rpc.example.` cannot satisfy a two-provider quorum.
+            let host = host.trim_end_matches('.').to_ascii_lowercase();
+            if host.is_empty() {
+                return Err(CoreError("INVALID_RPC_URL"));
+            }
             if provider_hosts.contains(&host) {
                 return Err(CoreError("DUPLICATE_RPC_PROVIDER"));
             }

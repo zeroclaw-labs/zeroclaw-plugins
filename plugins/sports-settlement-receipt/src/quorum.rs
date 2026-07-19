@@ -6,6 +6,7 @@
 
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine;
+use ed25519_dalek::{Signature, VerifyingKey};
 use serde::Serialize;
 use serde_json::{json, Value};
 
@@ -224,12 +225,11 @@ fn decode_transaction(value: &Value) -> Result<Vec<u8>, CoreError> {
 }
 
 fn verify_first_signature(transaction: &[u8], expected: &str) -> Result<(), CoreError> {
-    let expected = bs58::decode(expected)
+    let expected: [u8; 64] = bs58::decode(expected)
         .into_vec()
+        .map_err(|_| CoreError("INVALID_TRANSACTION_SIGNATURE"))?
+        .try_into()
         .map_err(|_| CoreError("INVALID_TRANSACTION_SIGNATURE"))?;
-    if expected.len() != 64 {
-        return Err(CoreError("INVALID_TRANSACTION_SIGNATURE"));
-    }
     let (signature_count, prefix_len) = decode_short_u16(transaction)?;
     if signature_count == 0 || signature_count > 64 {
         return Err(CoreError("INVALID_FINALIZED_TRANSACTION_WIRE_FORMAT"));
@@ -243,9 +243,52 @@ fn verify_first_signature(transaction: &[u8], expected: &str) -> Result<(), Core
     if message_offset >= transaction.len() || prefix_len + 64 > transaction.len() {
         return Err(CoreError("INVALID_FINALIZED_TRANSACTION_WIRE_FORMAT"));
     }
-    if transaction[prefix_len..prefix_len + 64] != expected {
+    let signature_bytes: [u8; 64] = transaction[prefix_len..prefix_len + 64]
+        .try_into()
+        .map_err(|_| CoreError("INVALID_FINALIZED_TRANSACTION_WIRE_FORMAT"))?;
+    if signature_bytes != expected {
         return Err(CoreError("FINALIZED_TRANSACTION_SIGNATURE_MISMATCH"));
     }
+
+    let message = transaction
+        .get(message_offset..)
+        .filter(|message| !message.is_empty())
+        .ok_or(CoreError("INVALID_FINALIZED_TRANSACTION_WIRE_FORMAT"))?;
+    let version_prefix_len = if message[0] & 0x80 == 0 { 0 } else { 1 };
+    let header_end = version_prefix_len
+        .checked_add(3)
+        .ok_or(CoreError("INVALID_FINALIZED_TRANSACTION_WIRE_FORMAT"))?;
+    let header = message
+        .get(version_prefix_len..header_end)
+        .ok_or(CoreError("INVALID_FINALIZED_TRANSACTION_WIRE_FORMAT"))?;
+    if header[0] as usize != signature_count {
+        return Err(CoreError("INVALID_FINALIZED_TRANSACTION_WIRE_FORMAT"));
+    }
+    let (account_count, account_count_len) = decode_short_u16(
+        message
+            .get(header_end..)
+            .ok_or(CoreError("INVALID_FINALIZED_TRANSACTION_WIRE_FORMAT"))?,
+    )?;
+    if account_count < signature_count {
+        return Err(CoreError("INVALID_FINALIZED_TRANSACTION_WIRE_FORMAT"));
+    }
+    let payer_offset = header_end
+        .checked_add(account_count_len)
+        .ok_or(CoreError("INVALID_FINALIZED_TRANSACTION_WIRE_FORMAT"))?;
+    let payer_end = payer_offset
+        .checked_add(32)
+        .ok_or(CoreError("INVALID_FINALIZED_TRANSACTION_WIRE_FORMAT"))?;
+    let payer: [u8; 32] = message
+        .get(payer_offset..payer_end)
+        .ok_or(CoreError("INVALID_FINALIZED_TRANSACTION_WIRE_FORMAT"))?
+        .try_into()
+        .map_err(|_| CoreError("INVALID_FINALIZED_TRANSACTION_WIRE_FORMAT"))?;
+    let verifying_key = VerifyingKey::from_bytes(&payer)
+        .map_err(|_| CoreError("INVALID_FINALIZED_TRANSACTION_SIGNER"))?;
+    let signature = Signature::from_bytes(&signature_bytes);
+    verifying_key
+        .verify_strict(message, &signature)
+        .map_err(|_| CoreError("FINALIZED_TRANSACTION_SIGNATURE_VERIFICATION_FAILED"))?;
     Ok(())
 }
 
@@ -710,7 +753,7 @@ pub fn inspect_provider(
     let transaction = match transaction_response {
         Ok(body) => match parse_transaction(body, signature) {
             Ok(transaction) => transaction,
-            Err(error) => return ProviderEvidence::unknown(provider, error.code()),
+            Err(error) => return transaction_error_evidence(provider, error),
         },
         Err(code) => return ProviderEvidence::unknown(provider, code),
     };
@@ -767,6 +810,17 @@ pub fn inspect_provider(
             });
             evidence
         }
+    }
+}
+
+fn transaction_error_evidence(provider: u8, error: CoreError) -> ProviderEvidence {
+    match error.code() {
+        "FINALIZED_TRANSACTION_SIGNATURE_MISMATCH"
+        | "INVALID_FINALIZED_TRANSACTION_SIGNER"
+        | "FINALIZED_TRANSACTION_SIGNATURE_VERIFICATION_FAILED" => {
+            ProviderEvidence::empty(provider, ProviderState::Diverged, error.code())
+        }
+        _ => ProviderEvidence::unknown(provider, error.code()),
     }
 }
 
