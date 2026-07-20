@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use caixa_core::pay::{build_solana_pay_url, PayRequest};
+use caixa_core::pay::{build_solana_pay_url, phantom_browse_https, PayRequest};
 use caixa_core::pubkey::{usdc_mint_mainnet, Pubkey};
 use caixa_core::quote::{quote_brl_to_usdc, QuoteInput};
 use caixa_core::rpc::HttpGet;
@@ -150,6 +150,7 @@ pub fn execute_charge<H: HttpGet>(
         message: args.message.clone(),
     })?;
 
+    let phantom = phantom_browse_https(&url);
     let summary = shape_output(&format!(
         "Caixa charge ready (T1 — no keys held).\n\
          Invoice: {}\n\
@@ -157,8 +158,9 @@ pub fn execute_charge<H: HttpGet>(
          Recipient: {}\n\
          Mint: {}\n\
          Memo: {}\n\
+         Clickable (Telegram): paste as plain text, do NOT wrap in markdown:\n{}\n\
          Solana Pay URL:\n{}\n\
-         Show this URL/QR to the customer. A human wallet signs the payment.",
+         Customer wallet signs. Agent never signs or submits.",
         args.invoice_id,
         amount_usdc,
         amount_brl_str
@@ -168,6 +170,7 @@ pub fn execute_charge<H: HttpGet>(
         recipient.short(),
         mint.short(),
         memo,
+        phantom,
         url
     ));
 

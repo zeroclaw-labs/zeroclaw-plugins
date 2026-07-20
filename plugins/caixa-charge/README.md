@@ -45,7 +45,9 @@ Customer wallet pays. Agent never holds funds.
 }
 ```
 
-→ `solana:<recipient>?amount=<USDC>&spl-token=<USDC>&memo=INV%3Dmesa-4%20BRL%3D25.00&…`
+→ Summary includes:
+- `https://phantom.app/ul/browse/…` (Telegram-clickable; paste plain text, no markdown)
+- `solana:<recipient>?amount=<USDC>&spl-token=<USDC>&memo=INV%3Dmesa-4%20BRL%3D25.00&…`
 
 ## Threat model
 
