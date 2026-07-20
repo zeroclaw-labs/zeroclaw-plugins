@@ -81,6 +81,15 @@ it. Any source, manifest, compiler, or WIT change that changes the package bytes
 requires a new manifest version; new versions are appended so pinned installs
 continue resolving to their original artifact.
 
+## Solana Payments suite (Track A)
+
+Four Solana tool plugins for agent payments (T0/T1/T2), packaged together:
+
+- Docs: [`docs/solana-payments-suite.md`](./docs/solana-payments-suite.md)
+- Config example: [`docs/solana-payments-config.example.toml`](./docs/solana-payments-config.example.toml)
+- Plugins: `solana-pay-request`, `payment-watch`, `spl-transfer-build`, `x402-settle`
+- Package locally: `./scripts/package-solana-payments.sh` or `.\scripts\package-solana-payments.ps1`
+
 ## Add a plugin
 
 Start with the **plugin authoring guide series** in the ZeroClaw book

@@ -1,0 +1,40 @@
+# Example ZeroClaw operator config for the Solana Payments suite.
+# Copy keys into your real config; never commit session keys or RPC secrets.
+
+[plugins]
+enabled = true
+
+# ── T1: Solana Pay charge (no keys) ─────────────────────────────────────────
+[solana-pay-request]
+default_label = "Cafe ZeroClaw"
+max_amount = "500"
+allowed_mints = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+allow_native = "false"
+memo_prefix = "INV-"
+
+# ── T0: Confirm payment ─────────────────────────────────────────────────────
+[payment-watch]
+rpc_url = "https://api.mainnet-beta.solana.com"
+# rpc_api_key = "…"
+# rpc_api_key_header = "Authorization"
+commitment = "confirmed"
+max_signatures = "15"
+
+# ── T1: Unsigned SPL transfer for human/Squads ──────────────────────────────
+[spl-transfer-build]
+rpc_url = "https://api.mainnet-beta.solana.com"
+max_amount = "500"
+allowed_mints = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+commitment = "confirmed"
+
+# ── T2: x402 settle — SESSION WALLET ONLY ───────────────────────────────────
+# Fund a throwaway key with limited USDC. Never a main wallet.
+[x402-settle]
+rpc_url = "https://api.mainnet-beta.solana.com"
+max_amount = "5"
+daily_cap = "20"
+spent_today = "0"
+allowed_mints = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+# allowed_payees = "MerchantPubkeyHere…"
+approval_token = "rotate-me-per-session"
+# session_key = "base58-or-json-byte-array-SESSION-ONLY"
