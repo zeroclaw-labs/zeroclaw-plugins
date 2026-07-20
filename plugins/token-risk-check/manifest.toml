@@ -1,0 +1,12 @@
+name = "token-risk-check"
+version = "0.1.0"
+description = "Red/amber/green risk assessment of an SPL token mint: mint/freeze authorities, holder concentration, Token-2022 extensions"
+author = "Abhigyan Singh"
+wasm_path = "token_risk_check.wasm"
+capabilities = ["tool"]
+# http_client: outbound JSON-RPC calls to the operator's Solana RPC endpoint
+# (TLS is performed host-side).
+# config_read: read rpc_url and risk thresholds from this plugin's own config
+# section. Without it the plugin falls back to the public mainnet RPC and
+# default thresholds.
+permissions = ["http_client", "config_read"]
