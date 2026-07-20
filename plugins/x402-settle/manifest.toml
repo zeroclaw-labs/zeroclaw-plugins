@@ -1,0 +1,9 @@
+name = "x402-settle"
+version = "0.1.0"
+description = "T2: settle HTTP 402 (x402) payments on Solana with session key, hard caps, mint/payee allowlists, and approval gate."
+author = "ZeroClaw Solana Track"
+wasm_path = "x402_settle.wasm"
+capabilities = ["tool"]
+# http_client: paywalled resource + Solana JSON-RPC (TLS host-side)
+# config_read: session key + safety rails from THIS plugin's jailed section only
+permissions = ["http_client", "config_read"]

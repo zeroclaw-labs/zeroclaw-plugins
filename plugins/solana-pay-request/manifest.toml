@@ -1,0 +1,9 @@
+name = "solana-pay-request"
+version = "0.1.0"
+description = "Build Solana Pay transfer-request URLs and QR-ready payloads (T1). No signing, no secrets."
+author = "ZeroClaw Solana Track"
+wasm_path = "solana_pay_request.wasm"
+capabilities = ["tool"]
+# config_read: merchant defaults, max_amount, mint allowlist from this plugin's
+# own jailed section. No private keys. No http_client — URL construction only.
+permissions = ["config_read"]

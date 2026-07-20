@@ -1,0 +1,9 @@
+name = "payment-watch"
+version = "0.1.0"
+description = "Watch a Solana address or Solana Pay reference for an expected payment (T0 read-only). Closes the invoice loop."
+author = "ZeroClaw Solana Track"
+wasm_path = "payment_watch.wasm"
+capabilities = ["tool"]
+# http_client: Solana JSON-RPC over wasi:http (TLS host-side).
+# config_read: rpc_url and optional api key from this plugin's jailed section.
+permissions = ["http_client", "config_read"]
