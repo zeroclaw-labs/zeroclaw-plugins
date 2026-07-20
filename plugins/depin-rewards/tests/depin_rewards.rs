@@ -1,0 +1,104 @@
+// depin-rewards host integration tests over the pure core (MockHttp).
+//
+// Slice A (RED → GREEN): `HttpClient` trait dispatch + `MockHttp` scripted
+// responses + `HttpError` / `RewardsError` variants. Drives the minimal API in
+// src/depin_rewards.rs. Subsequent slices add config / Relay fetch / watch /
+// claim-tx tests.
+//
+// Import path = `<crate>::<module>::*` = `depin_rewards::depin_rewards::*`
+// (crate `depin-rewards` → lib `depin_rewards`; module `depin_rewards`).
+use depin_rewards::depin_rewards::{HttpError, HttpClient, MockHttp, RewardsError};
+
+#[test]
+fn mock_http_get_returns_scripted() {
+  // A scripted GET response is returned verbatim for the registered URL.
+  let mut mock = MockHttp::new();
+  mock.set_get(
+    "https://api.relaywireless.com/v1/helium/l2/hotspots/abc".to_string(),
+    b"{\"owner\":\"base58pk\"}".to_vec(),
+  );
+
+  let h: &dyn HttpClient = &mock;
+  let body = h
+    .get(
+      "https://api.relaywireless.com/v1/helium/l2/hotspots/abc",
+      "Bearer test-key",
+    )
+    .expect("registered GET must return its scripted body");
+
+  assert_eq!(body, b"{\"owner\":\"base58pk\"}");
+}
+
+#[test]
+fn mock_http_get_unregistered_is_err() {
+  // An unregistered URL fails closed — never silently returns empty.
+  let mock = MockHttp::new();
+  let h: &dyn HttpClient = &mock;
+  let res = h.get("https://unregistered.example/", "Bearer x");
+  assert!(res.is_err(), "GET on an unregistered URL must error");
+}
+
+#[test]
+fn mock_http_post_records_call_and_returns_scripted() {
+  // post_form records (url, fields) for later assertion AND returns the
+  // scripted response body (e.g. a Telegram sendMessage ack).
+  let mut mock = MockHttp::new();
+  mock.set_post(
+    "https://api.telegram.org/bot<TOKEN>/sendMessage".to_string(),
+    b"{\"ok\":true}".to_vec(),
+  );
+
+  let h: &dyn HttpClient = &mock;
+  let fields = vec![
+    ("chat_id".to_string(), "123456".to_string()),
+    ("text".to_string(), "offline!".to_string()),
+  ];
+  let resp = h
+    .post_form("https://api.telegram.org/bot<TOKEN>/sendMessage", &fields)
+    .expect("registered POST must return its scripted body");
+  assert_eq!(resp, b"{\"ok\":true}");
+
+  let posts = mock.posts();
+  assert_eq!(posts.len(), 1, "exactly one POST recorded");
+  assert_eq!(posts[0].0, "https://api.telegram.org/bot<TOKEN>/sendMessage");
+  assert_eq!(posts[0].1.len(), 2);
+  assert_eq!(posts[0].1[0].0, "chat_id");
+  assert_eq!(posts[0].1[1].1, "offline!");
+}
+
+#[test]
+fn http_client_is_object_safe() {
+  // The trait must be usable as `&dyn HttpClient` (dynamic dispatch) — the
+  // pure core takes `&dyn HttpClient` so the shim can swap MockHttp (host
+  // tests) for a real waki impl (wasm) without touching call sites.
+  fn run_through(h: &dyn HttpClient) {
+    let _ = h.get("https://x/", "Bearer y");
+    let _ = h.post_form("https://x/", &[]);
+  }
+  let mock = MockHttp::new();
+  run_through(&mock);
+}
+
+#[test]
+fn http_error_variants_debug() {
+  // Errors are specific + traceable (Debug) — never opaque.
+  let e = HttpError::Status(404, "hotspot not found".to_string());
+  let s = format!("{e:?}");
+  assert!(s.contains("404"), "Debug must carry the status code");
+  assert!(s.contains("hotspot not found"));
+}
+
+#[test]
+fn rewards_error_variants_debug() {
+  // The top-level error enum carries actionable, specific messages.
+  let cfg = RewardsError::Config("missing required key: relay_api_key".to_string());
+  assert!(format!("{cfg:?}").contains("relay_api_key"));
+
+  let relay = RewardsError::Relay("402 quota exhausted".to_string());
+  assert!(format!("{relay:?}").contains("402"));
+
+  // Http wraps the transport error.
+  let http = RewardsError::Http(HttpError::Status(429, "too many requests".to_string()));
+  let h = format!("{http:?}");
+  assert!(h.contains("429"));
+}
