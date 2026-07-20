@@ -455,3 +455,124 @@ pub fn do_status(
     summary,
   })
 }
+
+// ── Rewards (Relay iot/mobile-reward-shares/totals) ───────────────────────────
+
+/// Aggregated rewards for a hotspot over a time range (from the Relay
+/// `/totals` endpoint — one call, returns the breakdown directly). The list
+/// endpoint (`/iot-reward-shares`) has a deeply-nested per-reward `amount`
+/// path that needs real-response verification (Relay key) — deferred; the
+/// totals endpoint is the clean primary for the daily-summary use case.
+#[derive(Debug)]
+pub struct RewardSummary {
+  pub total_amount: u64,
+  pub beacon_amount: u64,
+  pub witness_amount: u64,
+  pub dc_transfer_amount: u64,
+  pub from_iso: String,
+  pub to_iso: String,
+}
+
+impl RewardSummary {
+  /// Parse the Relay `/totals` response: four u64 totals. `from_iso`/`to_iso`
+  /// are carried through (the endpoint doesn't echo them) for the shaped output.
+  pub fn parse_totals(json: &[u8], from_iso: &str, to_iso: &str) -> Result<Self, RewardsError> {
+    #[derive(serde::Deserialize)]
+    struct RawTotals {
+      total_beacon_amount: u64,
+      total_witness_amount: u64,
+      total_dc_transfer_amount: u64,
+      total_amount: u64,
+    }
+    let raw: RawTotals = serde_json::from_slice(json)
+      .map_err(|e| RewardsError::Parse(format!("reward totals: {e}")))?;
+    Ok(RewardSummary {
+      total_amount: raw.total_amount,
+      beacon_amount: raw.total_beacon_amount,
+      witness_amount: raw.total_witness_amount,
+      dc_transfer_amount: raw.total_dc_transfer_amount,
+      from_iso: from_iso.to_string(),
+      to_iso: to_iso.to_string(),
+    })
+  }
+}
+
+/// `GET {base}/helium/l2/{net}-reward-shares/totals?from=&to=&hotspot_key=` →
+/// parsed [`RewardSummary`]. `net` = "iot" | "mobile". Status codes map as in
+/// `fetch_hotspot`.
+pub fn fetch_rewards(
+  http: &dyn HttpClient,
+  cfg: &RewardsConfig,
+  net: &str,
+  hotspot_key: &str,
+  from: &str,
+  to: &str,
+) -> Result<RewardSummary, RewardsError> {
+  let url = format!(
+    "{}/helium/l2/{}-reward-shares/totals?from={}&to={}&hotspot_key={}",
+    cfg.relay_base_url, net, from, to, hotspot_key
+  );
+  let bearer = format!("Bearer {}", cfg.relay_api_key);
+  let body = http.get(&url, &bearer).map_err(map_relay_http)?;
+  RewardSummary::parse_totals(&body, from, to)
+}
+
+/// Format an atomic-token amount (Helium IOT/MOBILE = 6 decimals) to a
+/// human-readable 2-decimal string, rounded. Never emits the raw u64.
+/// `3_420_000` → `"3.42"`; `0` → `"0.00"`; `999_999` → `"1.00"` (rounds up).
+pub fn format_amount(atomic: u64, decimals: u8) -> String {
+  if decimals == 0 {
+    return atomic.to_string();
+  }
+  if decimals < 2 {
+    let div = 10u64.pow(decimals as u32);
+    return format!("{}.{:0>width$}", atomic / div, atomic % div, width = decimals as usize);
+  }
+  let divisor = 10u64.pow(decimals as u32);
+  let whole = atomic / divisor;
+  let frac = atomic % divisor;
+  let two_dp_divisor = 10u64.pow((decimals as u32) - 2);
+  let frac_2 = (frac + two_dp_divisor / 2) / two_dp_divisor; // round half-up to 2 dp
+  if frac_2 >= 100 {
+    format!("{}.00", whole + 1) // rounding overflowed (e.g. 0.999999 → 1.00)
+  } else {
+    format!("{}.{:02}", whole, frac_2)
+  }
+}
+
+/// Shape a rewards summary into a ≤200-token summary (SPEC-3 §7).
+fn shape_summary(info: &HotspotInfo, rewards: &RewardSummary, net: &str) -> String {
+  let symbol = if net == "mobile" { "MOBILE" } else { "IOT" };
+  format!(
+    "✓ rewards {} — earned {} {} ({}–{})\n  beacon {} · witness {} · dc-transfer {}\n  owner: {}",
+    info.name,
+    format_amount(rewards.total_amount, 6),
+    symbol,
+    rewards.from_iso,
+    rewards.to_iso,
+    format_amount(rewards.beacon_amount, 6),
+    format_amount(rewards.witness_amount, 6),
+    format_amount(rewards.dc_transfer_amount, 6),
+    short_addr(&info.owner),
+  )
+}
+
+/// `action = "summary"`: rewards for a hotspot over a time range + shape.
+/// `from`/`to` are ISO8601 (the shim defaults them to 00:00-today-UTC / now).
+pub fn do_summary(
+  http: &dyn HttpClient,
+  cfg: &RewardsConfig,
+  id: &str,
+  from: &str,
+  to: &str,
+) -> Result<RewardsOutput, RewardsError> {
+  enforce_hotspot_allowlist(cfg, id)?;
+  let info = fetch_hotspot(http, cfg, id)?;
+  let net = info.primary_network();
+  let rewards = fetch_rewards(http, cfg, net, id, from, to)?;
+  let summary = shape_summary(&info, &rewards, net);
+  Ok(RewardsOutput {
+    is_active: info.is_active(),
+    summary,
+  })
+}

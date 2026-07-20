@@ -8,8 +8,9 @@
 // Import path = `<crate>::<module>::*` = `depin_rewards::depin_rewards::*`
 // (crate `depin-rewards` → lib `depin_rewards`; module `depin_rewards`).
 use depin_rewards::depin_rewards::{
-  do_status, enforce_hotspot_allowlist, fetch_hotspot, HttpError, HttpClient, HotspotInfo,
-  MockHttp, RewardsConfig, RewardsError,
+  do_status, do_summary, enforce_hotspot_allowlist, fetch_hotspot, fetch_rewards,
+  format_amount, HttpError, HttpClient, HotspotInfo, MockHttp, RewardSummary,
+  RewardsConfig, RewardsError,
 };
 use std::collections::HashMap;
 
@@ -438,4 +439,76 @@ fn do_status_rejects_unknown_hotspot() {
   let err = do_status(&mock, &cfg, "evil-id").unwrap_err();
   assert!(matches!(err, RewardsError::Config(_)));
   assert!(format!("{err:?}").contains("allowlist"));
+}
+
+// ── Slice D: RewardSummary + fetch_rewards + do_summary ───────────────────────
+
+const REWARD_TOTALS: &str = r#"{"total_beacon_amount":1100000,"total_witness_amount":2200000,"total_dc_transfer_amount":120000,"total_amount":3420000}"#;
+
+#[test]
+fn reward_summary_parses_totals() {
+  let s = RewardSummary::parse_totals(
+    REWARD_TOTALS.as_bytes(),
+    "2026-07-20T00:00:00Z",
+    "2026-07-20T17:00:00Z",
+  )
+  .unwrap();
+  assert_eq!(s.total_amount, 3_420_000);
+  assert_eq!(s.beacon_amount, 1_100_000);
+  assert_eq!(s.witness_amount, 2_200_000);
+  assert_eq!(s.dc_transfer_amount, 120_000);
+  assert_eq!(s.from_iso, "2026-07-20T00:00:00Z");
+}
+
+#[test]
+fn fetch_rewards_200_returns_summary() {
+  let mut mock = MockHttp::new();
+  mock.set_get(
+    "https://api.relaywireless.com/v1/helium/l2/iot-reward-shares/totals\
+?from=2026-07-20T00:00:00Z&to=2026-07-20T17:00:00Z&hotspot_key=ecc-1"
+      .to_string(),
+    REWARD_TOTALS.as_bytes().to_vec(),
+  );
+  let cfg = base_cfg();
+  let s = fetch_rewards(
+    &mock,
+    &cfg,
+    "iot",
+    "ecc-1",
+    "2026-07-20T00:00:00Z",
+    "2026-07-20T17:00:00Z",
+  )
+  .unwrap();
+  assert_eq!(s.total_amount, 3_420_000);
+}
+
+#[test]
+fn format_amount_rounds_to_2dp() {
+  assert_eq!(format_amount(3_420_000, 6), "3.42");
+  assert_eq!(format_amount(0, 6), "0.00");
+  assert_eq!(format_amount(1_234_567, 6), "1.23");
+  assert_eq!(format_amount(1_500_000, 6), "1.50");
+  assert_eq!(format_amount(999_999, 6), "1.00"); // 0.999999 rounds up
+  assert_eq!(format_amount(5_000_000, 6), "5.00");
+}
+
+#[test]
+fn do_summary_shape_contains_amount_and_name() {
+  let mut mock = MockHttp::new();
+  mock.set_get(
+    "https://api.relaywireless.com/v1/helium/l2/hotspots/ecc-1".to_string(),
+    HOTSPOT_IOT_ONLINE.as_bytes().to_vec(),
+  );
+  mock.set_get(
+    "https://api.relaywireless.com/v1/helium/l2/iot-reward-shares/totals\
+?from=f&to=t&hotspot_key=ecc-1"
+      .to_string(),
+    REWARD_TOTALS.as_bytes().to_vec(),
+  );
+  let cfg = base_cfg();
+  let out = do_summary(&mock, &cfg, "ecc-1", "f", "t").unwrap();
+  assert!(out.summary.contains("earned"), "summary: {}", out.summary);
+  assert!(out.summary.contains("3.42"), "summary: {}", out.summary);
+  assert!(out.summary.contains("tall-plum-ocelot"));
+  assert!(out.summary.len() <= 800, "too long: {}", out.summary.len());
 }
