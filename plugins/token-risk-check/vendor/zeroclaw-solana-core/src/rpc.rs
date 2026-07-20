@@ -178,6 +178,85 @@ pub fn get_token_largest_accounts<T: HttpTransport>(
         .collect())
 }
 
+/// One SPL token balance held by a wallet.
+pub struct TokenHolding {
+    pub mint: String,
+    /// Balance in the token's base units.
+    pub amount: u64,
+    pub decimals: u8,
+}
+
+/// `getTokenAccountsByOwner` (jsonParsed) → a wallet's non-zero SPL token
+/// balances, across both the SPL Token and Token-2022 programs. Zero/dust
+/// accounts are dropped and the total is capped so a wallet holding thousands
+/// of accounts cannot flood the caller. A per-program RPC failure is tolerated
+/// (the other program's holdings are still returned); only a total failure of
+/// both queries surfaces as `Err`. Results are largest-balance-first.
+pub fn get_token_accounts_by_owner<T: HttpTransport>(
+    transport: &T,
+    url: &str,
+    owner: &Pubkey,
+) -> Result<Vec<TokenHolding>, String> {
+    let mut holdings: Vec<TokenHolding> = Vec::new();
+    let mut any_ok = false;
+    let mut last_err = "getTokenAccountsByOwner: no result".to_string();
+    for program in [
+        crate::pubkey::token_program(),
+        crate::pubkey::token_2022_program(),
+    ] {
+        let result = match rpc_call(
+            transport,
+            url,
+            "getTokenAccountsByOwner",
+            json!([
+                owner.to_base58(),
+                {"programId": program.to_base58()},
+                {"encoding": "jsonParsed", "commitment": "confirmed"}
+            ]),
+        ) {
+            Ok(r) => r,
+            Err(e) => {
+                last_err = e;
+                continue;
+            }
+        };
+        any_ok = true;
+        let Some(entries) = result["value"].as_array() else {
+            continue;
+        };
+        // Cap per-program scan so a hostile node can't make us allocate forever.
+        for e in entries.iter().take(300) {
+            let info = &e["account"]["data"]["parsed"]["info"];
+            let amount: u64 = info["tokenAmount"]["amount"]
+                .as_str()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(0);
+            if amount == 0 {
+                continue;
+            }
+            let Some(mint) = info["mint"].as_str() else {
+                continue;
+            };
+            holdings.push(TokenHolding {
+                mint: mint.to_string(),
+                amount,
+                decimals: info["tokenAmount"]["decimals"].as_u64().unwrap_or(0) as u8,
+            });
+            if holdings.len() >= 50 {
+                break;
+            }
+        }
+    }
+    if !any_ok {
+        return Err(last_err);
+    }
+    // Largest raw balance first (a rough heuristic — there is no price oracle
+    // here, so this ranks by base units, not USD value). Consumers show the
+    // top few and summarize the rest.
+    holdings.sort_by(|a, b| b.amount.cmp(&a.amount));
+    Ok(holdings)
+}
+
 /// One entry of `getSignaturesForAddress`.
 pub struct SignatureInfo {
     pub signature: String,
