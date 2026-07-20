@@ -1,0 +1,7 @@
+name = "governance-vote-build"
+version = "0.1.0"
+description = "Build allowlisted, unsigned Realms vote transactions for human review and signing"
+author = "sclee980528-prog"
+wasm_path = "governance_vote_build.wasm"
+capabilities = ["tool"]
+permissions = ["http_client", "config_read"]
