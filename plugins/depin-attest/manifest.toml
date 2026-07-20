@@ -1,0 +1,5 @@
+name = "depin-attest"
+version = "0.1.0"
+wasm_path = "depin_attest.wasm"
+capabilities = ["tool"]
+permissions = ["http_client", "config_read"]

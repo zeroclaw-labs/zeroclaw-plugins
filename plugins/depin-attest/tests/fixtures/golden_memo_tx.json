@@ -1,0 +1,9 @@
+{
+  "description": "Golden legacy Memo message from @solana/web3.js. Rust encode::serialize_message must byte-match message_hex.",
+  "fee_payer": "EN4MZ7ATbt67PgieFVHucBK6eA89x2cZZpQ1UqLjW94t",
+  "recent_blockhash": "EkSnNWid2cvwEVnVx9aBqawnmiCNiDgp3gUdkDPTKN1N",
+  "memo_program": "MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr",
+  "memo": "zeroclaw|v1|test-device|1753000000|42|deadbeef",
+  "message_len": 150,
+  "message_hex": "01000102c68ceb7a31abf44c164b9ef7eaae64977e4ae38b334eb4d3f6837cdd4338f989054a535a992921064d24e87160da387c7c35b5ddbc92bb81e41fa8404105448dcc490e928cd2e3873bb343fc95da33179ca60f4dbf46c2c36e91299d55d4e6b90101002e7a65726f636c61777c76317c746573742d6465766963657c313735333030303030307c34327c6465616462656566"
+}
