@@ -1,0 +1,8 @@
+name = "spl-transfer-build"
+version = "0.1.0"
+description = "Build unsigned SPL/SOL transfer transactions (base64) with ATA handling + memo + human-readable summary. Tier 1: zero secrets — host or human signs."
+author = "nandy-technologies"
+wasm_path = "spl_transfer_build.wasm"
+capabilities = ["tool"]
+# http_client: RPC reads only — getLatestBlockhash + getTokenAccountsByOwner (ATA lookup).
+permissions = ["http_client", "config_read"]
