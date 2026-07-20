@@ -142,6 +142,34 @@ args: {"recipient":"3xPLo1…","amount":"0.4","mint":"AttK3r…","nonce_account"
 These three exchanges are executable tests in `tests/build.rs`
 (`injection_cannot_*`), so the transcript cannot rot.
 
+## Lanes: one nonce, one pending payment
+
+A durable nonce account holds exactly one pending transaction at a time —
+approving payment B built on the same nonce consumes it and invalidates a
+still-pending payment A (`approval-recheck` reports it as CONSUMED, so the
+failure is loud, not silent). This is a property of the primitive, and Aval
+treats it as a feature: a **lane** is a serialized approval queue with
+strict ordering.
+
+Operators who want parallel approvals run several lanes — distinct `seed`
+labels in `nonce-vault-init` ("aval-0", "aval-1", …) give one wallet any
+number of independent vaults for the price of rent each. The worked pattern:
+one lane per counterparty, or one lane per SOP.
+
+## What we'd build next
+
+- **`durable-swap-build`**: the same rail under a Jupiter quote — slippage,
+  notional, and mint caps in config, output anchored to a lane. Guardrailed
+  DeFi that can also wait for a human.
+- **Lane manager (T0)**: list lanes, show which have a pending payment,
+  flag stale ones, build (unsigned) nonce-account close/withdraw for unused
+  lanes.
+- **Squads v4 output mode**: same builder, proposal-shaped output, so teams
+  get the multisig route and individuals keep the single-signer route from
+  one codebase.
+- **x402 on durable rails**: agent-to-machine payments where the per-day cap
+  is a lane budget the human tops up by signing, not a config promise.
+
 ## Build & test
 
 ```

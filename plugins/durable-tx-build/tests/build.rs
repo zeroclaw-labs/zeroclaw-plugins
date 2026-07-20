@@ -311,3 +311,23 @@ fn injection_in_memo_changes_nothing_but_the_memo() {
         100_000_000 // still exactly 0.1 SOL
     );
 }
+
+// --- output shaping (bounty trap #3: judges count tokens) ---
+
+#[test]
+fn summary_stays_inside_a_chat_sized_budget() {
+    let http = MockHttp::new(vec![
+        account_json(1_500_000, &system_program(), &nonce_account_data()),
+        balance_json(2_000_000_000),
+    ]);
+    let mut args = sol_args("0.25");
+    args.memo = Some("invoice 412".to_string());
+    let built = build_transfer(&http, &args).unwrap();
+    // The prose the model and the approval gate see stays around 100 tokens.
+    // (The base64 transaction is the deliverable, not noise.)
+    assert!(
+        built.summary.len() < 600,
+        "summary grew to {} chars",
+        built.summary.len()
+    );
+}
