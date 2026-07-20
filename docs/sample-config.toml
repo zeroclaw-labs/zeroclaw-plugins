@@ -1,0 +1,125 @@
+# ZeroClaw Solana plugins — sample configuration
+#
+# Drop the relevant sections into ~/.zeroclaw/config.toml, or apply piecemeal
+# via the CLI:
+#
+#   zeroclaw config set plugins.entries.solana-build-tx.config.rpc_url \
+#       "https://api.devnet.solana.com"
+#
+# Both plugins are stateless (fresh store per call). ALL policy lives in config.
+# See the milestone README §Quickstart for an end-to-end walkthrough.
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# Plugin 1 — solana-build-tx (T1: returns unsigned tx, NEVER signs)
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+[[plugins.entries]]
+name = "solana-build-tx"
+
+[plugins.entries.config]
+# RPC endpoint used for simulateTransaction + getLatestBlockhash.
+rpc_url = "https://api.devnet.solana.com"
+
+# The wallet controlled by the signing backend (Vault / KMS).
+# build-tx sets this as fee_payer on the unsigned message; signer requires it
+# to match its own backend pubkey (defense-in-depth).
+signer_pubkey = "9XJq REPLACE WITH vault-init.sh OUTPUT base58"
+
+# Per-call outflow cap per mint, in BASE units.
+#   USDC = 6 decimals  →  100000000 = 100 USDC
+# A single tx cannot move more than this out of signer_pubkey's token accounts.
+# Daily / monthly caps are enforced by ZeroClaw SOP cadence × per-call cap,
+# NOT here — the plugin is stateless and cannot track cross-call totals.
+per_call_outflow_cap = { "EPjFWcc5 REPLACE WITH USDC MINT" = "100000000" }
+
+# Mints the agent may touch AT ALL. Any other mint appearing in the simulation's
+# pre/post token balances = hard reject.
+mint_allowlist = [
+    "EPjFWcc5 REPLACE WITH USDC MINT",
+]
+
+# Recipients the agent may pay. Empty = allow any (still subject to cap + mint
+# allowlist). Set to an explicit list to lock down who can receive funds.
+recipient_allowlist = []
+
+# Delegates EXPECTED to already exist on signer_pubkey's token accounts
+# (e.g. a Tributary UserPayment PDA the user approved from their own wallet).
+# An active delegate NOT in this list = hard reject (Layer B state-diff check
+# after simulateTransaction). This is how CPI-hidden approve() calls are caught.
+expected_delegates_allowlist = []
+
+# Operator may ADD to the hardcoded baseline blocked list. Cannot REMOVE
+# baseline. The baseline is locked in plugin source:
+#   spl_token      :: { approve, approve_checked, set_authority, close_account }
+#   spl_token_2022 :: { approve, approve_checked, set_authority, close_account }
+# See README §"Why approve() is blocked" for rationale.
+blocked_instructions_extra = []
+
+# IDL registry — keyed by full program_id (base58), value is stringified
+# Anchor 0.30+ IDL JSON. Use @file:<path> to load from a file instead of
+# inlining the (large) JSON. Sample IDLs live in docs/idl/.
+[plugins.entries.config.idl]
+# Keyed by FULL program ID. Value is either inline stringified JSON or
+# @file:<path> (recommended — IDLs are large). Samples: docs/idl/
+# SPL Token-2022 program.
+"TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb" = "@file:docs/idl/spl-token-2022.json"
+# Tributary recurring-payment program.
+"TRibg8W8zmPHQqWtyAD1rEBRXEdy13Mu6qX1Sg42tJ" = "@file:docs/idl/tributary.json"
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# Plugin 2 — solana-keychain-sign (T2: signs + submits via a backend)
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+[[plugins.entries]]
+name = "solana-keychain-sign"
+
+[plugins.entries.config]
+# Which signing backend to use.
+#   vault   — fully working in v0 (waki HTTP to Vault transit /sign endpoint)
+#   aws_kms — STUB in v0 (returns NotImplemented; SigV4 planned for v1)
+#   gcp_kms — STUB in v0 (returns NotImplemented; OAuth2 planned for v1)
+# See docs/backends.md for the full comparison.
+backend = "vault"
+
+# The backend's public key (base58). MUST match build-tx's signer_pubkey —
+# the signer's envelope guard rejects any message whose fee_payer differs.
+# For Vault: this is the ed25519 pubkey of the transit key named below.
+#   Get it from: bash docker/vault-init.sh  (prints VAULT_PUBKEY=<base58>)
+# For AWS KMS / GCP KMS: paste the derived pubkey (v1 will auto-derive).
+signer_pubkey = "9XJq REPLACE WITH vault-init.sh OUTPUT base58"
+
+# RPC endpoint for getLatestBlockhash + sendTransaction + confirmation polling.
+rpc_url = "https://api.devnet.solana.com"
+
+# ── Envelope guards ──
+# The ONLY validation the signer performs. All content-level policy
+# (mints, amounts, recipients, blocked instructions) lives in build-tx.
+# Max serialized message size (bytes). Default 1 KiB.
+max_message_bytes = 1024
+# Max instructions per tx. Default 1, locked for v0 (no composite txs).
+max_instructions = 1
+
+# ── Vault backend (active when backend = "vault") ──
+[plugins.entries.config.vault]
+vault_addr = "http://localhost:8200"
+# dev-root-token-id from docker/vault-dev-compose.yml. Production uses a
+# short-lived token from Vault auth, never a long-lived root token.
+vault_token = "root"
+# The ed25519 transit key created by docker/vault-init.sh.
+vault_key_name = "solana-session"
+
+# ── AWS KMS backend (active when backend = "aws_kms") — STUB in v0 ──
+# Uncomment to wire the stub. Returns NotImplemented until SigV4 lands (v1).
+# [plugins.entries.config.aws_kms]
+# arn              = "arn:aws:kms:us-east-1:123456789012:key/abc123-def456..."
+# region           = "us-east-1"
+# access_key_id    = "AKIA..."
+# secret_access_key = "..."  # prefer an IAM role in production
+
+# ── GCP KMS backend (active when backend = "gcp_kms") — STUB in v0 ──
+# Uncomment to wire the stub. Returns NotImplemented until OAuth2 lands (v1).
+# access_token from: gcloud auth print-access-token
+# [plugins.entries.config.gcp_kms]
+# key_version_name = "projects/x/locations/global/keyRings/y/cryptoKeys/z/cryptoKeyVersions/1"
+# access_token     = "ya29..."
