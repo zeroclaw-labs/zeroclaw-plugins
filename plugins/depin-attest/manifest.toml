@@ -1,0 +1,13 @@
+name = "depin-attest"
+version = "0.1.0"
+description = "Build unsigned Solana transactions that commit a DePIN device attestation on-chain with a durable-nonce replay guard. T1 custody: no signing, no secret keys held."
+author = "Superteam Brasil bounty submission"
+wasm_path = "depin_attest.wasm"
+capabilities = ["tool"]
+# http_client: outbound HTTPS to the operator-supplied Solana RPC endpoint
+#              (TLS is performed host-side). Used to fetch a recent blockhash
+#              and the durable-nonce account state.
+# config_read: read rpc_url, device_id, nonce_account, nonce_authority, and
+#              last_committed_counter from this plugin's own jailed config
+#              section. Never reads or holds any private key.
+permissions = ["http_client", "config_read"]
