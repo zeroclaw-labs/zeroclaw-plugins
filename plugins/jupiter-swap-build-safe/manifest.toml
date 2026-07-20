@@ -1,0 +1,9 @@
+name = "jupiter-swap-build-safe"
+version = "0.1.0"
+description = "Build guarded unsigned Jupiter swap transactions for human approval and audit the returned transaction before exposing it."
+author = "ZeroClaw Labs"
+wasm_path = "jupiter_swap_build_safe.wasm"
+capabilities = ["tool"]
+# http_client: Jupiter quote/swap API plus optional Solana JSON-RPC for decimals, simulation, expiry, and lookup tables.
+# config_read: read administrator policy, endpoints, allowlists, and limits from this plugin's jailed config section.
+permissions = ["http_client", "config_read"]
