@@ -126,3 +126,139 @@ impl HttpClient for MockHttp {
       .ok_or_else(|| HttpError::NotRegistered(url.to_string()))
   }
 }
+
+// ── Config (parsed from the flat `config_read` section) ─────────────────────
+
+/// Plugin configuration parsed from the jailed `config_read` section (flat
+/// `String → String`). Slice B covers the T0 fields (relay + hotspots +
+/// telegram + cadence + network); the claim-tx fields (`rpc_endpoint`,
+/// `rpc_api_key`, `claim_nonce_*`) land in slice G when the unsigned claim-tx
+/// needs them.
+pub struct RewardsConfig {
+  /// Relay API bearer key (free Community plan signup). Required.
+  pub relay_api_key: String,
+  /// Relay API base URL (default `https://api.relaywireless.com/v1`).
+  pub relay_base_url: String,
+  /// Watched hotspot ids (ECC compact key / Solana asset id / UUID).
+  /// JSON array of strings, ≥1 entry. Required.
+  pub hotspots: Vec<String>,
+  /// Telegram bot token (@BotFather). Required.
+  pub telegram_bot_token: String,
+  /// Telegram destination chat id. Required.
+  pub telegram_chat_id: String,
+  /// Polling cadence hint (minutes) for the SOP — informational, not enforced
+  /// by the plugin. Default 120 (keeps a single hotspot under the 1k/mo
+  /// Community quota with headroom).
+  pub poll_interval_minutes: u32,
+  /// Solana network — `"mainnet-beta"` or `"devnet"` (explorer URLs +
+  /// claim-tx target). Default `mainnet-beta`.
+  pub network: String,
+}
+
+impl std::fmt::Debug for RewardsConfig {
+  // Custody: never print the credentials. relay_api_key + telegram_bot_token
+  // are redacted (SPEC-3 §10 — secrets never echoed). The rest (base_url,
+  // hotspot count, chat_id, cadence, network) are non-credentials and useful
+  // for config debugging.
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    f.debug_struct("RewardsConfig")
+      .field("relay_api_key", &"<redacted>")
+      .field("relay_base_url", &self.relay_base_url)
+      .field("hotspots", &format!("[{} hotspot(s)]", self.hotspots.len()))
+      .field("telegram_bot_token", &"<redacted>")
+      .field("telegram_chat_id", &self.telegram_chat_id)
+      .field("poll_interval_minutes", &self.poll_interval_minutes)
+      .field("network", &self.network)
+      .finish()
+  }
+}
+
+impl RewardsConfig {
+  /// Parse from a flat config section. Fails closed on: empty section, missing
+  /// required keys, empty-valued required keys, malformed `hotspots` JSON,
+  /// empty `hotspots` array, non-string `hotspots` entries, bad `network`,
+  /// non-numeric `poll_interval_minutes`.
+  pub fn from_section(section: &HashMap<String, String>) -> Result<Self, RewardsError> {
+    if section.is_empty() {
+      return Err(RewardsError::Config(
+        "not configured: no config section received".to_string(),
+      ));
+    }
+
+    let req = |key: &str| -> Result<String, RewardsError> {
+      section
+        .get(key)
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+        .ok_or_else(|| RewardsError::Config(format!("missing required key: {key}")))
+    };
+
+    let relay_api_key = req("relay_api_key")?;
+    let telegram_bot_token = req("telegram_bot_token")?;
+    let telegram_chat_id = req("telegram_chat_id")?;
+
+    let hotspots_str = section.get("hotspots").map(|s| s.as_str()).unwrap_or("");
+    if hotspots_str.trim().is_empty() {
+      return Err(RewardsError::Config("missing required key: hotspots".to_string()));
+    }
+    let hotspots: Vec<String> = serde_json::from_str(hotspots_str).map_err(|e| {
+      RewardsError::Config(format!("hotspots must be a JSON array of strings: {e}"))
+    })?;
+    if hotspots.is_empty() {
+      return Err(RewardsError::Config("hotspots must have ≥1 entry".to_string()));
+    }
+    if hotspots.iter().any(|h| h.trim().is_empty()) {
+      return Err(RewardsError::Config(
+        "hotspots entries must be non-empty".to_string(),
+      ));
+    }
+
+    let relay_base_url = section
+      .get("relay_base_url")
+      .map(|s| s.trim())
+      .filter(|s| !s.is_empty())
+      .unwrap_or("https://api.relaywireless.com/v1")
+      .to_string();
+
+    let poll_interval_minutes = match section.get("poll_interval_minutes").map(|s| s.trim()) {
+      None | Some("") => 120,
+      Some(s) => s.parse::<u32>().map_err(|e| {
+        RewardsError::Config(format!("poll_interval_minutes must be a u32: {e}"))
+      })?,
+    };
+
+    let network = match section.get("network").map(|s| s.trim()) {
+      None | Some("") => "mainnet-beta".to_string(),
+      Some(s) if s == "mainnet-beta" || s == "devnet" => s.to_string(),
+      Some(other) => {
+        return Err(RewardsError::Config(format!(
+          "network must be 'mainnet-beta' or 'devnet', got '{other}'"
+        )))
+      }
+    };
+
+    Ok(RewardsConfig {
+      relay_api_key,
+      relay_base_url,
+      hotspots,
+      telegram_bot_token,
+      telegram_chat_id,
+      poll_interval_minutes,
+      network,
+    })
+  }
+}
+
+/// Fail-closed guard: reject any hotspot id not in the configured allowlist.
+/// Wired into every action's entry point (slice F) so a malicious message
+/// cannot target an arbitrary hotspot.
+pub fn enforce_hotspot_allowlist(cfg: &RewardsConfig, id: &str) -> Result<(), RewardsError> {
+  if cfg.hotspots.iter().any(|h| h == id) {
+    Ok(())
+  } else {
+    Err(RewardsError::Config(format!(
+      "hotspot '{id}' not in configured allowlist"
+    )))
+  }
+}

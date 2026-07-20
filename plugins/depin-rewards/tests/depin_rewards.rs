@@ -7,7 +7,10 @@
 //
 // Import path = `<crate>::<module>::*` = `depin_rewards::depin_rewards::*`
 // (crate `depin-rewards` → lib `depin_rewards`; module `depin_rewards`).
-use depin_rewards::depin_rewards::{HttpError, HttpClient, MockHttp, RewardsError};
+use depin_rewards::depin_rewards::{
+  enforce_hotspot_allowlist, HttpError, HttpClient, MockHttp, RewardsConfig, RewardsError,
+};
+use std::collections::HashMap;
 
 #[test]
 fn mock_http_get_returns_scripted() {
@@ -101,4 +104,216 @@ fn rewards_error_variants_debug() {
   let http = RewardsError::Http(HttpError::Status(429, "too many requests".to_string()));
   let h = format!("{http:?}");
   assert!(h.contains("429"));
+}
+
+// ── Slice B: RewardsConfig::from_section + enforce_hotspot_allowlist ──────────
+
+fn cfg(keys: &[(&str, &str)]) -> HashMap<String, String> {
+  keys
+    .iter()
+    .map(|(k, v)| (k.to_string(), v.to_string()))
+    .collect()
+}
+
+#[test]
+fn config_valid_minimal() {
+  let c = RewardsConfig::from_section(&cfg(&[
+    ("relay_api_key", "rk"),
+    ("hotspots", "[\"ecc-1\"]"),
+    ("telegram_bot_token", "tgk"),
+    ("telegram_chat_id", "123"),
+  ]))
+  .expect("valid minimal config");
+  assert_eq!(c.relay_api_key, "rk");
+  assert_eq!(c.hotspots, vec!["ecc-1".to_string()]);
+  assert_eq!(c.telegram_bot_token, "tgk");
+  assert_eq!(c.telegram_chat_id, "123");
+}
+
+#[test]
+fn config_defaults_applied() {
+  let c = RewardsConfig::from_section(&cfg(&[
+    ("relay_api_key", "rk"),
+    ("hotspots", "[\"a\"]"),
+    ("telegram_bot_token", "t"),
+    ("telegram_chat_id", "1"),
+  ]))
+  .unwrap();
+  assert_eq!(c.relay_base_url, "https://api.relaywireless.com/v1");
+  assert_eq!(c.poll_interval_minutes, 120);
+  assert_eq!(c.network, "mainnet-beta");
+}
+
+#[test]
+fn config_hotspots_json_array_parses() {
+  let c = RewardsConfig::from_section(&cfg(&[
+    ("relay_api_key", "rk"),
+    ("hotspots", "[\"a\",\"b\",\"c\"]"),
+    ("telegram_bot_token", "t"),
+    ("telegram_chat_id", "1"),
+  ]))
+  .unwrap();
+  assert_eq!(
+    c.hotspots,
+    vec!["a".to_string(), "b".to_string(), "c".to_string()]
+  );
+}
+
+#[test]
+fn config_overrides_applied() {
+  let c = RewardsConfig::from_section(&cfg(&[
+    ("relay_api_key", "rk"),
+    ("hotspots", "[\"a\"]"),
+    ("telegram_bot_token", "t"),
+    ("telegram_chat_id", "1"),
+    ("relay_base_url", "https://custom.example/v2"),
+    ("poll_interval_minutes", "30"),
+    ("network", "devnet"),
+  ]))
+  .unwrap();
+  assert_eq!(c.relay_base_url, "https://custom.example/v2");
+  assert_eq!(c.poll_interval_minutes, 30);
+  assert_eq!(c.network, "devnet");
+}
+
+#[test]
+fn config_empty_section_fails_closed() {
+  let m: HashMap<String, String> = HashMap::new();
+  let err = RewardsConfig::from_section(&m).unwrap_err();
+  assert!(matches!(err, RewardsError::Config(_)));
+  assert!(format!("{err:?}").contains("not configured"));
+}
+
+#[test]
+fn config_missing_relay_api_key() {
+  let err = RewardsConfig::from_section(&cfg(&[
+    ("hotspots", "[\"a\"]"),
+    ("telegram_bot_token", "t"),
+    ("telegram_chat_id", "1"),
+  ]))
+  .unwrap_err();
+  assert!(format!("{err:?}").contains("relay_api_key"));
+}
+
+#[test]
+fn config_empty_relay_api_key_treated_as_missing() {
+  // An empty string is treated as missing (fail closed).
+  let err = RewardsConfig::from_section(&cfg(&[
+    ("relay_api_key", ""),
+    ("hotspots", "[\"a\"]"),
+    ("telegram_bot_token", "t"),
+    ("telegram_chat_id", "1"),
+  ]))
+  .unwrap_err();
+  assert!(format!("{err:?}").contains("relay_api_key"));
+}
+
+#[test]
+fn config_missing_hotspots() {
+  let err = RewardsConfig::from_section(&cfg(&[
+    ("relay_api_key", "rk"),
+    ("telegram_bot_token", "t"),
+    ("telegram_chat_id", "1"),
+  ]))
+  .unwrap_err();
+  assert!(format!("{err:?}").contains("hotspots"));
+}
+
+#[test]
+fn config_hotspots_malformed_json() {
+  let err = RewardsConfig::from_section(&cfg(&[
+    ("relay_api_key", "rk"),
+    ("hotspots", "a,b,c"), // not a JSON array
+    ("telegram_bot_token", "t"),
+    ("telegram_chat_id", "1"),
+  ]))
+  .unwrap_err();
+  assert!(format!("{err:?}").contains("hotspots"));
+}
+
+#[test]
+fn config_hotspots_empty_array() {
+  let err = RewardsConfig::from_section(&cfg(&[
+    ("relay_api_key", "rk"),
+    ("hotspots", "[]"),
+    ("telegram_bot_token", "t"),
+    ("telegram_chat_id", "1"),
+  ]))
+  .unwrap_err();
+  assert!(format!("{err:?}").contains("hotspots"));
+}
+
+#[test]
+fn config_missing_telegram_bot_token() {
+  let err = RewardsConfig::from_section(&cfg(&[
+    ("relay_api_key", "rk"),
+    ("hotspots", "[\"a\"]"),
+    ("telegram_chat_id", "1"),
+  ]))
+  .unwrap_err();
+  assert!(format!("{err:?}").contains("telegram_bot_token"));
+}
+
+#[test]
+fn config_missing_telegram_chat_id() {
+  let err = RewardsConfig::from_section(&cfg(&[
+    ("relay_api_key", "rk"),
+    ("hotspots", "[\"a\"]"),
+    ("telegram_bot_token", "t"),
+  ]))
+  .unwrap_err();
+  assert!(format!("{err:?}").contains("telegram_chat_id"));
+}
+
+#[test]
+fn config_bad_network_rejected() {
+  let err = RewardsConfig::from_section(&cfg(&[
+    ("relay_api_key", "rk"),
+    ("hotspots", "[\"a\"]"),
+    ("telegram_bot_token", "t"),
+    ("telegram_chat_id", "1"),
+    ("network", "testnet"),
+  ]))
+  .unwrap_err();
+  assert!(format!("{err:?}").contains("network"));
+}
+
+#[test]
+fn config_bad_poll_interval_rejected() {
+  let err = RewardsConfig::from_section(&cfg(&[
+    ("relay_api_key", "rk"),
+    ("hotspots", "[\"a\"]"),
+    ("telegram_bot_token", "t"),
+    ("telegram_chat_id", "1"),
+    ("poll_interval_minutes", "not-a-number"),
+  ]))
+  .unwrap_err();
+  assert!(format!("{err:?}").contains("poll_interval_minutes"));
+}
+
+#[test]
+fn allowlist_allows_configured_hotspot() {
+  let c = RewardsConfig::from_section(&cfg(&[
+    ("relay_api_key", "rk"),
+    ("hotspots", "[\"ecc-1\",\"ecc-2\"]"),
+    ("telegram_bot_token", "t"),
+    ("telegram_chat_id", "1"),
+  ]))
+  .unwrap();
+  assert!(enforce_hotspot_allowlist(&c, "ecc-1").is_ok());
+  assert!(enforce_hotspot_allowlist(&c, "ecc-2").is_ok());
+}
+
+#[test]
+fn allowlist_rejects_unknown_hotspot() {
+  let c = RewardsConfig::from_section(&cfg(&[
+    ("relay_api_key", "rk"),
+    ("hotspots", "[\"ecc-1\"]"),
+    ("telegram_bot_token", "t"),
+    ("telegram_chat_id", "1"),
+  ]))
+  .unwrap();
+  let err = enforce_hotspot_allowlist(&c, "evil-id").unwrap_err();
+  assert!(matches!(err, RewardsError::Config(_)));
+  assert!(format!("{err:?}").contains("allowlist"));
 }
