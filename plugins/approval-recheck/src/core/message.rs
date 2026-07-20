@@ -9,8 +9,8 @@
 //! instruction := program_id_index:u8 shortvec<account_index:u8> shortvec<data_byte>
 //! ```
 
-use crate::instruction::{AccountMeta, Instruction};
-use crate::pubkey::Pubkey;
+use crate::core::instruction::{AccountMeta, Instruction};
+use crate::core::pubkey::Pubkey;
 
 // --- compact-u16 ("shortvec") ---
 
@@ -247,8 +247,8 @@ pub fn parse_message(bytes: &[u8]) -> Result<ParsedMessage, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::instruction::{advance_nonce_account, system_transfer};
-    use crate::pubkey::{system_program, sysvar_recent_blockhashes};
+    use crate::core::instruction::{advance_nonce_account, system_transfer};
+    use crate::core::pubkey::{system_program, sysvar_recent_blockhashes};
 
     fn pk(n: u8) -> Pubkey {
         let mut b = [0u8; 32];
@@ -273,7 +273,10 @@ mod tests {
             shortvec_encode_len(&mut out, len);
             assert_eq!(out, expected, "encoding {len}");
             let mut cursor = 0;
-            assert_eq!(shortvec_decode_len(&out, &mut cursor).unwrap(), len as usize);
+            assert_eq!(
+                shortvec_decode_len(&out, &mut cursor).unwrap(),
+                len as usize
+            );
             assert_eq!(cursor, expected.len());
         }
     }

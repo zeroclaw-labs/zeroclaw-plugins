@@ -6,8 +6,7 @@
 //! authority: [u8;32] | durable_nonce (blockhash): [u8;32] | fee_calculator: u64
 //! ```
 
-use crate::codec::b58_encode;
-use crate::pubkey::Pubkey;
+use crate::core::pubkey::Pubkey;
 
 pub const NONCE_ACCOUNT_SIZE: u64 = 80;
 
@@ -17,12 +16,6 @@ pub struct NonceState {
     /// The stored durable nonce, used as the transaction's recent_blockhash.
     pub blockhash: [u8; 32],
     pub lamports_per_signature: u64,
-}
-
-impl NonceState {
-    pub fn blockhash_base58(&self) -> String {
-        b58_encode(&self.blockhash)
-    }
 }
 
 /// Parse the 80-byte nonce account data. Fails closed on anything that is not
@@ -72,7 +65,6 @@ mod tests {
         assert_eq!(st.authority, Pubkey([7u8; 32]));
         assert_eq!(st.blockhash, [9u8; 32]);
         assert_eq!(st.lamports_per_signature, 5000);
-        assert!(!st.blockhash_base58().is_empty());
     }
 
     #[test]

@@ -6,7 +6,7 @@
 use curve25519_dalek::edwards::CompressedEdwardsY;
 use sha2::{Digest, Sha256};
 
-use crate::codec::{b58_decode, b58_encode};
+use crate::core::codec::{b58_decode, b58_encode};
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct Pubkey(pub [u8; 32]);
@@ -152,8 +152,12 @@ mod tests {
     fn derived_pdas_are_off_curve_and_deterministic() {
         let wallet = token_program(); // any valid pubkey works as input
         let mint = ata_program();
-        let (a1, bump1) = find_program_address(&[&wallet.0, &token_program().0, &mint.0], &ata_program()).unwrap();
-        let (a2, bump2) = find_program_address(&[&wallet.0, &token_program().0, &mint.0], &ata_program()).unwrap();
+        let (a1, bump1) =
+            find_program_address(&[&wallet.0, &token_program().0, &mint.0], &ata_program())
+                .unwrap();
+        let (a2, bump2) =
+            find_program_address(&[&wallet.0, &token_program().0, &mint.0], &ata_program())
+                .unwrap();
         assert_eq!(a1, a2);
         assert_eq!(bump1, bump2);
         assert!(!is_on_curve(&a1.0));

@@ -3,11 +3,11 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 
-use aval_core::codec::{b64_decode, b64_encode};
-use aval_core::message::parse_transaction;
-use aval_core::nonce::NONCE_ACCOUNT_SIZE;
-use aval_core::pubkey::{create_with_seed, system_program, Pubkey};
-use aval_core::rpc::HttpPost;
+use nonce_vault_init::core::codec::{b64_decode, b64_encode};
+use nonce_vault_init::core::message::parse_transaction;
+use nonce_vault_init::core::nonce::NONCE_ACCOUNT_SIZE;
+use nonce_vault_init::core::pubkey::{create_with_seed, system_program, Pubkey};
+use nonce_vault_init::core::rpc::HttpPost;
 use nonce_vault_init::init::{build_init, InitArgs, DEFAULT_SEED};
 
 struct MockHttp {
@@ -139,7 +139,9 @@ fn fails_closed_on_bad_input() {
     let bad = args(&pk(1), None);
     let mut bad: InitArgs = bad;
     bad.authority = "my main wallet".to_string();
-    assert!(build_init(&http, &bad).unwrap_err().contains("authority rejected"));
+    assert!(build_init(&http, &bad)
+        .unwrap_err()
+        .contains("authority rejected"));
 
     // Hostile seed characters.
     let http = MockHttp::new(vec![]);
@@ -154,7 +156,7 @@ fn fails_closed_on_bad_input() {
     assert!(smuggled.is_err());
 }
 
-// --- output shaping (bounty trap #3: judges count tokens) ---
+// --- output stays chat-sized: the model reads sentences, not payloads ---
 
 #[test]
 fn summary_stays_inside_a_chat_sized_budget() {
@@ -164,5 +166,9 @@ fn summary_stays_inside_a_chat_sized_budget() {
         r#"{"jsonrpc":"2.0","id":1,"result":{"value":{"blockhash":"11111111111111111111111111111111"}}}"#.to_string(),
     ]);
     let out = build_init(&http, &args(&pk(1), None)).unwrap();
-    assert!(out.summary.len() < 600, "summary grew to {} chars", out.summary.len());
+    assert!(
+        out.summary.len() < 600,
+        "summary grew to {} chars",
+        out.summary.len()
+    );
 }

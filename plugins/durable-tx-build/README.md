@@ -9,8 +9,8 @@ the human gives their aval, the chain settles.
 
 An unsigned Solana transaction dies roughly ninety seconds after it is built,
 because its recent blockhash expires. That is fine for a bot that signs its
-own transactions; it is fatal for the approval-gated pattern this bounty asks
-for. The agent drops a payment into a Telegram approval queue, the human is
+own transactions; it is fatal for the approval-gated pattern ZeroClaw
+encourages. The agent drops a payment into a Telegram approval queue, the human is
 at lunch, and by the time they tap "approve" the transaction is a corpse.
 
 `durable-tx-build` builds transfers anchored to a **durable nonce account**
@@ -179,15 +179,39 @@ one lane per counterparty, or one lane per SOP.
 cargo test                                     # host tests, mocked RPC, no wasm needed
 rustup target add wasm32-wasip2
 cargo build --target wasm32-wasip2 --release   # produces durable_tx_build.wasm
+cp target/wasm32-wasip2/release/durable_tx_build.wasm durable_tx_build.wasm
 ```
 
-Pure core in `src/build.rs` (plus the shared `aval-core` crate); the wasm
-component is a `#[cfg(target_family = "wasm")]` shim in `src/lib.rs`.
+## Install
+
+```bash
+zeroclaw plugin install durable-tx-build
+```
+
+or copy this directory (the `.wasm` next to its `manifest.toml`) into your
+configured plugins dir, then enable plugins:
+
+```toml
+[plugins]
+enabled = true
+```
+
+Run the agent with a build that includes a compiler backend, e.g.
+`--features plugins-wasm,plugins-wasm-cranelift`. For runtime-only hosts
+(`--features plugins-wasm`), precompile with a matching wasmtime:
+`wasmtime compile --target <triple> durable_tx_build.wasm -o durable_tx_build.cwasm` and point
+`wasm_path` at the `.cwasm`.
+
+
+Pure core in `src/build.rs`; the wasm component is a
+`#[cfg(target_family = "wasm")]` shim in `src/lib.rs`. Vendored substrate in `src/core/` (canonical source:
+[aval-core](https://github.com/bryankwandou/aval-core), kept self-contained
+here as the registry's per-plugin CI requires).
 
 ## What fought us on wasm32-wasip2 (notes for the next builder)
 
 - `solana-sdk` was never attempted in the component; the friction reports are
-  accurate. `aval-core` hand-rolls base58/base64, compact-u16, legacy message
+  accurate. The vendored core hand-rolls base58/base64, compact-u16, legacy message
   bytes, five system-program instructions, SPL `TransferChecked`, and nonce
   account parsing, all pinned by byte-exact tests.
 - PDA derivation needs an ed25519 off-curve check. `curve25519-dalek` v4 with

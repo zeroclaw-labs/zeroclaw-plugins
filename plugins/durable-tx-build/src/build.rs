@@ -13,25 +13,26 @@
 
 use std::collections::HashMap;
 
-use aval_core::amount::{format_amount, parse_amount, LAMPORTS_PER_SOL_DECIMALS};
-use aval_core::codec::b64_encode;
-use aval_core::instruction::{
+use crate::core::amount::{format_amount, parse_amount, LAMPORTS_PER_SOL_DECIMALS};
+use crate::core::codec::b64_encode;
+use crate::core::instruction::{
     advance_nonce_account, create_ata_idempotent, memo, spl_transfer_checked, system_transfer,
     Instruction,
 };
-use aval_core::message::{compile_message, serialize_unsigned_transaction};
-use aval_core::nonce::parse_nonce_account;
-use aval_core::pubkey::{derive_ata, system_program, token_program, Pubkey};
-use aval_core::rpc::{parse_mint_decimals, parse_token_account_amount, HttpPost, Rpc};
+use crate::core::message::{compile_message, serialize_unsigned_transaction};
+use crate::core::nonce::parse_nonce_account;
+use crate::core::pubkey::{derive_ata, system_program, token_program, Pubkey};
+use crate::core::rpc::{parse_mint_decimals, parse_token_account_amount, HttpPost, Rpc};
 
-pub const DEFAULT_RPC_URL: &str = "https://api.mainnet-beta.solana.com";
 /// Refuse to build without an explicit operator cap. A missing cap is a
 /// configuration error, not permission to spend freely.
 pub const CAP_REQUIRED_MSG: &str =
     "refusing to build: no per-transaction cap configured. Set max_amount_ui in this plugin's config section.";
 
 // deny_unknown_fields closes the argument surface: a prompt-injected model
-// cannot smuggle override flags this plugin never defined.
+// cannot smuggle override flags this plugin never defined. Host-contract
+// assumption: the host injects only `__config`; a new injected key must be
+// added here explicitly (wit/v0 is unfrozen, so this is a pinned assumption).
 #[derive(serde::Deserialize, Debug)]
 #[serde(deny_unknown_fields)]
 pub struct BuildArgs {
@@ -52,7 +53,7 @@ pub struct BuildArgs {
 }
 
 pub struct Config {
-    pub rpc_url: String,
+    pub rpc_url: Option<String>,
     /// Mints the operator allows, as base58 strings. "SOL" allows native SOL.
     pub allowed_mints: Vec<String>,
     /// Per-transaction cap in UI units, per mint symbol/address; "*" applies
@@ -62,10 +63,8 @@ pub struct Config {
 
 impl Config {
     pub fn from_section(section: &HashMap<String, String>) -> Self {
-        let rpc_url = section
-            .get("rpc_url")
-            .cloned()
-            .unwrap_or_else(|| DEFAULT_RPC_URL.to_string());
+        // No default endpoint: the RPC URL is operator-supplied, full stop.
+        let rpc_url = section.get("rpc_url").cloned();
         let allowed_mints = section
             .get("allowed_mints")
             .map(|s| {
@@ -118,7 +117,11 @@ pub struct BuiltTransfer {
 
 pub fn build_transfer<H: HttpPost>(http: &H, args: &BuildArgs) -> Result<BuiltTransfer, String> {
     let cfg = Config::from_section(&args.config);
-    let rpc = Rpc::new(http, &cfg.rpc_url);
+    let rpc_url = cfg
+        .rpc_url
+        .as_deref()
+        .ok_or("no rpc_url configured; set it in this plugin's config section")?;
+    let rpc = Rpc::new(http, rpc_url);
 
     let recipient = Pubkey::from_base58(args.recipient.trim())
         .map_err(|e| format!("recipient rejected: {e}"))?;

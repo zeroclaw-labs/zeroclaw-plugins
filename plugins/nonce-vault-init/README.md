@@ -73,10 +73,39 @@ The transcript-backed injection tests live in `tests/init.rs`
 cargo test                                     # host tests, mocked RPC
 rustup target add wasm32-wasip2
 cargo build --target wasm32-wasip2 --release   # produces nonce_vault_init.wasm
+cp target/wasm32-wasip2/release/nonce_vault_init.wasm nonce_vault_init.wasm
 ```
 
-Pure core in `src/init.rs`; wasm shim in `src/lib.rs`. Shared substrate:
-[`aval-core`](../aval-core).
+## Install
+
+```bash
+zeroclaw plugin install nonce-vault-init
+```
+
+or copy this directory (the `.wasm` next to its `manifest.toml`) into your
+configured plugins dir, then enable plugins:
+
+```toml
+[plugins]
+enabled = true
+```
+
+Run the agent with a build that includes a compiler backend, e.g.
+`--features plugins-wasm,plugins-wasm-cranelift`. For runtime-only hosts
+(`--features plugins-wasm`), precompile with a matching wasmtime:
+`wasmtime compile --target <triple> nonce_vault_init.wasm -o nonce_vault_init.cwasm` and point
+`wasm_path` at the `.cwasm`.
+
+
+Pure core in `src/init.rs`; wasm shim in `src/lib.rs`. Vendored substrate in `src/core/` (canonical source:
+[aval-core](https://github.com/bryankwandou/aval-core), kept self-contained
+here as the registry's per-plugin CI requires).
+
+## What we'd build next / wasm32-wasip2 notes
+
+Suite-level roadmap and the full write-up of what fought us on
+wasm32-wasip2 live in [`durable-tx-build`](../durable-tx-build/README.md)
+(sections "What we'd build next" and "What fought us on wasm32-wasip2").
 
 ## License
 

@@ -5,12 +5,12 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 
+use approval_recheck::core::codec::b64_encode;
+use approval_recheck::core::instruction::{advance_nonce_account, memo, system_transfer};
+use approval_recheck::core::message::{compile_message, serialize_unsigned_transaction};
+use approval_recheck::core::pubkey::{system_program, Pubkey};
+use approval_recheck::core::rpc::HttpPost;
 use approval_recheck::recheck::{recheck, RecheckArgs, Verdict};
-use aval_core::codec::{b64_encode};
-use aval_core::instruction::{advance_nonce_account, memo, system_transfer};
-use aval_core::message::{compile_message, serialize_unsigned_transaction};
-use aval_core::pubkey::{system_program, Pubkey};
-use aval_core::rpc::HttpPost;
 
 struct MockHttp {
     responses: RefCell<Vec<String>>,
@@ -92,7 +92,11 @@ fn ready_when_nonce_fresh_and_funded() {
     let report = recheck(&http, &args(&durable_sol_tx(None))).unwrap();
     assert_eq!(report.verdict, Verdict::Ready);
     assert_eq!(report.actions.len(), 1);
-    assert!(report.actions[0].contains("0.25 SOL"), "{:?}", report.actions);
+    assert!(
+        report.actions[0].contains("0.25 SOL"),
+        "{:?}",
+        report.actions
+    );
     assert!(report.warnings.is_empty(), "{:?}", report.warnings);
 }
 
@@ -118,7 +122,7 @@ fn drifted_when_signer_ran_dry() {
 #[test]
 fn broken_when_nonce_account_gone() {
     let http = MockHttp::new(vec![
-        r#"{"jsonrpc":"2.0","id":1,"result":{"value":null}}"#.to_string(),
+        r#"{"jsonrpc":"2.0","id":1,"result":{"value":null}}"#.to_string()
     ]);
     let report = recheck(&http, &args(&durable_sol_tx(None))).unwrap();
     assert_eq!(report.verdict, Verdict::Broken);
@@ -126,7 +130,7 @@ fn broken_when_nonce_account_gone() {
 
 #[test]
 fn not_durable_for_recent_blockhash_transactions() {
-    // A bare transfer with no advance-nonce prefix: the competitor pattern.
+    // A bare transfer with no advance-nonce prefix: the common unanchored pattern.
     let msg = compile_message(
         &pk(AUTHORITY),
         &[system_transfer(&pk(AUTHORITY), &pk(RECIPIENT), 1)],
@@ -151,7 +155,11 @@ fn injection_memo_is_quoted_data_not_verdict() {
         nonce_account_json([8u8; 32]), // nonce already consumed
     ]);
     let report = recheck(&http, &args(&tx)).unwrap();
-    assert_eq!(report.verdict, Verdict::Consumed, "memo text must not sway the verdict");
+    assert_eq!(
+        report.verdict,
+        Verdict::Consumed,
+        "memo text must not sway the verdict"
+    );
     let memo_line = report.actions.iter().find(|a| a.contains("memo")).unwrap();
     assert!(memo_line.contains("inert data"), "{memo_line}");
 }
@@ -160,9 +168,11 @@ fn injection_memo_is_quoted_data_not_verdict() {
 fn injection_unknown_program_is_flagged_never_explained_away() {
     let stranger_program = pk(66);
     let mut ixs = vec![advance_nonce_account(&pk(NONCE), &pk(AUTHORITY))];
-    ixs.push(aval_core::instruction::Instruction {
+    ixs.push(approval_recheck::core::instruction::Instruction {
         program_id: stranger_program,
-        accounts: vec![aval_core::instruction::AccountMeta::signer_writable(pk(AUTHORITY))],
+        accounts: vec![
+            approval_recheck::core::instruction::AccountMeta::signer_writable(pk(AUTHORITY)),
+        ],
         data: vec![1, 2, 3],
     });
     let msg = compile_message(&pk(AUTHORITY), &ixs, &NONCE_HASH);
@@ -173,7 +183,10 @@ fn injection_unknown_program_is_flagged_never_explained_away() {
     ]);
     let report = recheck(&http, &args(&tx)).unwrap();
     assert!(
-        report.warnings.iter().any(|w| w.contains("unrecognized program")),
+        report
+            .warnings
+            .iter()
+            .any(|w| w.contains("unrecognized program")),
         "{:?}",
         report.warnings
     );
@@ -194,7 +207,7 @@ fn rejects_garbage_and_unknown_fields() {
     assert!(smuggled.is_err());
 }
 
-// --- output shaping (bounty trap #3: judges count tokens) ---
+// --- output stays chat-sized: the model reads sentences, not payloads ---
 
 #[test]
 fn report_stays_inside_a_chat_sized_budget() {
@@ -208,4 +221,116 @@ fn report_stays_inside_a_chat_sized_budget() {
         + report.warnings.iter().map(String::len).sum::<usize>();
     // Whole verdict, decoded actions included, stays around 200 tokens.
     assert!(total < 900, "report grew to {total} chars");
+}
+
+// --- SPL drift and authority checks ---
+
+fn nonce_account_json_with_authority(authority: Pubkey, stored_hash: [u8; 32]) -> String {
+    let mut d = Vec::with_capacity(80);
+    d.extend_from_slice(&1u32.to_le_bytes());
+    d.extend_from_slice(&1u32.to_le_bytes());
+    d.extend_from_slice(&authority.0);
+    d.extend_from_slice(&stored_hash);
+    d.extend_from_slice(&5000u64.to_le_bytes());
+    format!(
+        r#"{{"jsonrpc":"2.0","id":1,"result":{{"value":{{"lamports":1447680,"owner":"{}","data":["{}","base64"]}}}}}}"#,
+        system_program().to_base58(),
+        b64_encode(&d)
+    )
+}
+
+fn token_account_json(amount: u64) -> String {
+    let mut d = vec![0u8; 165];
+    d[64..72].copy_from_slice(&amount.to_le_bytes());
+    format!(
+        r#"{{"jsonrpc":"2.0","id":1,"result":{{"value":{{"lamports":2039280,"owner":"{}","data":["{}","base64"]}}}}}}"#,
+        approval_recheck::core::pubkey::token_program().to_base58(),
+        b64_encode(&d)
+    )
+}
+
+fn durable_spl_tx(amount: u64) -> String {
+    let token_prog = approval_recheck::core::pubkey::token_program();
+    let ixs = vec![
+        advance_nonce_account(&pk(NONCE), &pk(AUTHORITY)),
+        approval_recheck::core::instruction::spl_transfer_checked(
+            &token_prog,
+            &pk(10), // source token account
+            &pk(7),  // mint
+            &pk(11), // destination token account
+            &pk(AUTHORITY),
+            amount,
+            6,
+        ),
+    ];
+    let msg = compile_message(&pk(AUTHORITY), &ixs, &NONCE_HASH);
+    b64_encode(&serialize_unsigned_transaction(&msg))
+}
+
+#[test]
+fn spl_drift_when_source_ran_short() {
+    let http = MockHttp::new(vec![
+        nonce_account_json(NONCE_HASH),
+        balance_json(2_000_000_000),
+        token_account_json(1_000_000), // holds 1, transfer wants 25
+    ]);
+    let report = recheck(&http, &args(&durable_spl_tx(25_000_000))).unwrap();
+    assert_eq!(report.verdict, Verdict::Drifted);
+    assert!(
+        report.headline.contains("no longer holds enough"),
+        "{}",
+        report.headline
+    );
+}
+
+#[test]
+fn spl_drift_when_source_account_gone() {
+    let http = MockHttp::new(vec![
+        nonce_account_json(NONCE_HASH),
+        balance_json(2_000_000_000),
+        r#"{"jsonrpc":"2.0","id":1,"result":{"value":null}}"#.to_string(),
+    ]);
+    let report = recheck(&http, &args(&durable_spl_tx(25_000_000))).unwrap();
+    assert_eq!(report.verdict, Verdict::Drifted);
+    assert!(
+        report.headline.contains("no longer exists"),
+        "{}",
+        report.headline
+    );
+}
+
+#[test]
+fn spl_ready_when_source_covers_it() {
+    let http = MockHttp::new(vec![
+        nonce_account_json(NONCE_HASH),
+        balance_json(2_000_000_000),
+        token_account_json(100_000_000),
+    ]);
+    let report = recheck(&http, &args(&durable_spl_tx(25_000_000))).unwrap();
+    assert_eq!(report.verdict, Verdict::Ready);
+    assert!(
+        report.actions.iter().any(|a| a.contains("25")),
+        "{:?}",
+        report.actions
+    );
+}
+
+#[test]
+fn authority_mismatch_demotes_to_review_required() {
+    // The nonce account's on-chain authority is a stranger: chain state
+    // still "holds", but READY must not be issued.
+    let http = MockHttp::new(vec![
+        nonce_account_json_with_authority(pk(50), NONCE_HASH),
+        balance_json(2_000_000_000),
+    ]);
+    let report = recheck(&http, &args(&durable_sol_tx(None))).unwrap();
+    assert_eq!(report.verdict, Verdict::ReviewRequired);
+    assert!(
+        report
+            .warnings
+            .iter()
+            .any(|w| w.contains("differs from the transaction's signer")),
+        "{:?}",
+        report.warnings
+    );
 }

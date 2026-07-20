@@ -12,6 +12,7 @@
 //!         cargo build --target wasm32-wasip2 --release
 
 pub mod build;
+pub mod core;
 
 #[cfg(target_family = "wasm")]
 mod component {
@@ -22,7 +23,7 @@ mod component {
     });
 
     use crate::build::{build_transfer, parameters_schema, BuildArgs};
-    use aval_core::rpc::HttpPost;
+    use crate::core::rpc::HttpPost;
     use exports::zeroclaw::plugin::plugin_info::Guest as PluginInfo;
     use exports::zeroclaw::plugin::tool::{Guest as Tool, ToolResult};
     use zeroclaw::plugin::logging::{
@@ -87,14 +88,22 @@ mod component {
             let parsed: BuildArgs = match serde_json::from_str(&args) {
                 Ok(a) => a,
                 Err(e) => {
-                    emit(PluginAction::Fail, PluginOutcome::Failure, "invalid arguments");
+                    emit(
+                        PluginAction::Fail,
+                        PluginOutcome::Failure,
+                        "invalid arguments",
+                    );
                     return Ok(fail(format!("invalid arguments: {e}")));
                 }
             };
 
             match build_transfer(&WakiHttp, &parsed) {
                 Ok(built) => {
-                    emit(PluginAction::Complete, PluginOutcome::Success, "transfer built");
+                    emit(
+                        PluginAction::Complete,
+                        PluginOutcome::Success,
+                        "transfer built",
+                    );
                     Ok(ToolResult {
                         success: true,
                         output: serde_json::json!({
@@ -107,7 +116,11 @@ mod component {
                     })
                 }
                 Err(e) => {
-                    emit(PluginAction::Fail, PluginOutcome::Failure, "refused or failed");
+                    emit(
+                        PluginAction::Fail,
+                        PluginOutcome::Failure,
+                        "refused or failed",
+                    );
                     Ok(fail(e))
                 }
             }

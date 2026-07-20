@@ -10,17 +10,19 @@
 
 use std::collections::HashMap;
 
-use aval_core::amount::{format_amount, LAMPORTS_PER_SOL_DECIMALS};
-use aval_core::codec::b64_decode;
-use aval_core::message::{parse_transaction, ParsedMessage};
-use aval_core::nonce::parse_nonce_account;
-use aval_core::pubkey::{
+use crate::core::amount::{format_amount, LAMPORTS_PER_SOL_DECIMALS};
+use crate::core::codec::b64_decode;
+use crate::core::message::{parse_transaction, ParsedMessage};
+use crate::core::nonce::parse_nonce_account;
+use crate::core::pubkey::{
     ata_program, memo_program, system_program, token_2022_program, token_program, Pubkey,
 };
-use aval_core::rpc::{parse_token_account_amount, HttpPost, Rpc};
+use crate::core::rpc::{parse_token_account_amount, HttpPost, Rpc};
 
-pub const DEFAULT_RPC_URL: &str = "https://api.mainnet-beta.solana.com";
-
+// deny_unknown_fields closes the argument surface: a prompt-injected model
+// cannot smuggle override flags this plugin never defined. Host-contract
+// assumption: the host injects only `__config`; a new injected key must be
+// added here explicitly (wit/v0 is unfrozen, so this is a pinned assumption).
 #[derive(serde::Deserialize, Debug)]
 #[serde(deny_unknown_fields)]
 pub struct RecheckArgs {
@@ -73,14 +75,12 @@ pub struct RecheckReport {
     pub warnings: Vec<String>,
 }
 
-const ESTIMATED_FEE_LAMPORTS: u64 = 5_000;
-
 pub fn recheck<H: HttpPost>(http: &H, args: &RecheckArgs) -> Result<RecheckReport, String> {
     let rpc_url = args
         .config
         .get("rpc_url")
         .cloned()
-        .unwrap_or_else(|| DEFAULT_RPC_URL.to_string());
+        .ok_or("no rpc_url configured; set it in this plugin's config section")?;
     let rpc = Rpc::new(http, &rpc_url);
 
     let bytes = b64_decode(args.transaction_base64.trim())?;
@@ -163,7 +163,9 @@ pub fn recheck<H: HttpPost>(http: &H, args: &RecheckArgs) -> Result<RecheckRepor
     // token sources still hold their amounts?
     let fee_payer = msg.account_keys[0];
     let balance = rpc.get_balance(&fee_payer)?;
-    let needed = sol_outflow.saturating_add(ESTIMATED_FEE_LAMPORTS);
+    // The nonce account stores the fee rate captured at nonce creation —
+    // use the chain's own number, not a guess.
+    let needed = sol_outflow.saturating_add(state.lamports_per_signature);
     if balance < needed {
         return Ok(RecheckReport {
             verdict: Verdict::Drifted,
@@ -244,7 +246,11 @@ pub fn recheck<H: HttpPost>(http: &H, args: &RecheckArgs) -> Result<RecheckRepor
 /// Decode instructions into human sentences. Returns total SOL outflow from
 /// the fee payer in lamports. Anything unrecognized becomes a warning — the
 /// human should never sign bytes nobody can explain.
-fn decode_actions(msg: &ParsedMessage, actions: &mut Vec<String>, warnings: &mut Vec<String>) -> u64 {
+fn decode_actions(
+    msg: &ParsedMessage,
+    actions: &mut Vec<String>,
+    warnings: &mut Vec<String>,
+) -> u64 {
     let fee_payer = msg.account_keys[0];
     let mut sol_outflow: u64 = 0;
     for ix in &msg.instructions {
@@ -267,7 +273,10 @@ fn decode_actions(msg: &ParsedMessage, actions: &mut Vec<String>, warnings: &mut
                 ));
                 continue;
             }
-            warnings.push("unrecognized system-program instruction — do not sign unless you understand it".into());
+            warnings.push(
+                "unrecognized system-program instruction — do not sign unless you understand it"
+                    .into(),
+            );
         } else if ix.program == token_program() || ix.program == token_2022_program() {
             if ix.data.first() == Some(&12) && ix.data.len() >= 10 {
                 let amount = u64::from_le_bytes(ix.data[1..9].try_into().expect("8 bytes"));
@@ -275,15 +284,27 @@ fn decode_actions(msg: &ParsedMessage, actions: &mut Vec<String>, warnings: &mut
                 actions.push(format!(
                     "Send {} of token mint {} from {} to {}",
                     format_amount(amount, decimals),
-                    msg.account(ix, 1).map(Pubkey::short).unwrap_or_else(|| "?".into()),
-                    msg.account(ix, 0).map(Pubkey::short).unwrap_or_else(|| "?".into()),
-                    msg.account(ix, 2).map(Pubkey::short).unwrap_or_else(|| "?".into()),
+                    msg.account(ix, 1)
+                        .map(Pubkey::short)
+                        .unwrap_or_else(|| "?".into()),
+                    msg.account(ix, 0)
+                        .map(Pubkey::short)
+                        .unwrap_or_else(|| "?".into()),
+                    msg.account(ix, 2)
+                        .map(Pubkey::short)
+                        .unwrap_or_else(|| "?".into()),
                 ));
                 continue;
             }
-            warnings.push("unrecognized token-program instruction — do not sign unless you understand it".into());
+            warnings.push(
+                "unrecognized token-program instruction — do not sign unless you understand it"
+                    .into(),
+            );
         } else if ix.program == ata_program() {
-            actions.push("Create the recipient's token account if missing (small rent, paid by signer)".into());
+            actions.push(
+                "Create the recipient's token account if missing (small rent, paid by signer)"
+                    .into(),
+            );
         } else if ix.program == memo_program() {
             // The memo is untrusted data. Quote it, cap it, and never let it
             // masquerade as part of the verdict.

@@ -10,6 +10,7 @@
 //! Build:  rustup target add wasm32-wasip2
 //!         cargo build --target wasm32-wasip2 --release
 
+pub mod core;
 pub mod init;
 
 #[cfg(target_family = "wasm")]
@@ -20,8 +21,8 @@ mod component {
         features: ["plugins-wit-v0"],
     });
 
+    use crate::core::rpc::HttpPost;
     use crate::init::{build_init, parameters_schema, InitArgs};
-    use aval_core::rpc::HttpPost;
     use exports::zeroclaw::plugin::plugin_info::Guest as PluginInfo;
     use exports::zeroclaw::plugin::tool::{Guest as Tool, ToolResult};
     use zeroclaw::plugin::logging::{
@@ -85,14 +86,22 @@ mod component {
             let parsed: InitArgs = match serde_json::from_str(&args) {
                 Ok(a) => a,
                 Err(e) => {
-                    emit(PluginAction::Fail, PluginOutcome::Failure, "invalid arguments");
+                    emit(
+                        PluginAction::Fail,
+                        PluginOutcome::Failure,
+                        "invalid arguments",
+                    );
                     return Ok(fail(format!("invalid arguments: {e}")));
                 }
             };
 
             match build_init(&WakiHttp, &parsed) {
                 Ok(outcome) => {
-                    emit(PluginAction::Complete, PluginOutcome::Success, "vault init handled");
+                    emit(
+                        PluginAction::Complete,
+                        PluginOutcome::Success,
+                        "vault init handled",
+                    );
                     Ok(ToolResult {
                         success: true,
                         output: serde_json::json!({
@@ -105,7 +114,11 @@ mod component {
                     })
                 }
                 Err(e) => {
-                    emit(PluginAction::Fail, PluginOutcome::Failure, "refused or failed");
+                    emit(
+                        PluginAction::Fail,
+                        PluginOutcome::Failure,
+                        "refused or failed",
+                    );
                     Ok(fail(e))
                 }
             }

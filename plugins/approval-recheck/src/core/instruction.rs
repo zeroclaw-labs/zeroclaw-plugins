@@ -5,11 +5,10 @@
 //! discriminant followed by fixed-width fields (strings are `u64` length +
 //! bytes). SPL Token uses a single-byte discriminant. These layouts are
 //! stable, documented in the respective program sources, and pinned by the
-//! byte-exact tests in [`crate::message`].
+//! byte-exact tests in [`crate::core::message`].
 
-use crate::pubkey::{
-    ata_program, memo_program, sysvar_recent_blockhashes, sysvar_rent, system_program,
-    token_program, Pubkey,
+use crate::core::pubkey::{
+    ata_program, memo_program, system_program, sysvar_recent_blockhashes, sysvar_rent, Pubkey,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -21,16 +20,32 @@ pub struct AccountMeta {
 
 impl AccountMeta {
     pub fn signer_writable(pubkey: Pubkey) -> Self {
-        Self { pubkey, is_signer: true, is_writable: true }
+        Self {
+            pubkey,
+            is_signer: true,
+            is_writable: true,
+        }
     }
     pub fn signer(pubkey: Pubkey) -> Self {
-        Self { pubkey, is_signer: true, is_writable: false }
+        Self {
+            pubkey,
+            is_signer: true,
+            is_writable: false,
+        }
     }
     pub fn writable(pubkey: Pubkey) -> Self {
-        Self { pubkey, is_signer: false, is_writable: true }
+        Self {
+            pubkey,
+            is_signer: false,
+            is_writable: true,
+        }
     }
     pub fn readonly(pubkey: Pubkey) -> Self {
-        Self { pubkey, is_signer: false, is_writable: false }
+        Self {
+            pubkey,
+            is_signer: false,
+            is_writable: false,
+        }
     }
 }
 
@@ -111,7 +126,10 @@ pub fn system_transfer(from: &Pubkey, to: &Pubkey, lamports: u64) -> Instruction
     data.extend_from_slice(&lamports.to_le_bytes());
     Instruction {
         program_id: system_program(),
-        accounts: vec![AccountMeta::signer_writable(*from), AccountMeta::writable(*to)],
+        accounts: vec![
+            AccountMeta::signer_writable(*from),
+            AccountMeta::writable(*to),
+        ],
         data,
     }
 }
@@ -180,10 +198,4 @@ pub fn memo(text: &str) -> Instruction {
         accounts: vec![],
         data: text.as_bytes().to_vec(),
     }
-}
-
-/// Convenience: the v1 token program (Token-2022 is deliberately refused by
-/// the build tools until extension semantics are handled; see plugin READMEs).
-pub fn spl_token_v1() -> Pubkey {
-    token_program()
 }

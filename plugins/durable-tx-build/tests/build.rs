@@ -5,11 +5,11 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 
-use aval_core::codec::{b64_decode, b64_encode};
-use aval_core::message::parse_transaction;
-use aval_core::pubkey::{system_program, token_program, Pubkey};
-use aval_core::rpc::HttpPost;
 use durable_tx_build::build::{build_transfer, BuildArgs};
+use durable_tx_build::core::codec::{b64_decode, b64_encode};
+use durable_tx_build::core::message::parse_transaction;
+use durable_tx_build::core::pubkey::{system_program, token_program, Pubkey};
+use durable_tx_build::core::rpc::HttpPost;
 
 struct MockHttp {
     responses: RefCell<Vec<String>>,
@@ -204,7 +204,9 @@ fn refuses_free_text_recipient() {
     let http = MockHttp::new(vec![]);
     let mut args = sol_args("0.1");
     args.recipient = "lucas.sol please and thank you".to_string();
-    assert!(build_transfer(&http, &args).unwrap_err().contains("recipient rejected"));
+    assert!(build_transfer(&http, &args)
+        .unwrap_err()
+        .contains("recipient rejected"));
 }
 
 #[test]
@@ -212,7 +214,7 @@ fn refuses_token_2022_mints() {
     let mint = pk(7);
     let mut mint_data = vec![0u8; 90];
     mint_data[44] = 6;
-    let token_2022 = aval_core::pubkey::token_2022_program();
+    let token_2022 = durable_tx_build::core::pubkey::token_2022_program();
     let http = MockHttp::new(vec![
         account_json(1_500_000, &system_program(), &nonce_account_data()),
         account_json(1_000_000, &token_2022, &mint_data),
@@ -245,7 +247,11 @@ fn refuses_insufficient_balance() {
 
 #[test]
 fn refuses_wrong_nonce_owner_and_missing_nonce() {
-    let http = MockHttp::new(vec![account_json(1, &token_program(), &nonce_account_data())]);
+    let http = MockHttp::new(vec![account_json(
+        1,
+        &token_program(),
+        &nonce_account_data(),
+    )]);
     let err = build_transfer(&http, &sol_args("0.1")).unwrap_err();
     assert!(err.contains("not owned by the system program"), "{err}");
 
@@ -312,7 +318,7 @@ fn injection_in_memo_changes_nothing_but_the_memo() {
     );
 }
 
-// --- output shaping (bounty trap #3: judges count tokens) ---
+// --- output stays chat-sized: the model reads sentences, not payloads ---
 
 #[test]
 fn summary_stays_inside_a_chat_sized_budget() {
@@ -356,4 +362,43 @@ fn authority_pin_refuses_foreign_nonce_accounts() {
     args.config
         .insert("authority".to_string(), pk(AUTHORITY).to_base58());
     assert!(build_transfer(&http, &args).is_ok());
+}
+
+#[test]
+fn refuses_oversized_memo() {
+    let http = MockHttp::new(vec![
+        account_json(1_500_000, &system_program(), &nonce_account_data()),
+        balance_json(2_000_000_000),
+    ]);
+    let mut args = sol_args("0.1");
+    args.memo = Some("x".repeat(300));
+    let err = build_transfer(&http, &args).unwrap_err();
+    assert!(err.contains("memo longer than 256"), "{err}");
+}
+
+#[test]
+fn refuses_spl_amount_above_cap() {
+    // The SPL cap check fires the moment decimals are known — before any
+    // token-account lookups.
+    let mint = pk(7);
+    let mut mint_data = vec![0u8; 82];
+    mint_data[44] = 6;
+    let http = MockHttp::new(vec![
+        account_json(1_500_000, &system_program(), &nonce_account_data()),
+        account_json(1_000_000, &token_program(), &mint_data),
+    ]);
+    let args: BuildArgs = serde_json::from_value(serde_json::json!({
+        "recipient": pk(RECIPIENT).to_base58(),
+        "amount": "101",
+        "mint": mint.to_base58(),
+        "nonce_account": pk(NONCE).to_base58(),
+        "__config": {
+            "rpc_url": "http://mock",
+            "allowed_mints": mint.to_base58(),
+            "max_amount_ui": format!("{}:100", mint.to_base58()),
+        },
+    }))
+    .unwrap();
+    let err = build_transfer(&http, &args).unwrap_err();
+    assert!(err.contains("exceeds the per-transaction cap"), "{err}");
 }

@@ -8,8 +8,8 @@
 
 use serde_json::{json, Value};
 
-use crate::codec::{b58_decode, b64_decode};
-use crate::pubkey::Pubkey;
+use crate::core::codec::{b58_decode, b64_decode};
+use crate::core::pubkey::Pubkey;
 
 /// One blocking JSON POST. Implementations must return the raw response body.
 pub trait HttpPost {
@@ -96,10 +96,7 @@ impl<'a, H: HttpPost> Rpc<'a, H> {
     /// Only used by `nonce-vault-init`: the one transaction in this suite
     /// that necessarily uses a recent blockhash (the nonce does not exist yet).
     pub fn get_latest_blockhash(&self) -> Result<[u8; 32], String> {
-        let result = self.call(
-            "getLatestBlockhash",
-            json!([{ "commitment": "confirmed" }]),
-        )?;
+        let result = self.call("getLatestBlockhash", json!([{ "commitment": "confirmed" }]))?;
         let s = result
             .get("value")
             .and_then(|v| v.get("blockhash"))
@@ -133,13 +130,15 @@ pub fn parse_token_account_amount(data: &[u8]) -> Result<u64, String> {
     if data.len() < 72 {
         return Err("token account data too short".into());
     }
-    Ok(u64::from_le_bytes(data[64..72].try_into().expect("8 bytes")))
+    Ok(u64::from_le_bytes(
+        data[64..72].try_into().expect("8 bytes"),
+    ))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::codec::b64_encode;
+    use crate::core::codec::b64_encode;
     use std::cell::RefCell;
 
     pub struct MockHttp {
@@ -179,7 +178,7 @@ mod tests {
         let acct = rpc.get_account(&Pubkey([1; 32])).unwrap().unwrap();
         assert_eq!(acct.lamports, 5);
         assert_eq!(acct.data, vec![1, 2, 3]);
-        assert_eq!(acct.owner, crate::pubkey::system_program());
+        assert_eq!(acct.owner, crate::core::pubkey::system_program());
         assert!(rpc.get_account(&Pubkey([1; 32])).unwrap().is_none());
     }
 
@@ -203,7 +202,10 @@ mod tests {
         ]);
         let rpc = Rpc::new(&http, "http://mock");
         assert_eq!(rpc.get_latest_blockhash().unwrap(), [0u8; 32]);
-        assert_eq!(rpc.get_minimum_balance_for_rent_exemption(80).unwrap(), 1447680);
+        assert_eq!(
+            rpc.get_minimum_balance_for_rent_exemption(80).unwrap(),
+            1447680
+        );
     }
 
     #[test]

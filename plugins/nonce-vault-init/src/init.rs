@@ -14,17 +14,20 @@
 
 use std::collections::HashMap;
 
-use aval_core::amount::{format_amount, LAMPORTS_PER_SOL_DECIMALS};
-use aval_core::codec::b64_encode;
-use aval_core::instruction::{create_account_with_seed, initialize_nonce_account};
-use aval_core::message::{compile_message, serialize_unsigned_transaction};
-use aval_core::nonce::{parse_nonce_account, NONCE_ACCOUNT_SIZE};
-use aval_core::pubkey::{create_with_seed, system_program, Pubkey};
-use aval_core::rpc::{HttpPost, Rpc};
+use crate::core::amount::{format_amount, LAMPORTS_PER_SOL_DECIMALS};
+use crate::core::codec::b64_encode;
+use crate::core::instruction::{create_account_with_seed, initialize_nonce_account};
+use crate::core::message::{compile_message, serialize_unsigned_transaction};
+use crate::core::nonce::{parse_nonce_account, NONCE_ACCOUNT_SIZE};
+use crate::core::pubkey::{create_with_seed, system_program, Pubkey};
+use crate::core::rpc::{HttpPost, Rpc};
 
-pub const DEFAULT_RPC_URL: &str = "https://api.mainnet-beta.solana.com";
 pub const DEFAULT_SEED: &str = "aval-0";
 
+// deny_unknown_fields closes the argument surface: a prompt-injected model
+// cannot smuggle override flags this plugin never defined. Host-contract
+// assumption: the host injects only `__config`; a new injected key must be
+// added here explicitly (wit/v0 is unfrozen, so this is a pinned assumption).
 #[derive(serde::Deserialize, Debug)]
 #[serde(deny_unknown_fields)]
 pub struct InitArgs {
@@ -51,7 +54,7 @@ pub fn build_init<H: HttpPost>(http: &H, args: &InitArgs) -> Result<InitOutcome,
         .config
         .get("rpc_url")
         .cloned()
-        .unwrap_or_else(|| DEFAULT_RPC_URL.to_string());
+        .ok_or("no rpc_url configured; set it in this plugin's config section")?;
     let rpc = Rpc::new(http, &rpc_url);
 
     let authority = Pubkey::from_base58(args.authority.trim())
@@ -62,7 +65,10 @@ pub fn build_init<H: HttpPost>(http: &H, args: &InitArgs) -> Result<InitOutcome,
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .unwrap_or(DEFAULT_SEED);
-    if !seed.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_') {
+    if !seed
+        .bytes()
+        .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+    {
         return Err("seed may only contain letters, digits, '-' and '_'".into());
     }
 
