@@ -130,6 +130,12 @@ fn injection_cannot_exceed_the_amount_cap() {
     let err = build_request(&args("10000"), &pinned_cfg()).unwrap_err();
     assert!(err.contains("refused"), "must refuse, got: {err}");
     assert!(err.contains("cap"));
+    // The refusal must actively discourage the model's "I'll just split it"
+    // workaround, not merely state a per-request limit that invites splitting.
+    assert!(
+        err.to_lowercase().contains("split") && err.contains("hard"),
+        "cap refusal must forbid splitting/working around it, got: {err}"
+    );
     // Boundary: exactly at the cap is allowed, one base unit over is not.
     assert!(build_request(&args("100"), &pinned_cfg()).is_ok());
     assert!(build_request(&args("100.000001"), &pinned_cfg()).is_err());
