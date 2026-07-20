@@ -170,6 +170,23 @@ pub fn build_transfer<H: HttpPost>(http: &H, args: &BuildArgs) -> Result<BuiltTr
     let nonce_state = parse_nonce_account(&nonce_info.data)?;
     let authority = nonce_state.authority;
 
+    // Optional defense-in-depth: an operator who pins `authority` in config
+    // refuses any nonce account — however it got into the arguments — whose
+    // on-chain authority is a different wallet.
+    if let Some(pinned) = args.config.get("authority") {
+        let pinned = Pubkey::from_base58(pinned.trim())
+            .map_err(|e| format!("configured authority rejected: {e}"))?;
+        if pinned != authority {
+            return Err(format!(
+                "refusing to build: nonce account {} is controlled by {}, not the \
+                 configured authority {}",
+                nonce_account.short(),
+                authority.short(),
+                pinned.short()
+            ));
+        }
+    }
+
     let mut instructions: Vec<Instruction> =
         vec![advance_nonce_account(&nonce_account, &authority)];
 

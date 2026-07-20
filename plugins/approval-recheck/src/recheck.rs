@@ -32,8 +32,13 @@ pub struct RecheckArgs {
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum Verdict {
-    /// Nonce fresh, balances hold: signing now lands exactly this.
+    /// Nonce fresh, balances hold, every instruction decoded cleanly:
+    /// signing now lands exactly this. READY is only ever warning-free.
     Ready,
+    /// Chain state holds, but the transaction contains something this tool
+    /// could not fully explain (an unrecognized instruction, an authority
+    /// mismatch). A human must read the warnings before signing.
+    ReviewRequired,
     /// The durable nonce was consumed; the transaction can never land.
     Consumed,
     /// State moved underneath the transaction (balance below requirements).
@@ -48,6 +53,7 @@ impl Verdict {
     pub fn as_str(&self) -> &'static str {
         match self {
             Verdict::Ready => "READY",
+            Verdict::ReviewRequired => "REVIEW_REQUIRED",
             Verdict::Consumed => "CONSUMED",
             Verdict::Drifted => "DRIFTED",
             Verdict::NotDurable => "NOT_DURABLE",
@@ -210,15 +216,29 @@ pub fn recheck<H: HttpPost>(http: &H, args: &RecheckArgs) -> Result<RecheckRepor
         }
     }
 
-    Ok(RecheckReport {
-        verdict: Verdict::Ready,
-        headline: "Verified against the chain just now: the nonce is fresh and balances hold. \
-                   A signature authorizes exactly the actions listed — nothing expires while \
-                   the human decides."
-            .into(),
-        actions,
-        warnings,
-    })
+    // READY is a clean bill only: anything this tool could not fully explain
+    // demotes the verdict, so a warning can never hide behind a green light.
+    if warnings.is_empty() {
+        Ok(RecheckReport {
+            verdict: Verdict::Ready,
+            headline: "Verified against the chain just now: the nonce is fresh and balances \
+                       hold. A signature authorizes exactly the actions listed — nothing \
+                       expires while the human decides."
+                .into(),
+            actions,
+            warnings,
+        })
+    } else {
+        Ok(RecheckReport {
+            verdict: Verdict::ReviewRequired,
+            headline: "Chain state holds, but this transaction contains instructions the \
+                       recheck could not fully explain. Read every warning before signing; \
+                       when in doubt, rebuild with durable_tx_build."
+                .into(),
+            actions,
+            warnings,
+        })
+    }
 }
 
 /// Decode instructions into human sentences. Returns total SOL outflow from

@@ -22,7 +22,8 @@ what a base64 blob does. At approval time, this tool:
 
 | Verdict | Meaning |
 |---|---|
-| `READY` | Nonce fresh, balances hold; signing lands exactly the listed actions |
+| `READY` | Nonce fresh, balances hold, every instruction decoded cleanly; signing lands exactly the listed actions. READY is warning-free by construction |
+| `REVIEW_REQUIRED` | Chain state holds, but something could not be fully explained (an unrecognized instruction, an authority mismatch) — a warning can never hide behind a green light |
 | `CONSUMED` | The durable nonce moved; the transaction can never land — rebuild |
 | `DRIFTED` | State moved underneath it (balance or token account short) — rebuild |
 | `NOT_DURABLE` | No advance-nonce prefix; a recent-blockhash tx this old is dead |

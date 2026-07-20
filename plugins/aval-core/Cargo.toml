@@ -27,3 +27,7 @@ curve25519-dalek = { version = "4", default-features = false, features = ["alloc
 
 # Standalone crate: consumed by sibling plugin crates via path dependency.
 [workspace]
+
+[profile.release]
+# Money code: abort on arithmetic overflow rather than wrap, even in release.
+overflow-checks = true

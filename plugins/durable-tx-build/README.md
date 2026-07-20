@@ -70,6 +70,9 @@ their own schedule — so taking custody buys nothing and risks everything.
 rpc_url = "https://your-rpc.example.com"          # your own endpoint; key inside the URL if needed
 allowed_mints = "SOL,EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
 max_amount_ui = "SOL:0.5,EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v:100"
+# Optional defense-in-depth: refuse any nonce account whose on-chain
+# authority is not this wallet, however it entered the arguments.
+authority = "4Nd1mYvR3PLoKAxUWnvpbZBPeNSHnYuXK8Xw41k5vRW5"
 ```
 
 `max_amount_ui` also accepts a single bare number applied to every allowed

@@ -177,6 +177,9 @@ fn injection_unknown_program_is_flagged_never_explained_away() {
         "{:?}",
         report.warnings
     );
+    // A warning can never hide behind a green light: READY is warning-free
+    // by construction, so anything undecodable demotes the verdict.
+    assert_eq!(report.verdict, Verdict::ReviewRequired);
 }
 
 #[test]

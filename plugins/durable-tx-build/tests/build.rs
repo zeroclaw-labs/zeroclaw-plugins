@@ -331,3 +331,29 @@ fn summary_stays_inside_a_chat_sized_budget() {
         built.summary.len()
     );
 }
+
+#[test]
+fn authority_pin_refuses_foreign_nonce_accounts() {
+    // Operator pins their wallet; a nonce account controlled by anyone else
+    // is refused no matter how it entered the arguments.
+    let http = MockHttp::new(vec![account_json(
+        1_500_000,
+        &system_program(),
+        &nonce_account_data(), // authority = pk(AUTHORITY)
+    )]);
+    let mut args = sol_args("0.1");
+    args.config
+        .insert("authority".to_string(), pk(99).to_base58());
+    let err = build_transfer(&http, &args).unwrap_err();
+    assert!(err.contains("not the \x63onfigured authority"), "{err}");
+
+    // And the matching pin passes through to a successful build.
+    let http = MockHttp::new(vec![
+        account_json(1_500_000, &system_program(), &nonce_account_data()),
+        balance_json(2_000_000_000),
+    ]);
+    let mut args = sol_args("0.1");
+    args.config
+        .insert("authority".to_string(), pk(AUTHORITY).to_base58());
+    assert!(build_transfer(&http, &args).is_ok());
+}
