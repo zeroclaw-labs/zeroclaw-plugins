@@ -1,0 +1,10 @@
+name = "tx-xray"
+version = "0.1.0"
+description = "Decode and simulate any unsigned Solana transaction into a short truthful receipt with hazard flags. Custody tier T0: read only, holds nothing, signs nothing."
+author = "big14way"
+wasm_path = "tx_xray.wasm"
+capabilities = ["tool"]
+# http_client: only for simulateTransaction against the configured endpoint.
+# config_read: rpc_url arrives via `__config`. With simulate=false the tool
+# runs fully offline on the bytes alone.
+permissions = ["http_client", "config_read"]
