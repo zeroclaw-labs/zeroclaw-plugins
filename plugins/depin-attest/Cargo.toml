@@ -1,0 +1,33 @@
+[package]
+name = "depin-attest"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "ZeroClaw WIT tool plugin: build unsigned Solana transactions committing a DePIN device attestation on-chain with a durable-nonce replay guard. T1 custody (no signing, no secret keys)."
+publish = false
+
+# cdylib for the wasm component; rlib so the pure attestation core is testable
+# on the host with a plain `cargo test`.
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+wit-bindgen = "0.46"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+bs58 = "0.5"
+borsh = "1.5"
+
+# wasi:http client — only compiled for the wasm component, never on the host.
+# Used by the thin shim's SolanaRpc implementation to call an RPC endpoint.
+[target.'cfg(target_family = "wasm")'.dependencies]
+waki = { version = "0.5.1", features = ["json"] }
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true
+codegen-units = 1
+
+# Standalone crate: built for wasm32-wasip2, not part of the host workspace.
+[workspace]
