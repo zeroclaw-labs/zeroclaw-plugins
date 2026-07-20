@@ -53,19 +53,33 @@ rustup target add wasm32-wasip2
 ```toml
 [plugins]
 enabled = true
+auto_discover = true
+# ZeroClaw 0.8+ injects per-plugin config via [[plugins.entries]] (not [plugins.<name>]).
 
-[plugins.caixa-charge]
+[[plugins.entries]]
+name = "caixa-charge"
+
+[plugins.entries.config]
 recipient = "<merchant_pubkey>"
 max_brl = "5000"
 max_usdc = "1000"
+# Optional offline FX fallback (BRL per 1 USDC) when CoinGecko is unreachable:
+# brl_per_usdc = "5.50"
+label = "Caixa"
 
-[plugins.caixa-transfer-build]
+[[plugins.entries]]
+name = "caixa-transfer-build"
+
+[plugins.entries.config]
 rpc_url = "<your_rpc>"
 nonce_account = "<durable_nonce_account>"
 require_nonce = "true"
 max_usdc = "1000"
 
-[plugins.caixa-watch]
+[[plugins.entries]]
+name = "caixa-watch"
+
+[plugins.entries.config]
 rpc_url = "<your_rpc>"
 recipient = "<merchant_pubkey>"
 ```
@@ -91,6 +105,8 @@ Allowlists, notional caps, and secret scanners are enforced inside the plugins. 
 - Transfer-build defaults to durable nonce (Trap #1: approval queues outlive recent blockhashes).
 - Tool outputs are shaped (~200 tokens) so RPC noise never floods the model context.
 - Official Windows/macOS “lean” prebuilds may omit `plugins-wasm`; run a host built with `--features plugins-wasm` (and cranelift or precompiled `.cwasm`) so the agent actually loads the components.
+- Telegram cannot auto-link `solana:`; we also emit `https://phantom.app/ul/browse/…`. That path is a mobile universal link for Phantom’s **in-app browser** — desktop often lands on the download page, and wrapping `solana:` is not a full pay-sheet deep link. Demo with the charge in chat; open pay via copy/QR of the `solana:` URL when needed.
+- ZeroClaw 0.8+ plugin config is `[[plugins.entries]]` + `[plugins.entries.config]`, not `[plugins.<name>]`.
 
 ## What we'd build next
 

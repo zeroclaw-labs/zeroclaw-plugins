@@ -21,7 +21,19 @@ Customer wallet pays. Agent never holds funds.
 3. Memo: `INV=<id> BRL=<amount> …`
 4. Returns ~200-token summary (never raw API dumps)
 
-## Config
+## Config (ZeroClaw 0.8+)
+
+```toml
+[[plugins.entries]]
+name = "caixa-charge"
+
+[plugins.entries.config]
+recipient = "<merchant_pubkey>"
+max_brl = "5000"
+max_usdc = "1000"
+brl_per_usdc = "5.50"   # optional offline FX fallback
+label = "Caixa"
+```
 
 | Key | Default | Meaning |
 |-----|---------|---------|
@@ -31,6 +43,7 @@ Customer wallet pays. Agent never holds funds.
 | `max_brl` | `5000` | Hard BRL ceiling |
 | `max_usdc` | `1000` | Hard USDC ceiling |
 | `price_url` | CoinGecko USDC/BRL | FX quote endpoint |
+| `brl_per_usdc` | — | Offline FX fallback (BRL per 1 USDC) if HTTP quote fails |
 | `label` | `Caixa` | Solana Pay label |
 
 **Permissions:** `http_client`, `config_read` (FX quote + jailed config).
@@ -46,8 +59,10 @@ Customer wallet pays. Agent never holds funds.
 ```
 
 → Summary includes:
-- `https://phantom.app/ul/browse/…` (Telegram-clickable; paste plain text, no markdown)
+- `https://phantom.app/ul/browse/…` (Telegram-clickable HTTPS; paste as **plain text**, no markdown)
 - `solana:<recipient>?amount=<USDC>&spl-token=<USDC>&memo=INV%3Dmesa-4%20BRL%3D25.00&…`
+
+**Mobile tip:** Phantom `ul/browse` opens the in-app browser. For a pay sheet, copy/scan the `solana:` URL (or QR it). Desktop browsers often fall through to Phantom’s download page even with the extension installed — that is a Phantom universal-link quirk, not a bad invoice.
 
 ## Threat model
 

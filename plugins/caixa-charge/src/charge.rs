@@ -16,6 +16,8 @@ pub struct ChargeConfig {
     pub max_usdc: f64,
     pub default_mint: Pubkey,
     pub price_url: Option<String>,
+    /// Optional fixed BRL-per-USDC rate. Used when HTTP FX fails or is unavailable.
+    pub brl_per_usdc: Option<f64>,
     pub label: String,
 }
 
@@ -28,6 +30,7 @@ impl Default for ChargeConfig {
             max_usdc: 1_000.0,
             default_mint: usdc_mint_mainnet(),
             price_url: None,
+            brl_per_usdc: None,
             label: "Caixa".into(),
         }
     }
@@ -62,6 +65,13 @@ impl ChargeConfig {
         }
         if let Some(u) = section.get("price_url").filter(|s| !s.is_empty()) {
             cfg.price_url = Some(u.clone());
+        }
+        if let Some(v) = section.get("brl_per_usdc").filter(|s| !s.is_empty()) {
+            let rate: f64 = v.parse().map_err(|_| "brl_per_usdc must be a number")?;
+            if !(rate.is_finite() && rate > 0.0) {
+                return Err("brl_per_usdc must be a positive finite number".into());
+            }
+            cfg.brl_per_usdc = Some(rate);
         }
         if let Some(l) = section.get("label").filter(|s| !s.is_empty()) {
             cfg.label = l.clone();
@@ -196,18 +206,26 @@ fn resolve_amount<H: HttpGet>(
             if brl > cfg.max_brl {
                 return Err(format!("amount_brl {brl} exceeds max_brl {}", cfg.max_brl));
             }
-            let http = http.ok_or_else(|| {
-                "amount_brl requires FX quote transport (http_client)".to_string()
+            let quoted = match http {
+                Some(http) => quote_brl_to_usdc(
+                    http,
+                    &QuoteInput {
+                        amount_brl: brl,
+                        price_url: cfg.price_url.clone(),
+                    },
+                )
+                .ok(),
+                None => None,
+            };
+            if let Some(q) = quoted {
+                return Ok((q.amount_usdc_str, Some(format_brl(brl))));
+            }
+            let rate = cfg.brl_per_usdc.ok_or_else(|| {
+                "amount_brl FX quote failed; set plugins.entries.config.brl_per_usdc or fix price_url"
+                    .to_string()
             })?;
-            let q = quote_brl_to_usdc(
-                http,
-                &QuoteInput {
-                    amount_brl: brl,
-                    price_url: cfg.price_url.clone(),
-                },
-            )
-            .map_err(|e| e.0)?;
-            Ok((q.amount_usdc_str, Some(format_brl(brl))))
+            let amount_usdc = brl / rate;
+            Ok((normalize_usdc(&format!("{amount_usdc:.6}"))?, Some(format_brl(brl))))
         }
         (Some(_), Some(_)) => Err("provide amount_brl OR amount_usdc, not both".into()),
         (None, None) => Err("amount_brl or amount_usdc is required".into()),
@@ -307,6 +325,32 @@ mod tests {
                 reference: None,
             },
             &cfg(),
+            Some(&http),
+        )
+        .unwrap();
+        assert_eq!(out.amount_usdc, "5.000000");
+        assert!(out.memo.contains("BRL=25.00"));
+    }
+
+    #[test]
+    fn brl_falls_back_to_config_rate_when_fx_http_fails() {
+        let http = MockHttpGet {
+            body: json!({ "error": "rate limited" }),
+        };
+        let mut c = cfg();
+        c.brl_per_usdc = Some(5.0);
+        let out = execute_charge(
+            &ChargeArgs {
+                amount_brl: Some(25.0),
+                amount_usdc: None,
+                recipient: None,
+                invoice_id: "mesa-4".into(),
+                memo_extra: None,
+                message: None,
+                mint: None,
+                reference: None,
+            },
+            &c,
             Some(&http),
         )
         .unwrap();
