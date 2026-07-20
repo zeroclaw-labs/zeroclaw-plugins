@@ -40,6 +40,11 @@ fn default_true() -> bool {
     true
 }
 
+/// Upper bound on hazard flags shown in the receipt and returned envelope, so
+/// a transaction padded with many hazardous or unknown instructions cannot
+/// blow the receipt token budget. Overflow is reported as a suppressed count.
+const MAX_FLAGS: usize = 12;
+
 struct Findings {
     lines: Vec<String>,
     flags: Vec<String>,
@@ -65,36 +70,81 @@ fn describe_instruction(ix_program: &Pubkey, accounts: &[Pubkey], data: &[u8], o
     }
     if *ix_program == TOKEN_PROGRAM || *ix_program == TOKEN22_PROGRAM {
         let t22 = *ix_program == TOKEN22_PROGRAM;
+        let suffix = if t22 { " [Token-2022]" } else { "" };
+        // TransferChecked (12) is the only benign, fully-described case.
         if data.len() >= 10 && data[0] == 12 {
             let amount = u64::from_le_bytes(data[1..9].try_into().unwrap());
             let decimals = data[9];
             let mint = accounts.get(1).map(Pubkey::short).unwrap_or_default();
             let dest = accounts.get(2).map(Pubkey::short).unwrap_or_default();
+            // `decimals` is attacker-controlled; a wild value makes the shown
+            // amount meaningless, so flag it rather than present it as truth.
+            if decimals > 18 {
+                out.flags.push(format!(
+                    "implausible decimals ({decimals}) in token transfer; the amount shown may be misleading"
+                ));
+            }
             out.lines.push(format!(
                 "Token transfer: {} units of mint {} to token account {}{}",
                 format_base_amount(amount, decimals),
                 mint,
                 dest,
-                if t22 { " [Token-2022]" } else { "" }
+                suffix
             ));
             if t22 {
                 out.flags.push(
                     "Token-2022 mint: check for transfer fee or transfer hook extensions before approving".into(),
                 );
             }
-        } else if data.first() == Some(&3) {
-            out.flags
-                .push("plain Transfer without decimals check; prefer TransferChecked".into());
-            out.lines.push("Token transfer (unchecked variant)".into());
-        } else if data.first() == Some(&4) {
-            out.flags
-                .push("APPROVE DELEGATE: this grants spending rights over a token account".into());
-            out.lines.push("Token delegate approval".into());
-        } else {
-            out.lines.push(format!(
-                "Token program call, tag {}",
-                data.first().copied().unwrap_or(255)
-            ));
+            return;
+        }
+        // Every other tag is described AND, if it can move or re-authorize
+        // funds, flagged. An unrecognized tag is flagged too: never let an
+        // unknown token instruction read as safe.
+        match data.first().copied() {
+            Some(3) => {
+                out.flags.push(
+                    "UNCHECKED token Transfer (tag 3): no mint/decimals check; prefer TransferChecked".into(),
+                );
+                out.lines
+                    .push(format!("Token transfer, unchecked variant{suffix}"));
+            }
+            Some(4) | Some(13) => {
+                out.flags.push(
+                    "APPROVE DELEGATE: grants a third party spending rights over a token account"
+                        .into(),
+                );
+                out.lines.push(format!("Token delegate approval{suffix}"));
+            }
+            Some(6) => {
+                out.flags.push(
+                    "SET AUTHORITY: changes the owner/close/mint authority of a token account or mint".into(),
+                );
+                out.lines.push(format!("Token set-authority{suffix}"));
+            }
+            Some(7) | Some(14) => {
+                out.flags.push("MINT TO: creates new token supply".into());
+                out.lines.push(format!("Token mint-to{suffix}"));
+            }
+            Some(8) | Some(15) => {
+                out.flags.push("BURN: destroys token supply".into());
+                out.lines.push(format!("Token burn{suffix}"));
+            }
+            Some(9) => {
+                out.flags.push(
+                    "CLOSE ACCOUNT: closes a token account and sweeps its rent lamports".into(),
+                );
+                out.lines.push(format!("Token close-account{suffix}"));
+            }
+            Some(tag) => {
+                out.flags.push(format!(
+                    "UNRECOGNIZED token instruction (tag {tag}): do not approve unless you know what it does"
+                ));
+            }
+            None => {
+                out.flags
+                    .push("empty token instruction data: malformed, do not approve".into());
+            }
         }
         return;
     }
@@ -181,13 +231,14 @@ pub fn run(rpc: &dyn Rpc, _cfg: &Value, args: &XrayArgs) -> Result<String, Strin
     let mut sim_line: Option<String> = None;
     if args.simulate {
         match simulate_transaction_base64(rpc, args.unsigned_tx_base64.trim()) {
-            Ok(res) => {
-                let err = res.get("value").and_then(|v| v.get("err")).cloned();
-                match err {
-                    Some(Value::Null) | None => {
-                        let units = res
-                            .get("value")
-                            .and_then(|v| v.get("unitsConsumed"))
+            // Only an explicitly-present `value.err == null` is a clean OK; a
+            // response missing `value` or `err` is a degraded result and must
+            // never be reported as "Simulation: OK".
+            Ok(res) => match res.get("value") {
+                Some(value) => match value.get("err") {
+                    Some(Value::Null) => {
+                        let units = value
+                            .get("unitsConsumed")
                             .and_then(|u| u.as_u64())
                             .unwrap_or(0);
                         sim_line = Some(format!("Simulation: OK ({units} compute units)"));
@@ -196,9 +247,18 @@ pub fn run(rpc: &dyn Rpc, _cfg: &Value, args: &XrayArgs) -> Result<String, Strin
                         let e = sanitize_untrusted(&e.to_string(), 96);
                         f.flags.push(format!("SIMULATION FAILED: {e}"));
                     }
-                }
-            }
-            Err(e) => f.flags.push(format!("simulation unavailable: {e}")),
+                    None => f.flags.push(
+                        "simulation result unparseable (no err field): treat as unverified".into(),
+                    ),
+                },
+                None => f
+                    .flags
+                    .push("simulation result unparseable (no value): treat as unverified".into()),
+            },
+            Err(e) => f.flags.push(format!(
+                "simulation unavailable: {}",
+                sanitize_untrusted(&e, 96)
+            )),
         }
     }
 
@@ -208,23 +268,35 @@ pub fn run(rpc: &dyn Rpc, _cfg: &Value, args: &XrayArgs) -> Result<String, Strin
         parsed.num_required_signatures,
         parsed.instructions.len()
     ));
+    // Hazards are rendered BEFORE the descriptive breakdown so the receipt's
+    // character cap can never truncate a flag away and leave the transaction
+    // looking safe. The flags array is capped too, so a transaction padded
+    // with many hazardous instructions cannot blow the token budget.
+    if f.flags.is_empty() {
+        r.line("No hazards flagged. Approve only if the effects below are what you intend.");
+    } else {
+        for flag in f.flags.iter().take(MAX_FLAGS) {
+            r.line(format!("FLAG: {flag}"));
+        }
+        if f.flags.len() > MAX_FLAGS {
+            r.line(format!(
+                "(+{} more hazard flags suppressed)",
+                f.flags.len() - MAX_FLAGS
+            ));
+        }
+    }
     for l in &f.lines {
         r.line(l.clone());
     }
     if let Some(s) = &sim_line {
         r.line(s.clone());
     }
-    if f.flags.is_empty() {
-        r.line("No hazards flagged. Approve only if the effects above are what you intend.");
-    } else {
-        for flag in &f.flags {
-            r.line(format!("FLAG: {flag}"));
-        }
-    }
     let summary = r.render();
+    let shown_flags: Vec<&String> = f.flags.iter().take(MAX_FLAGS).collect();
     Ok(json!({
         "summary": summary,
-        "flags": f.flags,
+        "flags": shown_flags,
+        "flags_total": f.flags.len(),
     })
     .to_string())
 }

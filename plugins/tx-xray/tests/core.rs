@@ -61,6 +61,111 @@ fn xargs(tx: &str, simulate: bool) -> XrayArgs {
     serde_json::from_value(json!({"unsigned_tx_base64": tx, "simulate": simulate})).unwrap()
 }
 
+/// A token-program instruction with the given tag and total data length,
+/// three throwaway accounts (source, mint, dest slots).
+fn token_ix(tag: u8, data_len: usize) -> Instruction {
+    let mut data = vec![tag];
+    data.extend(std::iter::repeat(0u8).take(data_len.saturating_sub(1)));
+    Instruction {
+        program_id: TOKEN_PROGRAM,
+        accounts: vec![
+            AccountMeta::writable(Pubkey([2u8; 32]), false),
+            AccountMeta::readonly(Pubkey([3u8; 32]), false),
+            AccountMeta::writable(Pubkey([4u8; 32]), false),
+        ],
+        data,
+    }
+}
+
+fn xray_ixs(ixs: &[Instruction], simulate: bool, rpc: &MockRpc) -> Value {
+    let payer = Pubkey([1u8; 32]);
+    let compiled = compile_legacy_message(&payer, ixs, &[9u8; 32]).unwrap();
+    let out = run(
+        rpc,
+        &Value::Null,
+        &xargs(&unsigned_tx_base64(&compiled), simulate),
+    )
+    .unwrap();
+    serde_json::from_str(&out).unwrap()
+}
+
+#[test]
+fn flags_every_authority_moving_token_instruction() {
+    // Tag -> the hazard word that must appear. None of these may read as safe.
+    let cases: &[(u8, &str)] = &[
+        (13, "APPROVE DELEGATE"), // ApproveChecked
+        (6, "SET AUTHORITY"),     // SetAuthority
+        (7, "MINT TO"),           // MintTo
+        (8, "BURN"),              // Burn
+        (9, "CLOSE ACCOUNT"),     // CloseAccount
+    ];
+    for (tag, needle) in cases {
+        let v = xray_ixs(&[token_ix(*tag, 4)], false, &MockRpc::new());
+        let summary = v["summary"].as_str().unwrap();
+        assert!(summary.contains(needle), "tag {tag} not flagged: {summary}");
+    }
+}
+
+#[test]
+fn flags_unrecognized_token_tag_instead_of_calling_it_safe() {
+    let v = xray_ixs(&[token_ix(200, 4)], false, &MockRpc::new());
+    let summary = v["summary"].as_str().unwrap();
+    assert!(summary.contains("UNRECOGNIZED token"), "{summary}");
+    assert!(!summary.contains("No hazards flagged"), "{summary}");
+}
+
+#[test]
+fn implausible_decimals_are_flagged_and_never_trap() {
+    // A TransferChecked whose decimals byte is 64 would overflow 10^decimals
+    // to a 0 divisor and divide-by-zero-trap in the release build; here it
+    // must produce a flag and a receipt, not a panic.
+    let mut data = vec![12u8];
+    data.extend_from_slice(&1_000u64.to_le_bytes());
+    data.push(64); // decimals
+    let ix = Instruction {
+        program_id: TOKEN_PROGRAM,
+        accounts: vec![
+            AccountMeta::writable(Pubkey([2u8; 32]), false),
+            AccountMeta::readonly(Pubkey([3u8; 32]), false),
+            AccountMeta::writable(Pubkey([4u8; 32]), false),
+            AccountMeta::readonly(Pubkey([5u8; 32]), true),
+        ],
+        data,
+    };
+    let v = xray_ixs(&[ix], false, &MockRpc::new());
+    let summary = v["summary"].as_str().unwrap();
+    assert!(summary.contains("implausible decimals"), "{summary}");
+}
+
+#[test]
+fn hazard_flag_survives_receipt_truncation() {
+    // Pad the transaction with many benign memos so the descriptive lines
+    // overflow the budget, then a delegate approval. Because flags render
+    // first, the hazard must still be in the summary.
+    let mut ixs: Vec<Instruction> = (0..40)
+        .map(|_| memo_ix("padding padding padding padding padding padding"))
+        .collect();
+    ixs.push(token_ix(4, 9)); // Approve
+    let v = xray_ixs(&ixs, false, &MockRpc::new());
+    let summary = v["summary"].as_str().unwrap();
+    assert!(summary.len() <= 900, "over budget: {}", summary.len());
+    assert!(
+        summary.contains("APPROVE DELEGATE"),
+        "hazard was truncated away: {summary}"
+    );
+}
+
+#[test]
+fn degraded_simulation_is_not_reported_as_ok() {
+    let tx = build_proposal_tx();
+    // Response missing the whole `value` object: must be flagged, not OK.
+    let rpc = MockRpc::new();
+    rpc.push_ok("simulateTransaction", json!({"context": {"slot": 1}}));
+    let out = run(&rpc, &Value::Null, &xargs(&tx, true)).unwrap();
+    assert!(!out.contains("Simulation: OK"), "{out}");
+    assert!(out.contains("unparseable"), "{out}");
+}
+
 #[test]
 fn unwraps_squads_proposal_and_shows_inner_transfer() {
     let rpc = MockRpc::new();

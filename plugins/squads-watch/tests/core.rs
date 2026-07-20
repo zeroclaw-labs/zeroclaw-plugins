@@ -119,6 +119,50 @@ fn quiet_when_up_to_date() {
 }
 
 #[test]
+fn batch_limit_caps_proposals_scanned_in_one_call() {
+    // transaction_index far ahead of the cursor: only `limit` accounts are
+    // fetched, and the receipt says more remain.
+    let (ms_addr, ms_bytes) = setup(1000);
+    let rpc = MockRpc::new();
+    rpc.push_ok(
+        "getAccountInfo",
+        json!({"value": {"data": [b64(&ms_bytes), "base64"]}}),
+    );
+    // 5 requested; the mock returns 5 nulls (proposals not yet opened).
+    rpc.push_ok(
+        "getMultipleAccounts",
+        json!({"value": [null, null, null, null, null]}),
+    );
+    let cfg = json!({"rpc_url": "https://x", "multisig": ms_addr.to_base58()});
+    let args: WatchArgs = serde_json::from_value(json!({"cursor": 500, "limit": 5})).unwrap();
+    let out = run(&rpc, &cfg, &args).unwrap();
+    let v: Value = serde_json::from_str(&out).unwrap();
+    // Window is #501..#505; next_cursor advances by the limit, not to 1000.
+    assert_eq!(v["next_cursor"], 505);
+    assert!(v["summary"].as_str().unwrap().contains("more not shown"));
+}
+
+#[test]
+fn names_the_range_skipped_by_the_cursor() {
+    // A cursor above the stale floor must not silently imply an all-clear over
+    // the proposals it skipped; the receipt states the unscanned range.
+    let (ms_addr, ms_bytes) = setup(50);
+    let rpc = MockRpc::new();
+    rpc.push_ok(
+        "getAccountInfo",
+        json!({"value": {"data": [b64(&ms_bytes), "base64"]}}),
+    );
+    rpc.push_ok("getMultipleAccounts", json!({"value": [null]}));
+    let cfg = json!({"rpc_url": "https://x", "multisig": ms_addr.to_base58()});
+    let args: WatchArgs = serde_json::from_value(json!({"cursor": 49})).unwrap();
+    let out = run(&rpc, &cfg, &args).unwrap();
+    assert!(
+        out.contains("below the cursor were not checked"),
+        "should name the skipped range: {out}"
+    );
+}
+
+#[test]
 fn handles_missing_proposal_accounts() {
     let (ms_addr, ms_bytes) = setup(3);
     let rpc = MockRpc::new();

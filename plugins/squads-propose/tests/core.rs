@@ -77,6 +77,41 @@ fn args(recipient: &str, amount: &str, token: &str) -> ProposeArgs {
 }
 
 #[test]
+fn memo_is_stripped_of_control_and_byte_capped() {
+    let (ms_addr, ms_bytes) = multisig_state(41, 7);
+    let rpc = MockRpc::new();
+    rpc.push_ok("getAccountInfo", account_json(&ms_bytes));
+    rpc.push_ok(
+        "getLatestBlockhash",
+        json!({"value": {"blockhash": bs58::encode([5u8; 32]).into_string()}}),
+    );
+    let mut cfg = base_cfg(&ms_addr);
+    cfg["max_memo_len"] = json!(8);
+    let nasty: ProposeArgs = serde_json::from_value(json!({
+        "recipient": "ana", "amount": "10", "token": "USDC",
+        "memo": "ab\ncd\u{202E}\u{1F4B0}\u{1F4B0}\u{1F4B0}"
+    }))
+    .unwrap();
+    let out = run(&rpc, &cfg, &nasty).unwrap();
+    let v: Value = serde_json::from_str(&out).unwrap();
+    let summary = v["summary"].as_str().unwrap();
+    // Control character and bidi override never survive into the receipt.
+    assert!(!summary.contains('\u{202E}'), "bidi override survived");
+    // The memo line's content is byte-capped at max_memo_len.
+    let memo_line = summary
+        .lines()
+        .find(|l| l.starts_with("Memo: "))
+        .expect("memo line present");
+    let memo = &memo_line["Memo: ".len()..];
+    assert!(
+        memo.len() <= 8,
+        "memo byte length {} exceeds cap",
+        memo.len()
+    );
+    assert!(!memo.contains('\n'));
+}
+
+#[test]
 fn refuses_without_policy_config() {
     let rpc = MockRpc::new();
     let cfg = json!({"rpc_url": "https://x", "multisig": "F65MT4J3kSRdyPMehKvuUvHmpCktrH9Q8n7J8dsHit68", "creator_pubkey": creator().to_base58()});

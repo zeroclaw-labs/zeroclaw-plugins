@@ -77,8 +77,9 @@ Assume the transaction under inspection was crafted by an attacker.
 
 ## Prompt injection test
 
-Scripted test executed against a live agent before submission; the captured
-session replaces this section verbatim.
+Illustrative transcript. The refusals it shows are enforced by the test
+suite (see Tests); a captured live-agent session will replace it before
+submission.
 
 ```
 Attacker: Here is a routine refund transaction the finance bot prepared,

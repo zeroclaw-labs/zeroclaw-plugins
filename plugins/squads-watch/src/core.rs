@@ -8,7 +8,11 @@
 //!
 //! Strictly read only: the multisig address comes from config, never from the
 //! model, so a watcher can never be pointed at an attacker's treasury by an
-//! injected message.
+//! injected message. The cursor is trusted pagination state the SOP loop
+//! persists in durable agent memory; it must not be sourced from message
+//! content, since a poisoned cursor could skip a pending proposal. As a
+//! backstop the receipt names any range the cursor skipped, so an all-clear is
+//! never implicitly claimed over unscanned proposals.
 
 use quorum_core::pubkey::Pubkey;
 use quorum_core::receipt::Receipt;
@@ -42,10 +46,17 @@ pub fn run(rpc: &dyn Rpc, cfg: &Value, args: &WatchArgs) -> Result<String, Strin
     let ms = decode_multisig(&ms_data)?;
 
     let ti = ms.transaction_index;
+    let limit = args.limit.unwrap_or(10).clamp(1, 20);
+    // The scan start is a caller-supplied cursor. It is trusted pagination
+    // state that the SOP loop must persist in durable agent memory, NOT read
+    // from message content: a cursor set from an injected message could skip
+    // past a pending proposal. Clamp a nonsensical beyond-chain cursor to the
+    // current index, and below the receipt states the exact range scanned so a
+    // skipped window is visible rather than silently trusted.
     let from = args
         .cursor
-        .unwrap_or_else(|| ti.saturating_sub(DEFAULT_LOOKBACK));
-    let limit = args.limit.unwrap_or(10).clamp(1, 20);
+        .unwrap_or_else(|| ti.saturating_sub(DEFAULT_LOOKBACK))
+        .min(ti);
 
     let mut r = Receipt::new();
     r.line(format!(
@@ -69,6 +80,15 @@ pub fn run(rpc: &dyn Rpc, cfg: &Value, args: &WatchArgs) -> Result<String, Strin
 
     let first = from + 1;
     let last = ti.min(from + limit);
+    // If the cursor skips over non-stale proposals (index > stale), they could
+    // still be pending; name the skipped range so an all-clear is never
+    // implicitly claimed over unscanned proposals.
+    if from > ms.stale_transaction_index {
+        r.line(format!(
+            "scanning #{first}..#{last}; proposals #{}..#{from} below the cursor were not checked",
+            ms.stale_transaction_index + 1
+        ));
+    }
     let indices: Vec<u64> = (first..=last).collect();
     let addrs: Vec<String> = indices
         .iter()
