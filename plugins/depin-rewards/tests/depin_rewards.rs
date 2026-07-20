@@ -8,9 +8,9 @@
 // Import path = `<crate>::<module>::*` = `depin_rewards::depin_rewards::*`
 // (crate `depin-rewards` → lib `depin_rewards`; module `depin_rewards`).
 use depin_rewards::depin_rewards::{
-  do_status, do_summary, enforce_hotspot_allowlist, fetch_hotspot, fetch_rewards,
+  do_status, do_summary, do_watch, enforce_hotspot_allowlist, fetch_hotspot, fetch_rewards,
   format_amount, HttpError, HttpClient, HotspotInfo, MockHttp, RewardSummary,
-  RewardsConfig, RewardsError,
+  RewardsConfig, RewardsError, send_telegram,
 };
 use std::collections::HashMap;
 
@@ -511,4 +511,142 @@ fn do_summary_shape_contains_amount_and_name() {
   assert!(out.summary.contains("3.42"), "summary: {}", out.summary);
   assert!(out.summary.contains("tall-plum-ocelot"));
   assert!(out.summary.len() <= 800, "too long: {}", out.summary.len());
+}
+
+// ── Slice E: send_telegram + do_watch (the workhorse) ─────────────────────────
+
+// Offline variant of the online fixture (iot+mobile both is_active=false).
+const HOTSPOT_IOT_OFFLINE: &str = r#"{"owner":"BcJzP2hEYgzjUwpHEtS6RhuqGfEJVx8Rq3MejujAAWrR","name":"tall-plum-ocelot","networks":["iot"],"iot_info":{"is_active":false,"location":123},"mobile_info":{"is_active":false}}"#;
+
+const TG_OK: &str = r#"{"ok":true}"#;
+const TG_URL: &str = "https://api.telegram.org/bott/sendMessage";
+
+fn tg_mock_with_online_hotspot() -> MockHttp {
+  let mut mock = MockHttp::new();
+  mock.set_get(
+    "https://api.relaywireless.com/v1/helium/l2/hotspots/ecc-1".to_string(),
+    HOTSPOT_IOT_ONLINE.as_bytes().to_vec(),
+  );
+  mock.set_post(TG_URL.to_string(), TG_OK.as_bytes().to_vec());
+  mock
+}
+
+#[test]
+fn send_telegram_ok_records_post() {
+  let mut mock = MockHttp::new();
+  mock.set_post(TG_URL.to_string(), TG_OK.as_bytes().to_vec());
+  let cfg = base_cfg();
+  send_telegram(&mock, &cfg, "offline!").expect("ok sends");
+  let posts = mock.posts();
+  let tg = posts.iter().find(|(u, _)| u == TG_URL).expect("POST recorded");
+  assert!(tg.1.iter().any(|(k, v)| k == "chat_id" && v == "1"));
+  assert!(tg.1.iter().any(|(k, v)| k == "text" && v == "offline!"));
+}
+
+#[test]
+fn send_telegram_failure_returns_error() {
+  let mut mock = MockHttp::new();
+  mock.set_post(
+    TG_URL.to_string(),
+    r#"{"ok":false,"description":"chat not found"}"#.as_bytes().to_vec(),
+  );
+  let cfg = base_cfg();
+  let err = send_telegram(&mock, &cfg, "x").unwrap_err();
+  assert!(matches!(err, RewardsError::Telegram(_)));
+  assert!(format!("{err:?}").contains("chat not found"));
+}
+
+#[test]
+fn watch_no_flip_no_alert() {
+  let mock = tg_mock_with_online_hotspot();
+  let cfg = base_cfg();
+  let out = do_watch(&mock, &cfg, "ecc-1", Some(true), false, "f", "t").unwrap();
+  assert_eq!(out.is_active, Some(true));
+  assert!(out.alerts_sent.is_empty(), "no alert expected");
+  assert!(out.summary.contains("ONLINE"));
+}
+
+#[test]
+fn watch_offline_flip_sends_alert() {
+  let mut mock = MockHttp::new();
+  mock.set_get(
+    "https://api.relaywireless.com/v1/helium/l2/hotspots/ecc-1".to_string(),
+    HOTSPOT_IOT_OFFLINE.as_bytes().to_vec(),
+  );
+  mock.set_post(TG_URL.to_string(), TG_OK.as_bytes().to_vec());
+  let cfg = base_cfg();
+  let out = do_watch(&mock, &cfg, "ecc-1", Some(true), false, "f", "t").unwrap();
+  assert_eq!(out.is_active, Some(false));
+  assert_eq!(out.alerts_sent.len(), 1, "offline-flip alert expected");
+  // the Telegram POST text contains OFFLINE
+  let posts = mock.posts();
+  let tg = posts
+    .iter()
+    .find(|(u, _)| u == TG_URL)
+    .expect("telegram POST recorded");
+  assert!(tg.1.iter().any(|(_, v)| v.contains("OFFLINE")));
+  assert!(out.summary.len() <= 800);
+}
+
+#[test]
+fn watch_first_tick_no_flip_even_if_offline() {
+  // prev_active=None (first tick) → never fire a flip alert, even if currently offline.
+  let mut mock = MockHttp::new();
+  mock.set_get(
+    "https://api.relaywireless.com/v1/helium/l2/hotspots/ecc-1".to_string(),
+    HOTSPOT_IOT_OFFLINE.as_bytes().to_vec(),
+  );
+  mock.set_post(TG_URL.to_string(), TG_OK.as_bytes().to_vec());
+  let cfg = base_cfg();
+  let out = do_watch(&mock, &cfg, "ecc-1", None, false, "f", "t").unwrap();
+  assert!(out.alerts_sent.is_empty(), "first tick must not fire flip alert");
+}
+
+#[test]
+fn watch_send_summary_sends_summary() {
+  let mut mock = MockHttp::new();
+  mock.set_get(
+    "https://api.relaywireless.com/v1/helium/l2/hotspots/ecc-1".to_string(),
+    HOTSPOT_IOT_ONLINE.as_bytes().to_vec(),
+  );
+  mock.set_get(
+    "https://api.relaywireless.com/v1/helium/l2/iot-reward-shares/totals\
+?from=f&to=t&hotspot_key=ecc-1"
+      .to_string(),
+    REWARD_TOTALS.as_bytes().to_vec(),
+  );
+  mock.set_post(TG_URL.to_string(), TG_OK.as_bytes().to_vec());
+  let cfg = base_cfg();
+  let out = do_watch(&mock, &cfg, "ecc-1", Some(true), true, "f", "t").unwrap();
+  // online (no flip) + summary requested → exactly the summary alert
+  assert_eq!(out.alerts_sent.len(), 1);
+  assert!(out.alerts_sent[0].contains("summary"));
+}
+
+#[test]
+fn watch_flip_and_summary_both_sent() {
+  let mut mock = MockHttp::new();
+  mock.set_get(
+    "https://api.relaywireless.com/v1/helium/l2/hotspots/ecc-1".to_string(),
+    HOTSPOT_IOT_OFFLINE.as_bytes().to_vec(),
+  );
+  mock.set_get(
+    "https://api.relaywireless.com/v1/helium/l2/iot-reward-shares/totals\
+?from=f&to=t&hotspot_key=ecc-1"
+      .to_string(),
+    REWARD_TOTALS.as_bytes().to_vec(),
+  );
+  mock.set_post(TG_URL.to_string(), TG_OK.as_bytes().to_vec());
+  let cfg = base_cfg();
+  let out = do_watch(&mock, &cfg, "ecc-1", Some(true), true, "f", "t").unwrap();
+  assert_eq!(out.alerts_sent.len(), 2, "flip + summary");
+}
+
+#[test]
+fn watch_rejects_unknown_hotspot() {
+  let mock = MockHttp::new();
+  let cfg = base_cfg();
+  let err = do_watch(&mock, &cfg, "evil-id", None, false, "f", "t").unwrap_err();
+  assert!(matches!(err, RewardsError::Config(_)));
+  assert!(format!("{err:?}").contains("allowlist"));
 }

@@ -437,6 +437,7 @@ fn shape_status(info: &HotspotInfo) -> String {
 #[derive(Debug)]
 pub struct RewardsOutput {
   pub is_active: Option<bool>,
+  pub alerts_sent: Vec<String>,
   pub summary: String,
 }
 
@@ -452,6 +453,7 @@ pub fn do_status(
   let summary = shape_status(&info);
   Ok(RewardsOutput {
     is_active: info.is_active(),
+    alerts_sent: Vec::new(),
     summary,
   })
 }
@@ -573,6 +575,120 @@ pub fn do_summary(
   let summary = shape_summary(&info, &rewards, net);
   Ok(RewardsOutput {
     is_active: info.is_active(),
+    alerts_sent: Vec::new(),
+    summary,
+  })
+}
+
+// ── Telegram + do_watch (the workhorse) ──────────────────────────────────────
+
+/// Shape the watch-tick status line (≤200 tokens, SPEC-3 §7).
+fn shape_watch(info: &HotspotInfo, current: Option<bool>, alerts_sent: &[String]) -> String {
+  let state = match current {
+    Some(true) => "ONLINE",
+    Some(false) => "OFFLINE",
+    None => "UNKNOWN",
+  };
+  let alert_line = if alerts_sent.is_empty() {
+    "no alert sent".to_string()
+  } else {
+    format!("alert(s) sent: {}", alerts_sent.join(", "))
+  };
+  format!(
+    "✓ watch {} — {}, {}\n  current_active={} (persist for next tick)",
+    info.name,
+    state,
+    alert_line,
+    current.unwrap_or(false),
+  )
+}
+
+/// POST a Telegram `sendMessage` (`chat_id` + `text`) via the Bot API. Parses
+/// the `{"ok":true}` ack; `ok=false` → `RewardsError::Telegram` with the
+/// description. The bot token is sourced from config, never the message.
+pub fn send_telegram(
+  http: &dyn HttpClient,
+  cfg: &RewardsConfig,
+  text: &str,
+) -> Result<(), RewardsError> {
+  let url = format!("https://api.telegram.org/bot{}/sendMessage", cfg.telegram_bot_token);
+  let fields = vec![
+    ("chat_id".to_string(), cfg.telegram_chat_id.clone()),
+    ("text".to_string(), text.to_string()),
+  ];
+  let resp = http
+    .post_form(&url, &fields)
+    .map_err(|e| RewardsError::Telegram(format!("sendMessage transport: {e:?}")))?;
+  #[derive(serde::Deserialize)]
+  struct TgResp {
+    ok: bool,
+    #[serde(default)]
+    description: Option<String>,
+  }
+  let tg: TgResp = serde_json::from_slice(&resp)
+    .map_err(|e| RewardsError::Telegram(format!("sendMessage response parse: {e}")))?;
+  if !tg.ok {
+    return Err(RewardsError::Telegram(format!(
+      "sendMessage returned ok=false: {}",
+      tg.description.unwrap_or_default()
+    )));
+  }
+  Ok(())
+}
+
+/// `action = "watch"`: the cron-tick workhorse. Fetches status, detects an
+/// online→offline flip vs `prev_active` (fires a Telegram alert), optionally
+/// sends the daily rewards summary. Returns the new `is_active` for the SOP to
+/// persist. **Stateless** — the SOP passes `prev_active` in and persists the
+/// returned `is_active` (no in-plugin state).
+pub fn do_watch(
+  http: &dyn HttpClient,
+  cfg: &RewardsConfig,
+  id: &str,
+  prev_active: Option<bool>,
+  send_summary: bool,
+  from: &str,
+  to: &str,
+) -> Result<RewardsOutput, RewardsError> {
+  enforce_hotspot_allowlist(cfg, id)?;
+  let info = fetch_hotspot(http, cfg, id)?;
+  let current = info.is_active();
+  let net = info.primary_network();
+  let mut alerts_sent: Vec<String> = Vec::new();
+
+  // Offline-flip: prev was active, now inactive. (prev_active=None = first
+  // tick → never fire, no baseline.)
+  if prev_active == Some(true) && current == Some(false) {
+    let msg = format!(
+      "⚠ hotspot {} went OFFLINE ({}) — owner {}. Check your hotspot.",
+      info.name,
+      net,
+      short_addr(&info.owner)
+    );
+    send_telegram(http, cfg, &msg)?;
+    alerts_sent.push("offline-alert".to_string());
+  }
+
+  // Daily rewards summary (SOP sets send_summary=true on the 08:00 tick).
+  if send_summary {
+    let rewards = fetch_rewards(http, cfg, net, id, from, to)?;
+    let symbol = if net == "mobile" { "MOBILE" } else { "IOT" };
+    let msg = format!(
+      "✓ {} daily rewards — earned {} {} ({}–{})",
+      info.name,
+      format_amount(rewards.total_amount, 6),
+      symbol,
+      rewards.from_iso,
+      rewards.to_iso,
+    );
+    send_telegram(http, cfg, &msg)?;
+    alerts_sent.push("daily-summary".to_string());
+  }
+
+  let summary = shape_watch(&info, current, &alerts_sent);
+  Ok(RewardsOutput {
+    is_active: current,
+    alerts_sent,
     summary,
   })
 }
