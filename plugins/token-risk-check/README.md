@@ -5,7 +5,10 @@ Solana SPL or Token-2022 mint before an agent recommends interacting with it.
 It gathers public on-chain and market evidence, applies deterministic rules,
 and returns a compact red/amber/green JSON report.
 
-**Demo (2:07):** https://antonsbb.github.io/token-risk-check-demo/
+**Live host verification:** ZeroClaw 0.8.3 loaded the release WASM, exposed only
+this tool to a local Qwen agent, executed a real Solana/DEX check, and returned
+the evidence to the agent on its second turn. The final bounty video will use a
+real Telegram channel; no slide-based demo is being submitted.
 
 It never accepts a recovery phrase or private key, never connects a wallet,
 and cannot construct, sign, simulate, or submit a transaction. The report is
@@ -104,6 +107,7 @@ All keys are optional strings in the plugin's own jailed config section:
 | Key | Default | Meaning |
 |---|---:|---|
 | `rpc_url` | Solana public mainnet RPC | Read-only JSON-RPC endpoint. |
+| `rpc_fallback_url` | unset | Optional read-only RPC retried when the primary returns a network, HTTP, JSON, or JSON-RPC error. |
 | `market_base_url` | DexScreener Solana pairs endpoint | Base URL followed by the validated mint. |
 | `require_market_data` | `true` | Fail closed when market evidence is unavailable. |
 | `min_liquidity_usd` | `25000` | Amber threshold; below 10% of it is red. |
@@ -152,6 +156,29 @@ cargo run --locked --example demo -- incomplete
 
 The host tests separately exercise the JSON-RPC and market response parsers;
 the release component wires those parsers to host-mediated `wasi:http`.
+
+### Live ZeroClaw agent proof
+
+The release component was installed into a ZeroClaw 0.8.3 runtime built with
+`plugins-wasm,plugins-wasm-cranelift`. The agent used local Ollama/Qwen, had a
+risk-profile allowlist containing only `token-risk-check`, and received this
+request:
+
+```text
+Check this Solana mint: EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v
+```
+
+The runtime trace recorded one native/parsed tool call with the exact mint,
+then the component emitted `risk check complete` and returned:
+
+```json
+{"mint":"EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v","rating":"red","score":55,"complete":true,"findings":[{"severity":"red","code":"MINT_AUTHORITY_ACTIVE","detail":"supply can still be increased"},{"severity":"amber","code":"FREEZE_AUTHORITY_ACTIVE","detail":"token accounts can be frozen"}],"facts":{"program":"spl-token","decimals":6,"mint_authority":true,"freeze_authority":true,"transfer_hook":false,"permanent_delegate":false,"top1_pct":9.3,"top10_pct":31.6,"liquidity_usd":14711054.0,"market":"pumpswap"},"note":"Read-only evidence, not financial advice."}
+```
+
+The primary public RPC rate-limited the second holder request. The configured
+HTTPS fallback completed that read, so the plugin returned owner-aggregated
+holder concentration with `complete: true`. If both endpoints fail, the same
+path still fails closed with `complete: false` rather than inventing evidence.
 
 ## Install and use
 

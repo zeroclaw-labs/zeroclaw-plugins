@@ -106,6 +106,24 @@ fn endpoint_configuration_is_operator_scoped_and_ssrf_resistant() {
         ("top1_red_pct".to_string(), "50".to_string()),
     ]);
     assert!(RiskConfig::from_section(&invalid_thresholds).is_err());
+
+    let fallback = HashMap::from([(
+        "rpc_fallback_url".to_string(),
+        "https://backup-rpc.example".to_string(),
+    )]);
+    assert_eq!(
+        RiskConfig::from_section(&fallback)
+            .expect("HTTPS fallback should be accepted")
+            .rpc_fallback_url
+            .as_deref(),
+        Some("https://backup-rpc.example")
+    );
+
+    let blocked_fallback = HashMap::from([(
+        "rpc_fallback_url".to_string(),
+        "http://169.254.169.254/latest/meta-data".to_string(),
+    )]);
+    assert!(RiskConfig::from_section(&blocked_fallback).is_err());
 }
 
 #[test]

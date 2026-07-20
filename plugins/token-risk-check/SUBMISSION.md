@@ -1,6 +1,7 @@
 # token-risk-check — one-page bounty write-up
 
-Demo video (2:07): https://antonsbb.github.io/token-risk-check-demo/
+Demo video: pending the required real Telegram-channel capture; the earlier
+slide-based draft is not part of this submission.
 
 Upstream pull request: https://github.com/zeroclaw-labs/zeroclaw-plugins/pull/93
 
@@ -61,6 +62,14 @@ output. The required release component is built with:
 cargo test --locked
 cargo build --locked --target wasm32-wasip2 --release
 ```
+
+A live ZeroClaw 0.8.3 host run also registered the release WASM, gave the agent
+only this tool, produced exactly one native tool call, executed live Solana RPC
+and DexScreener requests, and returned the bounded evidence for the agent's
+second-turn summary. When the primary public RPC rate-limited the second holder
+request, the configured HTTPS fallback completed it. The verified report
+included owner-aggregated top-holder concentration and `complete: true`; if
+both endpoints fail, the plugin still fails closed rather than inventing data.
 
 ## Honest boundary
 

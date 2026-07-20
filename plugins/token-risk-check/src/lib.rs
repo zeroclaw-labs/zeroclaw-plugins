@@ -95,8 +95,8 @@ mod component {
                 Err(error) => return failure("INVALID_CONFIG", &error),
             };
 
-            let mint_response = match rpc(
-                &cfg.rpc_url,
+            let mint_response = match rpc_with_fallback(
+                &cfg,
                 "getAccountInfo",
                 json!([parsed.mint, {"encoding":"jsonParsed","commitment":"confirmed"}]),
             ) {
@@ -150,14 +150,14 @@ mod component {
         mint: &str,
     ) -> (Option<crate::risk::HolderEvidence>, Option<String>) {
         let result = (|| {
-            let largest = rpc(
-                &cfg.rpc_url,
+            let largest = rpc_with_fallback(
+                cfg,
                 "getTokenLargestAccounts",
                 json!([mint, {"commitment":"confirmed"}]),
             )?;
             let addresses = parse_largest_token_accounts(&largest)?;
-            let accounts = rpc(
-                &cfg.rpc_url,
+            let accounts = rpc_with_fallback(
+                cfg,
                 "getMultipleAccounts",
                 json!([addresses, {"encoding":"jsonParsed","commitment":"confirmed"}]),
             )?;
@@ -207,9 +207,38 @@ mod component {
         if !(200..300).contains(&status) {
             return Err(format!("{method} returned HTTP {status}"));
         }
-        response
+        let value = response
             .json::<Value>()
-            .map_err(|error| format!("{method} JSON failed: {error}"))
+            .map_err(|error| format!("{method} JSON failed: {error}"))?;
+        if let Some(error) = value.get("error") {
+            let code = error
+                .get("code")
+                .and_then(Value::as_i64)
+                .unwrap_or_default();
+            let message = error
+                .get("message")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown RPC error")
+                .chars()
+                .take(120)
+                .collect::<String>();
+            return Err(format!("{method} RPC error {code}: {message}"));
+        }
+        Ok(value)
+    }
+
+    fn rpc_with_fallback(cfg: &RiskConfig, method: &str, params: Value) -> Result<Value, String> {
+        match rpc(&cfg.rpc_url, method, params.clone()) {
+            Ok(value) => Ok(value),
+            Err(primary_error) => {
+                let Some(fallback_url) = &cfg.rpc_fallback_url else {
+                    return Err(primary_error);
+                };
+                rpc(fallback_url, method, params).map_err(|fallback_error| {
+                    format!("{primary_error}; fallback failed: {fallback_error}")
+                })
+            }
+        }
     }
 
     fn failure(code: &str, detail: &str) -> Result<ToolResult, String> {

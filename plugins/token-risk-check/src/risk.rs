@@ -17,6 +17,7 @@ pub const DEFAULT_MARKET_BASE_URL: &str = "https://api.dexscreener.com/token-pai
 #[derive(Debug, Clone, PartialEq)]
 pub struct RiskConfig {
     pub rpc_url: String,
+    pub rpc_fallback_url: Option<String>,
     pub market_base_url: String,
     pub require_market_data: bool,
     pub min_liquidity_usd: f64,
@@ -30,6 +31,7 @@ impl Default for RiskConfig {
     fn default() -> Self {
         Self {
             rpc_url: DEFAULT_RPC_URL.to_string(),
+            rpc_fallback_url: None,
             market_base_url: DEFAULT_MARKET_BASE_URL.to_string(),
             require_market_data: true,
             min_liquidity_usd: 25_000.0,
@@ -46,6 +48,12 @@ impl RiskConfig {
         let mut cfg = Self::default();
         if let Some(value) = section.get("rpc_url").filter(|v| !v.trim().is_empty()) {
             cfg.rpc_url = value.trim_end_matches('/').to_string();
+        }
+        if let Some(value) = section
+            .get("rpc_fallback_url")
+            .filter(|v| !v.trim().is_empty())
+        {
+            cfg.rpc_fallback_url = Some(value.trim_end_matches('/').to_string());
         }
         if let Some(value) = section
             .get("market_base_url")
@@ -101,6 +109,9 @@ impl RiskConfig {
             return Err("top10_amber_pct must not exceed top10_red_pct".to_string());
         }
         validate_endpoint(&cfg.rpc_url, "rpc_url")?;
+        if let Some(url) = &cfg.rpc_fallback_url {
+            validate_endpoint(url, "rpc_fallback_url")?;
+        }
         validate_endpoint(&cfg.market_base_url, "market_base_url")?;
         Ok(cfg)
     }
