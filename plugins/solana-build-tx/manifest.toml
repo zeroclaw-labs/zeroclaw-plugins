@@ -1,0 +1,11 @@
+name = "solana-build-tx"
+version = "0.1.0"
+description = "Build Solana transactions from Anchor IDLs with simulation-based policy enforcement. T1 custody tier — returns unsigned tx, never signs."
+author = "ZeroClaw Labs"
+wasm_path = "solana_build_tx.wasm"
+capabilities = ["tool"]
+# config_read: host injects this plugin's config section (IDL registry,
+# spending caps, allowlists) into execute args as `__config`.
+# http_client: plugin calls simulateTransaction + getLatestBlockhash via
+# waki HTTP to the operator-configured rpc_url.
+permissions = ["config_read", "http_client"]
