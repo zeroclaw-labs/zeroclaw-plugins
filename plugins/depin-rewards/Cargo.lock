@@ -18,6 +18,7 @@ checksum = "b588b76d00fde79687d7646a9b5bdf3cc0f655e0bbd080335a95d7e96f3587da"
 name = "depin-rewards"
 version = "0.1.0"
 dependencies = [
+ "serde",
  "serde_json",
  "wit-bindgen",
 ]
@@ -238,6 +239,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4148590afebada386688f18773da617792bf2ef03ffc1e4cbd2b1d45b023e0ba"
 dependencies = [
  "serde_core",
+ "serde_derive",
 ]
 
 [[package]]

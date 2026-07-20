@@ -17,7 +17,10 @@ publish = false
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
+# serde (derive) added slice C (Relay JSON → RawHotspotInfo). palinurus-core
+# (Pubkey/versioned_tx/serialize_tx/Instruction) lands in slice G (claim tx).
 wit-bindgen = "0.46"
+serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
 [profile.release]

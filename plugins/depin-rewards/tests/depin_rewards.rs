@@ -8,7 +8,8 @@
 // Import path = `<crate>::<module>::*` = `depin_rewards::depin_rewards::*`
 // (crate `depin-rewards` → lib `depin_rewards`; module `depin_rewards`).
 use depin_rewards::depin_rewards::{
-  enforce_hotspot_allowlist, HttpError, HttpClient, MockHttp, RewardsConfig, RewardsError,
+  do_status, enforce_hotspot_allowlist, fetch_hotspot, HttpError, HttpClient, HotspotInfo,
+  MockHttp, RewardsConfig, RewardsError,
 };
 use std::collections::HashMap;
 
@@ -314,6 +315,127 @@ fn allowlist_rejects_unknown_hotspot() {
   ]))
   .unwrap();
   let err = enforce_hotspot_allowlist(&c, "evil-id").unwrap_err();
+  assert!(matches!(err, RewardsError::Config(_)));
+  assert!(format!("{err:?}").contains("allowlist"));
+}
+
+// ── Slice C: HotspotInfo parse + fetch_hotspot + do_status ───────────────────
+
+const HOTSPOT_IOT_ONLINE: &str = include_str!("fixtures/hotspot-iot-online.json");
+
+fn base_cfg() -> RewardsConfig {
+  RewardsConfig::from_section(&cfg(&[
+    ("relay_api_key", "rk"),
+    ("hotspots", "[\"ecc-1\"]"),
+    ("telegram_bot_token", "t"),
+    ("telegram_chat_id", "1"),
+  ]))
+  .unwrap()
+}
+
+#[test]
+fn hotspot_info_parses_fixture() {
+  let info = HotspotInfo::parse(HOTSPOT_IOT_ONLINE.as_bytes()).expect("fixture parses");
+  assert_eq!(info.owner, "BcJzP2hEYgzjUwpHEtS6RhuqGfEJVx8Rq3MejujAAWrR");
+  assert_eq!(info.name, "tall-plum-ocelot");
+  assert_eq!(info.networks, vec!["iot".to_string()]);
+  assert_eq!(info.iot_is_active, Some(true));
+  assert_eq!(info.mobile_is_active, Some(false));
+  assert_eq!(info.iot_location, Some(631842973910616063));
+  assert_eq!(info.maker_name.as_deref(), Some("SenseCAP"));
+}
+
+#[test]
+fn hotspot_info_is_active_reduction() {
+  let mk = |iot: Option<bool>, mob: Option<bool>| HotspotInfo {
+    owner: "BcJzP2hEYgzjUwpHEtS6RhuqGfEJVx8Rq3MejujAAWrR".into(),
+    name: "x".into(),
+    networks: vec![],
+    iot_is_active: iot,
+    mobile_is_active: mob,
+    iot_location: None,
+    maker_name: None,
+  };
+  // active if ANY joined network reports active
+  assert_eq!(mk(Some(true), Some(false)).is_active(), Some(true));
+  assert_eq!(mk(Some(false), Some(true)).is_active(), Some(true));
+  assert_eq!(mk(Some(true), None).is_active(), Some(true));
+  assert_eq!(mk(None, Some(true)).is_active(), Some(true));
+  // inactive only if all known networks inactive
+  assert_eq!(mk(Some(false), Some(false)).is_active(), Some(false));
+  assert_eq!(mk(Some(false), None).is_active(), Some(false));
+  assert_eq!(mk(None, Some(false)).is_active(), Some(false));
+  // unknown only if both unknown
+  assert_eq!(mk(None, None).is_active(), None);
+}
+
+#[test]
+fn hotspot_info_primary_network() {
+  let info = HotspotInfo::parse(HOTSPOT_IOT_ONLINE.as_bytes()).unwrap();
+  assert_eq!(info.primary_network(), "iot");
+}
+
+#[test]
+fn fetch_hotspot_200_returns_info() {
+  let mut mock = MockHttp::new();
+  mock.set_get(
+    "https://api.relaywireless.com/v1/helium/l2/hotspots/ecc-1".to_string(),
+    HOTSPOT_IOT_ONLINE.as_bytes().to_vec(),
+  );
+  let cfg = base_cfg();
+  let info = fetch_hotspot(&mock, &cfg, "ecc-1").expect("200 fetch");
+  assert_eq!(info.name, "tall-plum-ocelot");
+  assert_eq!(info.iot_is_active, Some(true));
+}
+
+#[test]
+fn fetch_hotspot_404_maps_to_relay_error() {
+  let mut mock = MockHttp::new();
+  mock.set_get_err(
+    "https://api.relaywireless.com/v1/helium/l2/hotspots/missing".to_string(),
+    HttpError::Status(404, "not found".into()),
+  );
+  let cfg = base_cfg();
+  let err = fetch_hotspot(&mock, &cfg, "missing").unwrap_err();
+  assert!(matches!(err, RewardsError::Relay(_)));
+  assert!(format!("{err:?}").contains("not found"));
+}
+
+#[test]
+fn fetch_hotspot_402_maps_to_relay_quota() {
+  let mut mock = MockHttp::new();
+  mock.set_get_err(
+    "https://api.relaywireless.com/v1/helium/l2/hotspots/ecc-1".to_string(),
+    HttpError::Status(402, "quota exhausted".into()),
+  );
+  let cfg = base_cfg();
+  let err = fetch_hotspot(&mock, &cfg, "ecc-1").unwrap_err();
+  assert!(matches!(err, RewardsError::Relay(_)));
+  assert!(format!("{err:?}").contains("quota") || format!("{err:?}").contains("402"));
+}
+
+#[test]
+fn do_status_online_shape() {
+  let mut mock = MockHttp::new();
+  mock.set_get(
+    "https://api.relaywireless.com/v1/helium/l2/hotspots/ecc-1".to_string(),
+    HOTSPOT_IOT_ONLINE.as_bytes().to_vec(),
+  );
+  let cfg = base_cfg();
+  let out = do_status(&mock, &cfg, "ecc-1").expect("status ok");
+  assert_eq!(out.is_active, Some(true));
+  assert!(out.summary.contains("ONLINE"), "summary: {}", out.summary);
+  assert!(out.summary.contains("tall-plum-ocelot"));
+  // ≤200 tokens (chars/4) and ≤800 chars (SPEC-3 §7)
+  assert!(out.summary.len() <= 800, "summary too long: {} chars", out.summary.len());
+  assert!(out.summary.len() / 4 <= 200);
+}
+
+#[test]
+fn do_status_rejects_unknown_hotspot() {
+  let mock = MockHttp::new();
+  let cfg = base_cfg();
+  let err = do_status(&mock, &cfg, "evil-id").unwrap_err();
   assert!(matches!(err, RewardsError::Config(_)));
   assert!(format!("{err:?}").contains("allowlist"));
 }

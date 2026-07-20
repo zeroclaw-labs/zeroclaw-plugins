@@ -16,7 +16,7 @@ use std::collections::HashMap;
 // ── Errors ──────────────────────────────────────────────────────────────────
 
 /// Transport / HTTP-level error from an [`HttpClient`] call.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub enum HttpError {
   /// Non-2xx HTTP status (code + response body / message).
   Status(u16, String),
@@ -70,6 +70,7 @@ pub trait HttpClient {
 /// though the mock itself is only exercised in host tests.
 pub struct MockHttp {
   gets: HashMap<String, Vec<u8>>,
+  get_errs: HashMap<String, HttpError>,
   post_resp: HashMap<String, Vec<u8>>,
   posts: RefCell<Vec<RecordedPost>>,
 }
@@ -78,6 +79,7 @@ impl Default for MockHttp {
   fn default() -> Self {
     Self {
       gets: HashMap::new(),
+      get_errs: HashMap::new(),
       post_resp: HashMap::new(),
       posts: RefCell::new(Vec::new()),
     }
@@ -99,6 +101,12 @@ impl MockHttp {
     self.post_resp.insert(url, body);
   }
 
+  /// Register an error to return for a GET of exactly `url` (for testing the
+  /// status-code → RewardsError mapping in `fetch_*`).
+  pub fn set_get_err(&mut self, url: String, err: HttpError) {
+    self.get_errs.insert(url, err);
+  }
+
   /// Every recorded POST call `(url, fields)`, in call order.
   pub fn posts(&self) -> Vec<RecordedPost> {
     self.posts.borrow().clone()
@@ -107,6 +115,9 @@ impl MockHttp {
 
 impl HttpClient for MockHttp {
   fn get(&self, url: &str, _bearer: &str) -> Result<Vec<u8>, HttpError> {
+    if let Some(err) = self.get_errs.get(url) {
+      return Err(err.clone());
+    }
     self
       .gets
       .get(url)
@@ -261,4 +272,186 @@ pub fn enforce_hotspot_allowlist(cfg: &RewardsConfig, id: &str) -> Result<(), Re
       "hotspot '{id}' not in configured allowlist"
     )))
   }
+}
+
+// ── HotspotInfo (Relay get-hotspot response) ────────────────────────────────
+
+#[derive(serde::Deserialize)]
+struct RawNetInfo {
+  #[serde(default)]
+  is_active: Option<bool>,
+  #[serde(default)]
+  location: Option<i64>,
+}
+
+#[derive(serde::Deserialize)]
+struct RawMaker {
+  #[serde(default)]
+  name: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+struct RawHotspotInfo {
+  owner: String,
+  name: String,
+  #[serde(default)]
+  networks: Vec<String>,
+  #[serde(default)]
+  iot_info: Option<RawNetInfo>,
+  #[serde(default)]
+  mobile_info: Option<RawNetInfo>,
+  #[serde(default)]
+  maker: Option<RawMaker>,
+}
+
+/// The parsed Relay `GET /helium/l2/hotspots/:id` response — only the fields
+/// the plugin consumes. Tolerant of missing `mobile_info` (iot-only hotspots)
+/// and missing `maker`.
+#[derive(Debug)]
+pub struct HotspotInfo {
+  pub owner: String,
+  pub name: String,
+  pub networks: Vec<String>,
+  pub iot_is_active: Option<bool>,
+  pub mobile_is_active: Option<bool>,
+  pub iot_location: Option<i64>,
+  pub maker_name: Option<String>,
+}
+
+impl HotspotInfo {
+  pub fn parse(json: &[u8]) -> Result<Self, RewardsError> {
+    let raw: RawHotspotInfo = serde_json::from_slice(json)
+      .map_err(|e| RewardsError::Parse(format!("hotspot info: {e}")))?;
+    Ok(HotspotInfo {
+      owner: raw.owner,
+      name: raw.name,
+      networks: raw.networks,
+      iot_is_active: raw.iot_info.as_ref().and_then(|i| i.is_active),
+      mobile_is_active: raw.mobile_info.as_ref().and_then(|i| i.is_active),
+      iot_location: raw.iot_info.as_ref().and_then(|i| i.location),
+      maker_name: raw.maker.and_then(|m| m.name),
+    })
+  }
+
+  /// Online/offline reduction across joined networks: `Some(true)` if ANY
+  /// joined network reports active; `Some(false)` if all known networks
+  /// inactive; `None` only if both unknown.
+  pub fn is_active(&self) -> Option<bool> {
+    match (self.iot_is_active, self.mobile_is_active) {
+      (None, None) => None,
+      (iot, mob) => Some(iot.unwrap_or(false) || mob.unwrap_or(false)),
+    }
+  }
+
+  /// The network to read status/rewards from: iot preferred, else mobile.
+  pub fn primary_network(&self) -> &'static str {
+    if self.networks.iter().any(|n| n == "iot") {
+      "iot"
+    } else if self.networks.iter().any(|n| n == "mobile") {
+      "mobile"
+    } else {
+      "iot"
+    }
+  }
+}
+
+// ── fetch + do_status ────────────────────────────────────────────────────────
+
+/// Map an HTTP error from Relay to a specific `RewardsError::Relay` message
+/// (404 → not found, 402 → quota, 429 → rate-limited, 5xx → server error).
+fn map_relay_http(e: HttpError) -> RewardsError {
+  match e {
+    HttpError::Status(404, msg) => RewardsError::Relay(format!("hotspot not found: {msg}")),
+    HttpError::Status(402, msg) => {
+      RewardsError::Relay(format!("Relay quota exhausted: {msg}"))
+    }
+    HttpError::Status(429, msg) => {
+      RewardsError::Relay(format!("Relay rate-limited (429): {msg}"))
+    }
+    HttpError::Status(c, msg) if (500..600).contains(&c) => {
+      RewardsError::Relay(format!("Relay server error {c}: {msg}"))
+    }
+    HttpError::Status(c, msg) => RewardsError::Relay(format!("Relay HTTP {c}: {msg}")),
+    other => RewardsError::Http(other),
+  }
+}
+
+/// `GET {base}/helium/l2/hotspots/:id` → parsed [`HotspotInfo`]. HTTP status
+/// codes map to specific Relay errors (404/402/429/5xx); other transport
+/// errors pass through as `RewardsError::Http`.
+pub fn fetch_hotspot(
+  http: &dyn HttpClient,
+  cfg: &RewardsConfig,
+  id: &str,
+) -> Result<HotspotInfo, RewardsError> {
+  let url = format!("{}/helium/l2/hotspots/{}", cfg.relay_base_url, id);
+  let bearer = format!("Bearer {}", cfg.relay_api_key);
+  let body = http.get(&url, &bearer).map_err(map_relay_http)?;
+  HotspotInfo::parse(&body)
+}
+
+/// A short `4…4` form of an address (owner pubkey) for the shaped output.
+/// Char-based so it never panics on non-ASCII; the substantive
+/// `palinurus_core::short_pubkey` reuse lands in slice G alongside the claim-tx
+/// Pubkey handling.
+fn short_addr(s: &str) -> String {
+  let chars: Vec<char> = s.chars().collect();
+  if chars.len() <= 8 {
+    s.to_string()
+  } else {
+    let head: String = chars[..4].iter().collect();
+    let tail: String = chars[chars.len() - 4..].iter().collect();
+    format!("{head}…{tail}")
+  }
+}
+
+/// Shape a status read into a ≤200-token summary (SPEC-3 §7).
+fn shape_status(info: &HotspotInfo) -> String {
+  let active = match info.is_active() {
+    Some(true) => "ONLINE",
+    Some(false) => "OFFLINE",
+    None => "UNKNOWN",
+  };
+  let net = info.primary_network();
+  let nets = if info.networks.is_empty() {
+    "none".to_string()
+  } else {
+    info.networks.join(", ")
+  };
+  let mut s = format!(
+    "✓ hotspot {} — {} ({})\n  owner: {}  networks: {}",
+    info.name,
+    active,
+    net,
+    short_addr(&info.owner),
+    nets
+  );
+  if let Some(maker) = &info.maker_name {
+    s.push_str(&format!("  maker: {maker}"));
+  }
+  s
+}
+
+/// The shaped result of an `execute` action. Grows per slice (C = status;
+/// D adds rewards; E adds alerts_sent; G adds tx_b64 + explorer_url).
+#[derive(Debug)]
+pub struct RewardsOutput {
+  pub is_active: Option<bool>,
+  pub summary: String,
+}
+
+/// `action = "status"`: read one hotspot's online/offline now + shape. Fails
+/// closed on (a) hotspot not in the configured allowlist, (b) Relay errors.
+pub fn do_status(
+  http: &dyn HttpClient,
+  cfg: &RewardsConfig,
+  id: &str,
+) -> Result<RewardsOutput, RewardsError> {
+  enforce_hotspot_allowlist(cfg, id)?;
+  let info = fetch_hotspot(http, cfg, id)?;
+  let summary = shape_status(&info);
+  Ok(RewardsOutput {
+    is_active: info.is_active(),
+    summary,
+  })
 }
