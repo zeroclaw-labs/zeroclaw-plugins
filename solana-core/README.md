@@ -1,28 +1,22 @@
 # solana-core
 
-Pure Rust Solana substrate for ZeroClaw wasm tool plugins. It has no WIT bindings, no `waki`, and no `solana-sdk` dependency.
+Pure Rust Solana helpers for ZeroClaw wasm tool plugins. No WIT, no `waki`, no `solana-sdk`.
 
-The crate exists so Track C plugins can share Solana message, memo, nonce, key, RPC, and shaping code while keeping each plugin component small enough for `wasm32-wasip2`.
+Shared by the DePIN plugins so each component stays small enough for `wasm32-wasip2`.
 
-## Module Map
+## Modules
 
 | Module | Responsibility |
 | --- | --- |
-| `error` | Shared `CoreError` and `CoreResult` types with short operator-facing messages. |
-| `keys` | 32-byte public-key type plus base58 encode/decode through `bs58`. |
-| `ix` | Solana instruction helpers for System Program durable nonce advance and SPL Memo. |
-| `nonce` | Durable nonce account parsing and initialized nonce-state validation. |
-| `rpc` | Minimal JSON-RPC wrapper over an injectable `HttpClient` trait. |
-| `shape` | Output length checks and truncation helpers for chat-safe summaries. |
-| `tx` | Legacy message/transaction encoding, compact-u16 encoding, and unsigned durable memo transaction assembly. |
+| `error` | `CoreError` / `CoreResult` |
+| `keys` | 32-byte pubkeys, base58 |
+| `ix` | System Program nonce advance + SPL Memo |
+| `nonce` | Durable nonce account parse |
+| `rpc` | JSON-RPC over an injectable `HttpClient` |
+| `shape` | Chat-safe truncation / length budgets |
+| `tx` | Legacy message encode, unsigned durable-memo tx assembly |
 
-Legacy Solana message encoding is implemented first because it keeps the wasip2 substrate simple and dependency-light. Versioned v0 messages can be added later if plugins need address lookup tables or newer transaction features.
-
-## Wire-Format Confidence
-
-`tx` includes a pinned golden `unsigned_tx_base64` fixture for a deterministic durable-nonce memo transaction. That test locks the hand-rolled legacy encoder's signature count, header bytes, account-key order, instruction program indices, instruction data bytes, and final base64 output without adding `solana-sdk` as a normal dependency.
-
-This is a regression guard for this implementation, not an independent Solana SDK oracle. Before a public demo or production signing flow, verify a signed transaction from this encoder against an external oracle: sign the fixture-shaped transaction, submit it to a local validator or devnet, and confirm the transaction is accepted and the Memo instruction renders as expected in validator logs or an explorer.
+Legacy messages only for now (keeps the wasip2 build simple). A golden `unsigned_tx_base64` fixture locks the encoder output in tests; still verify a signed tx on a local validator or explorer before you rely on it in production.
 
 ## HttpClient Trait
 

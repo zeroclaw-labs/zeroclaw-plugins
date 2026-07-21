@@ -228,6 +228,46 @@ fn prefers_newest_matching_attestation_by_block_time() {
 }
 
 #[test]
+fn returns_missing_when_device_id_is_only_a_substring() {
+    // Memo is for prod-greenhouse-7; a prompt-injected device_id of "7"
+    // must not match via contains() and falsely report OK.
+    let http = MapHttp::default()
+        .with_response(
+            signatures_body(25),
+            signatures_response(json!([
+                {"signature": "sig-other", "blockTime": 1_720_000_000, "err": null}
+            ])),
+        )
+        .with_response(
+            transaction_body("sig-other"),
+            transaction_response(
+                1_720_000_000,
+                "ZCDEPIN|prod-greenhouse-7|temperature|21.4|celsius|5733333|abc123def456",
+            ),
+        );
+
+    let output = execute(r#"{"device_id":"7"}"#, &config(), &http, 1_720_000_060).expect("watch");
+
+    assert_eq!(output.verdict, Verdict::Missing);
+    assert!(output.summary.contains("DEPIN uptime MISSING"));
+}
+
+#[test]
+fn refuses_pipe_or_empty_device_id() {
+    for args in [
+        r#"{"device_id":""}"#,
+        r#"{"device_id":"device|7"}"#,
+        "{\"device_id\":\"device\\n7\"}",
+    ] {
+        let err = execute(args, &config(), &MapHttp::default(), 1).unwrap_err();
+        assert!(
+            err.contains("device_id"),
+            "expected device_id refusal for {args}, got {err}"
+        );
+    }
+}
+
+#[test]
 fn refuses_scan_limits_over_fifty() {
     let mut cfg = config();
     cfg.insert("scan_limit".to_string(), "51".to_string());

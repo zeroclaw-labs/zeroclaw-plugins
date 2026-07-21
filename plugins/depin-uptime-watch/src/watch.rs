@@ -94,6 +94,13 @@ pub fn parse_args_strict(json: &str) -> Result<WatchArgs, String> {
     }
 
     let device_id = required_string(object, "device_id")?;
+    if device_id.trim().is_empty() {
+        return Err("device_id must not be empty".to_string());
+    }
+    if device_id.contains('|') || device_id.chars().any(char::is_control) {
+        return Err("device_id must not contain `|` or control characters".to_string());
+    }
+
     let max_age_secs = match object.get("max_age_secs") {
         Some(value) => Some(
             value
@@ -159,12 +166,14 @@ pub fn execute<H: HttpClient>(
 }
 
 fn memo_matches(memo: &str, prefix: &str, device_id: &str) -> bool {
+    // Exact pipe fields only. Never use substring contains() — a short
+    // prompt-injected device_id like "7" must not match "prod-greenhouse-7".
     let mut parts = memo.split('|');
     match (parts.next(), parts.next()) {
         (Some(found_prefix), Some(found_device_id)) => {
             found_prefix == prefix && found_device_id == device_id
         }
-        _ => memo.starts_with(prefix) && memo.contains(device_id),
+        _ => false,
     }
 }
 
