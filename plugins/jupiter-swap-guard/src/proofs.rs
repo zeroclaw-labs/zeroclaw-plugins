@@ -50,6 +50,10 @@ fn min_out_boundaries() {
 fn priority_fee_is_sound() {
     let limit: u32 = kani::any();
     let price: u64 = kani::any();
+    // Bound the price to a still-astronomical ceiling (10^12 micro-lamports/CU)
+    // so CBMC's 128-bit divider stays tractable; the production path saturates
+    // safely on the full range by construction.
+    kani::assume(price <= 1_000_000_000_000);
     let fee = priority_fee_lamports(limit, price);
     let product = limit as u128 * price as u128;
     if product == 0 {

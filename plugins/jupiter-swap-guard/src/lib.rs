@@ -39,6 +39,8 @@ pub mod instruction;
 #[cfg(not(kani))]
 pub mod jupiter;
 pub mod policy;
+#[cfg(not(kani))]
+pub mod summary;
 
 #[cfg(kani)]
 mod proofs;
