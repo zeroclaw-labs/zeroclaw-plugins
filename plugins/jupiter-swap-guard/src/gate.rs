@@ -2,11 +2,13 @@
 //! either refuse (fail closed) or return a verdict carrying the validated values
 //! the encoder needs. This is where the safety properties become one decision.
 //!
-//! Checks, in order: mint allowlist + cap + slippage (`P1`/`P3`/`P2`), then a
+//! Checks, in order: mint allowlist + cap + slippage (`P1`/`P3`/`P2`); then a
 //! sweep over every instruction for the program allowlist (`P4`), the signer set
-//! (`P5`), ATA-create ownership and destination binding (`D1`), fund-moving
-//! System instructions (`D2`), and the priority fee (`D4`). `min_out` is computed
-//! from the quote the plugin actually received, binding the two API calls (`D3`).
+//! (`P5`), ATA-create ownership (`D1a`), and fund-moving System AND top-level
+//! Token/Token-2022 instructions (`D2`), gathering the priority fee (`D4`). After
+//! the sweep it decodes the swap instruction's own on-chain amounts and binds them
+//! to what was authorized and quoted (`D3`), then positionally binds the swap
+//! output to the payer's ATA (`D1b`).
 //!
 //! Static-vs-lookup account roles (`D5`) are enforced at the encode step, which
 //! owns the static/lookup partition; the gate records the accounts that must be
@@ -35,8 +37,9 @@ pub struct SwapRequest {
     pub slippage_bps: u16,
 }
 
-/// The token programs and ATA program in play, resolved by the caller (from the
-/// mint owners via RPC, or from the route's own ATA-create instructions).
+/// The token programs and ATA program in play, resolved by the caller from each
+/// mint's on-chain owner via RPC (never the aggregator's response, since the token
+/// program is a seed of the destination-binding ATA derivation).
 #[derive(Debug, Clone)]
 pub struct Programs {
     pub input_token_program: Pubkey,

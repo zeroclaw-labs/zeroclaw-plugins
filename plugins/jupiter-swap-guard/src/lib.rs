@@ -14,9 +14,9 @@
 //! Build:  rustup target add wasm32-wasip2
 //!         cargo build --target wasm32-wasip2 --release
 //!
-//! Status: encoder verified byte-exact against the Anza crates (KT-1). The full
-//! quote -> gate -> rebuild pipeline is being wired; `execute` fails closed until
-//! it lands.
+//! The encoder is verified byte-exact against the Anza crates; the full
+//! quote -> gate -> rebuild pipeline is implemented and host-tested end to end
+//! over real captured fixtures. `execute` fails closed on any refusal.
 //!
 //! `unsafe` is forbidden in every pure module (`encode`, `b58`, `policy`, `ata`,
 //! `decode`, `gate`, `compile`, `jupiter`, `summary`, `pipeline`); the only

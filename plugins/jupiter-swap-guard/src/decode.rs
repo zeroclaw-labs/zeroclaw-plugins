@@ -1,11 +1,13 @@
 //! Pure decoders for the instruction data of the *allowlisted* programs that can
 //! move funds. Program-id allowlisting alone is not enough: a `System.transfer`
 //! to an attacker or a runaway `SetComputeUnitPrice` both use allowlisted
-//! programs. The gate decodes their data (`D2`, `D4`) rather than trusting the id.
+//! programs. The gate decodes their data (`D2`, `D3`, `D4`) rather than trusting
+//! the id, plus the Jupiter route's own amounts and destination index.
 //!
 //! No I/O, no wasm dependency. Formats verified against a real captured Jupiter
-//! route (System Transfer, ComputeBudget SetComputeUnitLimit/Price, ATA
-//! CreateIdempotent).
+//! route: System Transfer, ComputeBudget SetComputeUnitLimit/Price, ATA
+//! CreateIdempotent, the ExactIn route tail amounts (`D3`), the route destination
+//! index (`D1b`), and top-level Token CloseAccount/benign classification (`D2`).
 
 #![forbid(unsafe_code)]
 
@@ -13,8 +15,6 @@
 pub const SYSTEM_PROGRAM_ID: &str = "11111111111111111111111111111111";
 /// ComputeBudget program id.
 pub const COMPUTE_BUDGET_PROGRAM_ID: &str = "ComputeBudget111111111111111111111111111111";
-/// Memo program id (v2).
-pub const MEMO_PROGRAM_ID: &str = "MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr";
 
 /// A decoded System-program instruction — only the variants a swap can legitimately
 /// contain, plus a catch-all the gate treats as unsupported (fail closed).
@@ -93,8 +93,6 @@ pub fn decode_compute_budget(data: &[u8]) -> Result<ComputeBudgetIx, String> {
 /// instruction: `[funder, ata, owner, mint, system, token_program]`. Both
 /// `Create` (empty data) and `CreateIdempotent` (`[1]`) share this layout.
 pub const ATA_CREATE_OWNER_INDEX: usize = 2;
-pub const ATA_CREATE_ATA_INDEX: usize = 1;
-pub const ATA_CREATE_MINT_INDEX: usize = 3;
 
 /// The amount fields Jupiter embeds at the TAIL of an ExactIn route instruction,
 /// after the variable-length `route_plan`: `in_amount` (u64), `quoted_out_amount`

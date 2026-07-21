@@ -6,8 +6,8 @@
 //! refused (`P3`), over-max slippage is refused and the emitted `min_out` floor is
 //! sound (`P2`), and the priority fee is bounded (`D4`). The Kani harnesses in
 //! `crate::proofs` quantify over these functions. Destination binding (`D1`),
-//! instruction-data decoding (`D2`), and lookup-table account roles (`D5`) build
-//! on top and land with the instruction gate.
+//! instruction-data decoding (`D2`), on-chain amount binding (`D3`), and
+//! lookup-table account roles (`D5`) build on top and land with the instruction gate.
 
 #![forbid(unsafe_code)]
 
