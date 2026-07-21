@@ -88,7 +88,7 @@ mod component {
         }
 
         fn description() -> String {
-            "Read-only audit of SPL Token and Token-2022 account delegate fields and allowance exposure. Returns deterministic risk findings and never creates, signs, or submits a transaction."
+            "Read-only audit of SPL Token and Token-2022 account delegate fields and allowance exposure. Returns deterministic, chat-ready Markdown; preserve its sections and links verbatim. Never creates, signs, or submits a transaction."
                 .to_string()
         }
 

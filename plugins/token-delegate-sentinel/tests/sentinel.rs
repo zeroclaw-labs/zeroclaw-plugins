@@ -7,7 +7,9 @@ use token_delegate_sentinel::address::Address;
 use token_delegate_sentinel::audit::{
     classify, run_audit, AuditError, Risk, SnapshotSlots, MAX_OUTPUT_BYTES,
 };
-use token_delegate_sentinel::config::{parse_invocation, ConfigError, SentinelConfig};
+use token_delegate_sentinel::config::{
+    parse_invocation, ConfigError, ExplorerCluster, SentinelConfig,
+};
 use token_delegate_sentinel::rpc::{
     fetch_mints, HttpTransport, RpcError, TransportError, MINT_BATCH_SIZE,
 };
@@ -95,6 +97,7 @@ fn config_is_fail_closed_and_bounded() {
     let parsed = SentinelConfig::from_section(&valid_config()).expect("valid config");
     assert_eq!(parsed.max_accounts, 256);
     assert_eq!(parsed.max_findings, 5);
+    assert_eq!(parsed.explorer_cluster, None);
 
     let mut boundary_values = valid_config();
     boundary_values.insert(
@@ -103,7 +106,16 @@ fn config_is_fail_closed_and_bounded() {
     );
     boundary_values.insert("max_findings".into(), "10".into());
     boundary_values.insert("max_response_bytes".into(), "4000000".into());
-    assert!(SentinelConfig::from_section(&boundary_values).is_ok());
+    boundary_values.insert("explorer_cluster".into(), "devnet".into());
+    let boundary = SentinelConfig::from_section(&boundary_values).expect("boundary config");
+    assert_eq!(boundary.explorer_cluster, Some(ExplorerCluster::Devnet));
+
+    let mut values = valid_config();
+    values.insert("explorer_cluster".into(), "https://attacker.invalid".into());
+    assert_eq!(
+        SentinelConfig::from_section(&values),
+        Err(ConfigError::InvalidExplorerCluster)
+    );
 
     let mut values = valid_config();
     values.insert(
@@ -179,6 +191,15 @@ fn config_is_fail_closed_and_bounded() {
 
 #[test]
 fn model_cannot_override_operator_scope_or_request_submission() {
+    let malicious_attempt = json!({
+        "owner": "attacker",
+        "rpc_url": "https://attacker.invalid",
+        "private_key": "attacker-controlled",
+        "send_transaction": true
+    })
+    .to_string();
+    assert!(parse_invocation(&malicious_attempt).is_err());
+
     for field in [
         "owner",
         "rpc_url",
@@ -400,7 +421,61 @@ fn account_without_delegate_field_produces_green_report() {
     );
     assert_eq!(report.status, "green");
     assert_eq!(report.delegated_accounts, 0);
-    assert!(report.render().starts_with("GREEN"));
+    assert!(report.render().starts_with("🟢 **Overall risk: GREEN**"));
+}
+
+#[test]
+fn official_cluster_output_uses_fixed_explorer_links_and_readable_sections() {
+    let owner = address(1);
+    let mint = address(2);
+    let delegate = address(3);
+    let token_account = address(4);
+    let account = TokenAccount {
+        address: token_account,
+        program: ProgramKind::SplToken,
+        mint,
+        owner,
+        amount: 10,
+        delegate: Some(delegate),
+        state: AccountState::Initialized,
+        is_native: false,
+        delegated_amount: 20,
+        close_authority: None,
+    };
+    let mut report = classify(
+        owner,
+        address(9),
+        SnapshotSlots {
+            minimum: 10,
+            maximum: 11,
+        },
+        &[account],
+        &BTreeMap::from([((ProgramKind::SplToken, mint), None)]),
+        &BTreeSet::new(),
+        5,
+    );
+    report.explorer_cluster = Some(ExplorerCluster::Devnet);
+    let rendered = report.render();
+
+    assert!(rendered.starts_with("🔴 **Overall risk: RED**"));
+    assert!(rendered.contains("**1. RED · SPL Token**"));
+    assert!(rendered.contains("\n- **Account:**"));
+    for linked_address in [owner, token_account, mint, delegate] {
+        assert!(rendered.contains(&format!(
+            "https://explorer.solana.com/address/{linked_address}?cluster=devnet"
+        )));
+    }
+    assert_eq!(
+        rendered
+            .matches("https://explorer.solana.com/address/")
+            .count(),
+        4
+    );
+    assert!(!rendered.contains("rpc.example.test"));
+
+    let mut unlinked = report;
+    unlinked.explorer_cluster = None;
+    assert!(!unlinked.render().contains("https://"));
 }
 
 #[test]

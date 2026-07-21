@@ -5,7 +5,7 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 
 use crate::address::Address;
-use crate::config::SentinelConfig;
+use crate::config::{ExplorerCluster, SentinelConfig};
 use crate::rpc::{fetch_genesis_hash, fetch_mints, fetch_token_accounts, HttpTransport, RpcError};
 use crate::token_account::{AccountState, MintAccount, ProgramKind, TokenAccount};
 
@@ -56,6 +56,8 @@ pub struct AuditReport {
     pub status: &'static str,
     pub owner: Address,
     pub genesis_hash: Address,
+    #[serde(skip)]
+    pub explorer_cluster: Option<ExplorerCluster>,
     pub snapshot_slots: SnapshotSlots,
     pub accounts_scanned: usize,
     pub delegated_accounts: usize,
@@ -73,35 +75,32 @@ impl AuditReport {
     }
 
     pub fn render(&self) -> String {
+        let wallet = render_address(self.owner, self.explorer_cluster);
         if self.delegated_accounts == 0 {
             return format!(
-                "GREEN — no token-account delegate fields found across {} SPL Token and Token-2022 account(s) (finalized slots {}–{}). Authority fingerprint: {}. No transaction was created or submitted.",
+                "🟢 **Overall risk: GREEN**\n\n**Wallet:** {wallet}\n**Accounts scanned:** `{}`\n**Finalized slots:** `{}–{}`\n\nNo SPL Token or Token-2022 account delegates were found.\n\n**Authority fingerprint**\n`{}`\n\n**Transaction status**\nNo transaction was created or submitted.",
                 self.accounts_scanned,
                 self.snapshot_slots.minimum,
                 self.snapshot_slots.maximum,
                 self.authority_fingerprint
             );
         }
+        let status_icon = if self.status == "red" { "🔴" } else { "🟠" };
         let mut output = format!(
-            "{} — {} token delegate finding{} (finalized slots {}–{}).\n",
+            "{status_icon} **Overall risk: {}**\n\n**Wallet:** {wallet}\n**Findings:** `{}` · **Finalized slots:** `{}–{}`\n",
             self.status.to_ascii_uppercase(),
             self.delegated_accounts,
-            if self.delegated_accounts == 1 {
-                ""
-            } else {
-                "s"
-            },
             self.snapshot_slots.minimum,
             self.snapshot_slots.maximum
         );
-        for finding in &self.findings {
+        for (index, finding) in self.findings.iter().enumerate() {
             let risk = match finding.risk {
                 Risk::Red => "RED",
                 Risk::Amber => "AMBER",
             };
             let program = match finding.token_program {
-                ProgramKind::SplToken => "SPL",
-                ProgramKind::Token2022 => "T22",
+                ProgramKind::SplToken => "SPL Token",
+                ProgramKind::Token2022 => "Token-2022",
             };
             let authority = if finding.allowlisted {
                 "allowlisted"
@@ -115,18 +114,19 @@ impl AuditReport {
                 AccountState::Frozen => "frozen",
             };
             let asset = if finding.wrapped_native {
-                ", wrapped SOL"
+                " · wrapped SOL"
             } else if finding.nft_like {
-                ", NFT-like"
+                " · NFT-like"
             } else {
                 ""
             };
             let _ = writeln!(
                 output,
-                "{risk} {program} {} mint {}: delegate {} ({authority}), {state}, balance {}, allowance {}, immediate {}, dormant {}{asset}.",
-                short_address(finding.token_account),
-                short_address(finding.mint),
-                short_address(finding.delegate),
+                "\n**{}. {risk} · {program}**\n- **Account:** {}\n- **Mint:** {}\n- **Delegate:** {} · {authority}\n- **State:** `{state}`{asset}\n- **Balance:** `{}` · **Allowance:** `{}`\n- **Exposure:** `{}` immediate · `{}` dormant",
+                index + 1,
+                render_address(finding.token_account, self.explorer_cluster),
+                render_address(finding.mint, self.explorer_cluster),
+                render_address(finding.delegate, self.explorer_cluster),
                 finding.balance,
                 finding.allowance,
                 finding.immediate_exposure,
@@ -136,21 +136,21 @@ impl AuditReport {
         if self.findings_omitted > 0 {
             let _ = writeln!(
                 output,
-                "{} additional finding(s) omitted.",
+                "\n_{} additional finding(s) omitted; the fingerprint still covers all permissions._",
                 self.findings_omitted
             );
         }
         let _ = write!(
             output,
-            "Authority fingerprint: {}. Review and revoke unknown delegates in a trusted wallet; no transaction was created or submitted.",
-            self.authority_fingerprint
+            "\n**Authority fingerprint**\n`{}`\n\n**Transaction status**\nNo transaction was created or submitted.\n\n**Recommended action**\nReview and revoke unknown delegates in a trusted wallet.",
+            self.authority_fingerprint,
         );
         if output.len() <= MAX_OUTPUT_BYTES {
             return output;
         }
 
         format!(
-            "{} — {} active token delegate(s); {} red, {} amber; detailed output exceeded the local bound. Finalized slots {}–{}. Authority fingerprint: {}. No transaction was created or submitted.",
+            "{status_icon} **Overall risk: {}**\n\n**Wallet:** {wallet}\n**Findings:** `{}` · `{}` red · `{}` amber\n**Finalized slots:** `{}–{}`\n\nDetailed findings exceeded the local output bound; the fingerprint still covers all permissions.\n\n**Authority fingerprint**\n`{}`\n\n**Transaction status**\nNo transaction was created or submitted.",
             self.status.to_ascii_uppercase(),
             self.delegated_accounts,
             self.risk_counts.red,
@@ -235,7 +235,7 @@ pub fn run_audit<T: HttpTransport>(
     let minimum = slots.iter().copied().min().unwrap_or(account_snapshot_max);
     let maximum = slots.iter().copied().max().unwrap_or(account_snapshot_max);
 
-    Ok(classify(
+    let mut report = classify(
         config.owner,
         genesis_hash,
         SnapshotSlots { minimum, maximum },
@@ -243,7 +243,9 @@ pub fn run_audit<T: HttpTransport>(
         &mint_batch.mints,
         &config.allowed_delegates,
         config.max_findings,
-    ))
+    );
+    report.explorer_cluster = config.explorer_cluster;
+    Ok(report)
 }
 
 pub fn classify(
@@ -323,6 +325,7 @@ pub fn classify(
         },
         owner,
         genesis_hash,
+        explorer_cluster: None,
         snapshot_slots,
         accounts_scanned: accounts.len(),
         delegated_accounts,
@@ -403,4 +406,15 @@ fn fingerprint(owner: Address, genesis_hash: Address, accounts: &[TokenAccount])
 fn short_address(address: Address) -> String {
     let value = address.to_string();
     format!("{}…{}", &value[..4], &value[value.len() - 4..])
+}
+
+fn render_address(address: Address, cluster: Option<ExplorerCluster>) -> String {
+    let label = short_address(address);
+    let Some(cluster) = cluster else {
+        return format!("`{label}`");
+    };
+    format!(
+        "[{label}](https://explorer.solana.com/address/{address}{})",
+        cluster.explorer_query()
+    )
 }

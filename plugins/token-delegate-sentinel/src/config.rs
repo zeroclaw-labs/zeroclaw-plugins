@@ -20,11 +20,38 @@ pub const MAX_FINDINGS_LIMIT: usize = 10;
 pub const DEFAULT_MAX_RESPONSE_BYTES: usize = 1_500_000;
 pub const MAX_RESPONSE_BYTES_LIMIT: usize = 4_000_000;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ExplorerCluster {
+    MainnetBeta,
+    Devnet,
+    Testnet,
+}
+
+impl ExplorerCluster {
+    fn parse(value: &str) -> Result<Self, ConfigError> {
+        match value {
+            "mainnet-beta" => Ok(Self::MainnetBeta),
+            "devnet" => Ok(Self::Devnet),
+            "testnet" => Ok(Self::Testnet),
+            _ => Err(ConfigError::InvalidExplorerCluster),
+        }
+    }
+
+    pub fn explorer_query(self) -> &'static str {
+        match self {
+            Self::MainnetBeta => "",
+            Self::Devnet => "?cluster=devnet",
+            Self::Testnet => "?cluster=testnet",
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SentinelConfig {
     pub rpc_url: String,
     pub owner: Address,
     pub expected_genesis_hash: Address,
+    pub explorer_cluster: Option<ExplorerCluster>,
     pub allowed_delegates: BTreeSet<Address>,
     pub max_accounts: usize,
     pub max_findings: usize,
@@ -40,6 +67,7 @@ pub enum ConfigError {
     InvalidOwner,
     MissingGenesisHash,
     InvalidGenesisHash,
+    InvalidExplorerCluster,
     InvalidAllowedDelegate,
     DuplicateAllowedDelegate,
     TooManyAllowedDelegates,
@@ -58,6 +86,7 @@ impl ConfigError {
             Self::InvalidOwner => "CONFIG_OWNER_INVALID",
             Self::MissingGenesisHash => "CONFIG_EXPECTED_GENESIS_HASH_REQUIRED",
             Self::InvalidGenesisHash => "CONFIG_EXPECTED_GENESIS_HASH_INVALID",
+            Self::InvalidExplorerCluster => "CONFIG_EXPLORER_CLUSTER_INVALID",
             Self::InvalidAllowedDelegate => "CONFIG_ALLOWED_DELEGATE_INVALID",
             Self::DuplicateAllowedDelegate => "CONFIG_ALLOWED_DELEGATE_DUPLICATE",
             Self::TooManyAllowedDelegates => "CONFIG_ALLOWED_DELEGATES_TOO_MANY",
@@ -70,10 +99,11 @@ impl ConfigError {
 
 impl SentinelConfig {
     pub fn from_section(values: &HashMap<String, String>) -> Result<Self, ConfigError> {
-        const ALLOWED_KEYS: [&str; 7] = [
+        const ALLOWED_KEYS: [&str; 8] = [
             "rpc_url",
             "owner",
             "expected_genesis_hash",
+            "explorer_cluster",
             "allowed_delegates",
             "max_accounts",
             "max_findings",
@@ -104,6 +134,11 @@ impl SentinelConfig {
             ConfigError::MissingGenesisHash,
             ConfigError::InvalidGenesisHash,
         )?;
+        let explorer_cluster = values
+            .get("explorer_cluster")
+            .map(String::as_str)
+            .map(ExplorerCluster::parse)
+            .transpose()?;
 
         let mut allowed_delegates = BTreeSet::new();
         if let Some(list) = values.get("allowed_delegates") {
@@ -149,6 +184,7 @@ impl SentinelConfig {
             rpc_url: rpc_url.to_string(),
             owner,
             expected_genesis_hash,
+            explorer_cluster,
             allowed_delegates,
             max_accounts,
             max_findings,
