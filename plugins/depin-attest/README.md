@@ -75,29 +75,53 @@ Agent calls `execute` with a BME280 temperature reading:
   "sensor_id": "bme280-1",
   "value": 24.7,
   "unit": "celsius",
-  "timestamp": 1753000000
+  "timestamp": 1784620660
 }
 ```
 
-The plugin returns (T1, ~200 tokens):
+### T2 — real on-chain attestation (verified live on devnet)
+
+The plugin returns (T2, memo-fallback path, ~200 tokens):
 
 ```
-✓ attested reading → attestation PDA 9FMN…AWcu
-nonce: pRJq…9DU4  expiry: 1760776000
-tx (unsigned, base64, durable-nonce): AIABAAMGBt324ddloZPZy+FGzut5rBy0he1fWzeROoz1hX7/…
-explorer: https://explorer.solana.com/address/9FMN9VtFfQkDJBNTzsfFAqBpdfS8yhwHbyBX7CmDAWcu?cluster=devnet
-sign with: multisig approve (authority Toke…Q5DA)
+✓ attested + submitted → attestation PDA 9Kai…DL4u
+sig: 65UzT3h1vfrLVtrQWHsU4bDnWVikZt4D…  nonce: Ctnq…DqwS  expiry: 0
+explorer: https://explorer.solana.com/tx/65UzT3h1vfrLVtrQWHsU4bDnWVikZt4DL2vUaRPTDiGxfpCGZ9vK8LM2MQTj7mx3tHBX8BKjXptptRpZBVrxAPir?cluster=devnet
 ```
 
-The attestation PDA (`9FMN9VtFfQkDJBNTzsfFAqBpdfS8yhwHbyBX7CmDAWcu`) is
-cryptographically bound to the reading:
-`nonce = Pubkey(sha256("bme280-1" ‖ 1753000000_le ‖ 24.7_le ‖ "celsius"))`,
-`attestation = findProgramAddress(["attestation", credential, schema, nonce], SAS)`.
-A judge can recompute this and confirm the on-chain PDA matches.
+This is a **real, explorer-verifiable Solana transaction** — not a mock, not an
+unsigned draft. Confirmed on devnet: `err = None`, slot `477806741`, fee `5000`
+lamports (within the 10k lamport cap), version `0` (versioned tx → durable nonce
+as `recent_blockhash`). The durable nonce **advanced** `F3tGxZwV… → HxmL2Nu7…`,
+so the replay guard is provably live: a replayed/stale attestation is rejected.
 
-The tx is unsigned (0 signatures) with a durable nonce as `recent_blockhash` and
-`AdvanceNonceAccount` as the first instruction — it won't expire while it waits
-in a multisig approval queue. The human/multisig signs and submits.
+The custody path enforced **before signing**: session-key identity (verifying
+key = authority = payer = nonce_authority — one scoped key wearing all four
+hats for the devnet demo), program allowlist `{System, SAS, Memo}` (the memo
+instruction is in the allowlist; a value-transfer instruction is not
+expressible), lamport cap, daily cap. The sensor reading is carried on-chain as
+a memo: `palinurus: bme280-1=24.7celsius @ 1784620660`.
+
+> **SAS vs memo path.** The default is the **memo program** (cheap,
+> high-throughput, the landed proof above). The **Solana Attestation Service**
+> path (`create_attestation`, verifiable + credential-bound) builds the
+> instruction and derives the attestation PDA, but landing it on-chain is
+> blocked on schema creation (SAS custom error `0x4` — a stale-arg issue
+> against `sas-lib@1.0.10`'s `getCreateSchemaInstruction`; the credential
+> creates cleanly). The SAS instruction + PDA derivation are tested +
+> cross-checked against `sas-lib`'s `getCreateAttestationInstruction` /
+> `deriveAttestationPda` (TS oracles). On-chain SAS landing is the focused next
+> milestone.
+
+### T1 — unsigned tx (the default custody tier)
+
+The T1 path returns the same attestation as an **unsigned** versioned tx
+(base64, durable-nonce blockhash, `AdvanceNonceAccount` first) for a human or
+Squads multisig to sign — it won't expire while it sits in an approval queue.
+`0 signatures`; the agent never holds a key. The attestation PDA is
+`findProgramAddress(["attestation", credential, schema, nonce], SAS)` (SAS path)
+or the nonce account (memo path), cryptographically bound to the reading via
+`nonce = Pubkey(sha256("bme280-1" ‖ timestamp_le ‖ value_le ‖ "celsius"))`.
 
 ## Prompt-injection test (FAIL CLOSED)
 
