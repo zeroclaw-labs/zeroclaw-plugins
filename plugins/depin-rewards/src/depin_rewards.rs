@@ -480,15 +480,22 @@ pub struct RewardSummary {
 }
 
 impl RewardSummary {
-  /// Parse + sum the Relay list response `{ records: [{ reward_detail: {
-  /// beacon_amount, witness_amount, dc_transfer_amount } }], meta }`.
-  /// `from_iso`/`to_iso` are carried through (the list endpoint doesn't echo
-  /// them as a single range) for the shaped output. Records with a missing
-  /// `reward_detail` contribute 0. Sums use `saturating_add` (defensive against
-  /// overflow). **Single page only** (`per_page=100`, the endpoint max); a
-  /// hotspot with >100 records in the window would under-count — documented as
-  /// a known cap, fine for single-hotspot daily summaries (the real fixture has
-  /// 6 records). Full pagination is a future enhancement if fleets need it.
+  /// Parse + sum the Relay list response `{ records: [{ reward_detail: {…} }],
+  /// meta }`. Two record shapes (both handled): **iot** carries
+  /// `beacon_amount` + `witness_amount` + `dc_transfer_amount`; **mobile**
+  /// carries a single `amount`. All present fields are summed (absent → 0), so
+  /// `total_amount` is correct for either network; the iot-style breakdown fields
+  /// stay 0 for mobile. `from_iso`/`to_iso` are carried through for the shaped
+  /// output. Records with a missing `reward_detail` contribute 0. Sums use
+  /// `saturating_add` (defensive against overflow). **Single page only**
+  /// (`per_page=100`, the endpoint max); a hotspot with >100 records in the
+  /// window under-counts — documented cap, fine for single-hotspot daily
+  /// summaries (the real iot fixture has 6 records).
+  ///
+  /// **Scaling:** iot is verified live as HNT bones (10⁸). Mobile `amount` is
+  /// shape-handled and presumed the same 10⁸ (Helium consistency) but NOT yet
+  /// verified against a filtered `hotspot_key` mobile sample — verify before
+  /// mobile production use.
   pub fn from_records(json: &[u8], from_iso: &str, to_iso: &str) -> Result<Self, RewardsError> {
     #[derive(serde::Deserialize)]
     struct RawDetail {
@@ -498,6 +505,9 @@ impl RewardSummary {
       witness_amount: u64,
       #[serde(default)]
       dc_transfer_amount: u64,
+      // mobile reward_detail carries a single `amount` (iot has no such field).
+      #[serde(default)]
+      amount: u64,
     }
     #[derive(serde::Deserialize)]
     struct RawRecord {
@@ -511,15 +521,19 @@ impl RewardSummary {
     }
     let raw: RawList = serde_json::from_slice(json)
       .map_err(|e| RewardsError::Parse(format!("reward shares list: {e}")))?;
-    let (mut beacon, mut witness, mut dc) = (0u64, 0u64, 0u64);
+    let (mut beacon, mut witness, mut dc, mut amount) = (0u64, 0u64, 0u64, 0u64);
     for r in raw.records {
       if let Some(d) = r.reward_detail {
         beacon = beacon.saturating_add(d.beacon_amount);
         witness = witness.saturating_add(d.witness_amount);
         dc = dc.saturating_add(d.dc_transfer_amount);
+        amount = amount.saturating_add(d.amount);
       }
     }
-    let total = beacon.saturating_add(witness).saturating_add(dc);
+    let total = beacon
+      .saturating_add(witness)
+      .saturating_add(dc)
+      .saturating_add(amount);
     Ok(RewardSummary {
       total_amount: total,
       beacon_amount: beacon,
@@ -580,18 +594,27 @@ fn shape_summary(info: &HotspotInfo, rewards: &RewardSummary, net: &str) -> Stri
   // Relay returns rewards in HNT bones (10⁸) regardless of subnetwork (manifest
   // token = `*_reward_token_hnt`), so the symbol is HNT + amounts format at 8
   // decimals. `net` labels the earning subnetwork.
-  format!(
-    "✓ rewards {} — earned {} HNT [{}] ({}–{})\n  beacon {} · witness {} · dc-transfer {}\n  owner: {}",
+  let mut s = format!(
+    "✓ rewards {} — earned {} HNT [{}] ({}–{})",
     info.name,
     format_amount(rewards.total_amount, 8),
     net,
     rewards.from_iso,
     rewards.to_iso,
-    format_amount(rewards.beacon_amount, 8),
-    format_amount(rewards.witness_amount, 8),
-    format_amount(rewards.dc_transfer_amount, 8),
-    short_addr(&info.owner),
-  )
+  );
+  // iot breaks rewards into beacon/witness/dc; mobile uses a single `amount`
+  // (no breakdown) — only show the breakdown line when those components are
+  // non-zero (avoids a misleading "0.00 · 0.00 · 0.00" for mobile / zero days).
+  if rewards.beacon_amount + rewards.witness_amount + rewards.dc_transfer_amount > 0 {
+    s.push_str(&format!(
+      "\n  beacon {} · witness {} · dc-transfer {}",
+      format_amount(rewards.beacon_amount, 8),
+      format_amount(rewards.witness_amount, 8),
+      format_amount(rewards.dc_transfer_amount, 8),
+    ));
+  }
+  s.push_str(&format!("\n  owner: {}", short_addr(&info.owner)));
+  s
 }
 
 /// `action = "summary"`: rewards for a hotspot over a time range + shape.

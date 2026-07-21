@@ -448,6 +448,10 @@ fn do_status_rejects_unknown_hotspot() {
 // `{records:[{reward_detail:{...}}],meta}` shape (see rewards-iot-real.json).
 const REWARD_LIST: &str = r#"{"records":[{"reward_detail":{"beacon_amount":5000000,"witness_amount":7500000,"dc_transfer_amount":0}},{"reward_detail":{"beacon_amount":5000000,"witness_amount":7500000,"dc_transfer_amount":0}}],"meta":{"pagination":{"count":2,"total_pages":1,"current_page":1}}}"#;
 
+// Mobile LIST response — mobile reward_detail uses a SINGLE `amount` (not
+// beacon/witness/dc). Two records summing to amount=12.5M bones (0.125 HNT).
+const REWARD_LIST_MOBILE: &str = r#"{"records":[{"reward_detail":{"amount":5000000,"formatted_amount":null}},{"reward_detail":{"amount":7500000,"formatted_amount":null}}],"meta":{"pagination":{"count":2,"total_pages":1,"current_page":1}}}"#;
+
 #[test]
 fn reward_summary_from_records_sums_detail() {
   let s = RewardSummary::from_records(
@@ -488,6 +492,18 @@ fn reward_summary_from_records_handles_missing_detail() {
   let s = RewardSummary::from_records(body.as_bytes(), "f", "t").unwrap();
   assert_eq!(s.beacon_amount, 1000);
   assert_eq!(s.total_amount, 1000);
+}
+
+#[test]
+fn reward_summary_from_records_mobile_shape() {
+  // Mobile reward_detail carries a single `amount` (no beacon/witness/dc) —
+  // from_records must sum it into total (not silently report 0). The iot-style
+  // breakdown fields stay 0 for mobile; shape_summary omits that line.
+  let s = RewardSummary::from_records(REWARD_LIST_MOBILE.as_bytes(), "f", "t").unwrap();
+  assert_eq!(s.beacon_amount, 0);
+  assert_eq!(s.witness_amount, 0);
+  assert_eq!(s.dc_transfer_amount, 0);
+  assert_eq!(s.total_amount, 12_500_000);
 }
 
 #[test]
