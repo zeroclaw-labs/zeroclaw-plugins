@@ -68,12 +68,16 @@ pub fn approval_summary(v: &SummaryView) -> String {
     } else {
         "UNPINNED ⚠"
     };
+    // Every line states something the gate actually verified before this summary
+    // was produced (it is only reached on full success): the output is positionally
+    // bound to the payer's ATA, on-chain min_out ≥ the floor, every program is
+    // allowlisted, the sole signer is the payer, and the fee is capped. It remains
+    // advisory (it transits the LLM) — the signer verifies the decoded bytes.
     format!(
-        "SWAP (unsigned — requires your signature)\n\
-         {in_amt} {in_sym} → ≥ {min_out} {out_sym} (quote {quote}, max slippage {slippage_pct}%)\n\
-         Output bound to your ATA {dest} ✓ · programs: all allowlisted ✓\n\
-         Payer: {payer_s} (sole signer) · priority fee ≤ {fee_sol} SOL · cluster: {cluster}\n\
-         Red flags: none",
+        "SWAP (unsigned — verify the decoded tx, then sign)\n\
+         {in_amt} {in_sym} → ≥ {min_out} {out_sym} (quote {quote}, min-out enforced on-chain, max slip {slippage_pct}%)\n\
+         Output bound to your ATA {dest} ✓ · all programs allowlisted ✓ · no funds to a non-payer ✓\n\
+         Payer: {payer_s} (sole signer) · fee ≤ {fee_sol} SOL · cluster: {cluster}",
         in_sym = short(&v.request.input_mint),
         out_sym = short(&v.request.output_mint),
         dest = short(&v.verdict.expected_output_ata),
@@ -152,7 +156,7 @@ mod tests {
         let s = approval_summary(&view(&req, &ver, &payer, true));
         // Budget: comfortably under ~200 tokens (~4 chars/token).
         assert!(
-            s.chars().count() < 300,
+            s.chars().count() < 340,
             "summary too long: {} chars",
             s.chars().count()
         );

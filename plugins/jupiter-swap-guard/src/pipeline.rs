@@ -6,10 +6,9 @@
 
 #![forbid(unsafe_code)]
 
-use crate::ata::{ATA_PROGRAM_ID, TOKEN_PROGRAM_ID};
+use crate::ata::{ATA_PROGRAM_ID, TOKEN_2022_PROGRAM_ID, TOKEN_PROGRAM_ID};
 use crate::b58::{decode_pubkey, encode_pubkey};
 use crate::compile::{compile_v0, AddressLookupTable};
-use crate::decode::ATA_CREATE_MINT_INDEX;
 use crate::encode::{serialize_unsigned_transaction, Pubkey};
 use crate::gate::{evaluate, Programs, SwapRequest};
 use crate::http::{Rpc, SwapApi};
@@ -57,9 +56,11 @@ pub fn run_swap(
         .map_err(Reject::Upstream)?;
     let swap = parse_swap_instructions(&si_text).map_err(Reject::Upstream)?;
 
-    // 3. Token programs, taken from the route's own ATA-create instructions (the
-    //    ATA program validates canonicity on-chain), defaulting to legacy Token.
-    let programs = resolve_programs(&swap, &request.input_mint, &request.output_mint)?;
+    // 3. Token programs resolved from a TRUSTED source: each mint's on-chain owner
+    //    (Token vs Token-2022), never the aggregator's response — the token program
+    //    is a seed of the destination-binding ATA derivation, so it must not be
+    //    attacker-controlled.
+    let programs = resolve_programs(&request.input_mint, &request.output_mint, policy, rpc)?;
 
     // 4. The gate: every guardrail. Fails closed on any violation.
     let verdict = evaluate(policy, request, &quote, &swap, &programs)?;
@@ -122,29 +123,33 @@ pub fn run_swap(
 }
 
 fn resolve_programs(
-    swap: &SwapInstructions,
     input_mint: &Pubkey,
     output_mint: &Pubkey,
+    policy: &Policy,
+    rpc: &dyn Rpc,
 ) -> Result<Programs, Reject> {
     let ata_program = decode_pubkey(ATA_PROGRAM_ID).expect("valid ata id");
-    let default_token = decode_pubkey(TOKEN_PROGRAM_ID).expect("valid token id");
-    let token_for = |mint: &Pubkey| -> Pubkey {
-        for ix in &swap.setup {
-            if ix.program_id == ata_program {
-                if let (Some(m), Some(tp)) =
-                    (ix.accounts.get(ATA_CREATE_MINT_INDEX), ix.accounts.get(5))
-                {
-                    if m.pubkey == *mint {
-                        return tp.pubkey;
-                    }
-                }
-            }
+    let token = decode_pubkey(TOKEN_PROGRAM_ID).expect("valid token id");
+    let token_2022 = decode_pubkey(TOKEN_2022_PROGRAM_ID).expect("valid token-2022 id");
+    // A mint account's on-chain owner IS its token program. Trust the chain, not
+    // the aggregator response. Reject a mint owned by anything unexpected.
+    let token_for = |mint: &Pubkey| -> Result<Pubkey, Reject> {
+        let owner_b58 = rpc
+            .get_account_owner(&policy.rpc_url, &encode_pubkey(mint))
+            .map_err(Reject::Upstream)?;
+        let owner = decode_pubkey(&owner_b58).map_err(Reject::Upstream)?;
+        if owner == token || owner == token_2022 {
+            Ok(owner)
+        } else {
+            Err(Reject::UnsupportedInstruction(format!(
+                "mint {} is not owned by a known token program",
+                encode_pubkey(mint)
+            )))
         }
-        default_token
     };
     Ok(Programs {
-        input_token_program: token_for(input_mint),
-        output_token_program: token_for(output_mint),
+        input_token_program: token_for(input_mint)?,
+        output_token_program: token_for(output_mint)?,
         ata_program,
     })
 }
@@ -256,6 +261,10 @@ mod tests {
                     .to_string(),
             ))
         }
+        fn get_account_owner(&self, _: &str, _: &str) -> Result<String, String> {
+            // WSOL and USDC are both owned by the legacy Token program on mainnet.
+            Ok(TOKEN_PROGRAM_ID.to_string())
+        }
         fn get_genesis_hash(&self, _: &str) -> Result<String, String> {
             Ok(self.genesis.clone())
         }
@@ -317,7 +326,7 @@ mod tests {
         // 1 sig-count byte + 64 empty-sig bytes + 0x80-prefixed v0 message.
         assert_eq!(bytes[0], 1);
         assert_eq!(bytes[65], 0x80);
-        assert!(out.summary.contains("Output bound to your ATA"));
+        assert!(out.summary.contains("bound to your ATA"));
         assert!(out.summary.contains("mainnet ✓"));
         assert!(out.guard_json.contains("unsigned_tx_b64"));
     }

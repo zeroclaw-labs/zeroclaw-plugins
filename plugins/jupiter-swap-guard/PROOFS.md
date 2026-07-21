@@ -58,8 +58,10 @@ specific reason) — `src/gate.rs` tests:
 | Property | Excludes | Negative-control test |
 |---|---|---|
 | **D1a** every ATA-create owner == payer | creating/funding an attacker's ATA | `ata_create_for_non_payer_is_refused` |
-| **D1b** swap output bound to the payer's own ATA | a malicious response delivering output to an attacker | `unbound_destination_is_refused` |
-| **D2** System transfers only to payer-owned accounts | `System.transfer(payer→attacker)` via the allowlisted System program | `system_transfer_to_attacker_is_refused` |
+| **D1b** swap output **positionally** bound to the payer's own ATA (the Jupiter route's `destination_token_account` at the discriminator's fixed index must equal the derived ATA) | a malicious response crediting an attacker account while listing the payer ATA as a dummy writable | `unbound_destination_is_refused` |
+| **D2 (System)** System transfers only to payer-owned accounts | `System.transfer(payer→attacker)` via the allowlisted System program | `system_transfer_to_attacker_is_refused` |
+| **D2 (Token)** top-level Token/Token-2022 instructions decoded: only benign setup + a `CloseAccount` returning to the payer; Transfer/Approve/SetAuthority/Burn/… refused | a top-level `Token.Transfer` draining the swapped tokens, or a `CloseAccount` sending the unwrapped SOL to an attacker | `close_account_to_attacker_is_refused`, `top_level_token_transfer_is_refused` |
+| **D3** the swap instruction's OWN on-chain amounts (`in_amount`, `quoted_out_amount`, `slippage_bps`, decoded from the signed bytes) are bound to what was authorized and quoted; on-chain min-out must be ≥ the floor | quote↔instructions TOCTOU (a rich quote + a min-out-0 instruction), spending more than authorized, an undecodable route shape | `tampered_on_chain_min_out_is_refused`, `amount_over_authorized_is_refused`, `unaccountable_route_shape_is_refused` |
 | **D4** decoded priority fee ≤ cap | priority-fee SOL drain | `priority_fee_over_cap_is_refused` |
 | **P4** top-level program allowlist | an unknown drainer program | `non_allowlisted_program_is_refused` |
 | **P1/P5** mint allowlist, payer-only signer | swap into an unlisted mint; co-signer smuggling | `rejects_disallowed_mint`, gate signer check |
@@ -68,10 +70,15 @@ specific reason) — `src/gate.rs` tests:
 table — defeats a malicious RPC crafting table contents) is enforced in
 `compile_v0` and tested by `compile::d5_refuses_when_a_required_static_account_is_in_the_table`.
 
-**D3** (min_out bound to the quote the plugin actually received, closing the
-quote↔instructions TOCTOU) is enforced in the pipeline and covered by
-`pipeline::full_pipeline_builds_unsigned_tx` (min_out is recomputed from our
-quote, never read from Jupiter's embedded field).
+The token program used as a seed of the ATA derivation (`D1`) is resolved from
+each mint's **on-chain owner via the plugin's own RPC** (`pipeline::resolve_programs`),
+never from the aggregator's response — so a response field can never become a seed
+of the destination-binding anchor.
+
+Honest scope note: positional destination binding (`D1b`) is implemented for the
+two dominant Jupiter v6 instructions (`route`, index 3; `shared_accounts_route`,
+index 6). `D3` already refuses any route whose discriminator it cannot decode, so
+in practice a pinned destination index is always available.
 
 ## Config parsing — unit (P8)
 

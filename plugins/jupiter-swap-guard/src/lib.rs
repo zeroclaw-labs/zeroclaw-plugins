@@ -103,8 +103,7 @@ mod component {
                     "input_mint": {"type": "string", "description": "Base58 mint being sold."},
                     "output_mint": {"type": "string", "description": "Base58 mint being bought."},
                     "amount_atoms": {"type": "string", "description": "Amount of input_mint to sell, in base units (atoms), as a decimal string."},
-                    "slippage_bps": {"type": "integer", "description": "Max slippage in basis points; rejected if above the configured maximum."},
-                    "mode": {"type": "string", "enum": ["blockhash", "durable-nonce"], "description": "Transaction lifetime source. Defaults to blockhash."}
+                    "slippage_bps": {"type": "integer", "description": "Max slippage in basis points; rejected if above the configured maximum."}
                 },
                 "required": ["input_mint", "output_mint", "amount_atoms"]
             })

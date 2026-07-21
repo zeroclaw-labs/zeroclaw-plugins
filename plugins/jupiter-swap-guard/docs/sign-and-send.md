@@ -37,13 +37,16 @@ solana decode-transaction < /tmp/swap.tx    # or your wallet's "view decoded" sc
 Confirm, against the decoded transaction (not the summary):
 
 - the **fee payer / only signer** is your wallet;
-- the swap's writable destination is **your own** associated token account for the
-  output mint (the `guard.output_ata`);
-- there is no lamport transfer to an address you do not control;
+- the swap's `destination_token_account` is **your own** associated token account
+  for the output mint (the `guard.output_ata`);
+- there is no **SOL (lamport) transfer** to an address you do not control;
+- there is no **SPL token transfer / approve / set-authority / close-account** that
+  sends tokens or the account's lamports anywhere but back to you;
 - the priority fee matches `guard.priority_fee_lamports`.
 
-The plugin already enforced all of these before emitting the bytes; this step is
-your independent confirmation.
+The plugin already enforces all of these before emitting the bytes (positional
+destination binding, decoded top-level System/Token instructions, on-chain amount
+binding); this step is your independent confirmation.
 
 ## 3. Sign and send
 
@@ -63,8 +66,7 @@ solana send-transaction /tmp/swap.tx --signer <your-keypair-or-ledger>
 
 An unsigned transaction sitting in an approval queue can outlive its blockhash
 (~60–90 s). If signing is delayed, re-run the tool to rebuild against a fresh
-blockhash, or configure the plugin's `nonce_account`/`nonce_authority` to use a
-durable nonce so the transaction stays valid until you sign.
+blockhash before signing.
 
 ## Cluster
 

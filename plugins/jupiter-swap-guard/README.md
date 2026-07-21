@@ -15,13 +15,20 @@ account, and a "program allowlist + signer" check still passes. `jupiter-swap-gu
 **rebuilds the transaction itself** from Jupiter's `/swap-instructions` and, before
 emitting anything, enforces:
 
-- **D1 — destination binding.** The output can only land in the payer's *own*
-  associated token account (derived on-device); a redirected destination is
-  refused. Every ATA-create must be owned by the payer.
-- **D2 — no smuggled transfers.** `System.transfer` to anyone but the payer is
-  refused, even though the System program is allowlisted.
-- **D3 — quote binding.** `min_out` is computed from the quote the plugin actually
-  received, closing the quote↔instructions TOCTOU.
+- **D1 — destination binding (positional).** The Jupiter route's actual
+  `destination_token_account` (at the discriminator's fixed ABI index) must equal
+  the payer's *own* associated token account, derived on-device from the mint's
+  **on-chain owner** (a trusted RPC read, never the aggregator's response). Every
+  ATA-create must be owned by the payer.
+- **D2 — no smuggled fund movement.** Top-level `System.transfer` and every
+  top-level SPL Token / Token-2022 instruction are **decoded**, not trusted by
+  program-id: a transfer/approve/set-authority/burn is refused, and a
+  `CloseAccount` is allowed only when it returns to the payer — so a malicious
+  response cannot drain the swapped tokens or the unwrapped SOL.
+- **D3 — on-chain amount binding.** The swap instruction's own `in_amount`,
+  `quoted_out_amount` and `slippage_bps` are decoded from the signed bytes and
+  bound to what you authorized and were quoted; the on-chain minimum output must be
+  ≥ the floor. Closes the quote↔instructions TOCTOU. An undecodable route is refused.
 - **D4 — priority-fee cap.** The decoded `SetComputeUnitPrice` fee is capped, so a
   runaway fee cannot drain SOL.
 - **D5 — static account roles.** The payer and its ATAs must be static message
@@ -46,10 +53,13 @@ mitigations:
   the human-facing summary transits the LLM and could be rewritten (it is
   advisory — see [`docs/sign-and-send.md`](./docs/sign-and-send.md)).
 - **(b) Malicious/compromised aggregator response** → D1–D4. This is the primary
-  adversary and where the design earns its keep. We do *not* claim to enumerate
-  every program: Jupiter v6 CPIs into many DEX programs and a Token-2022 mint can
-  invoke a transfer hook — those are trusted to CPI correctly. **Destination
-  binding (D1) is the real defense**, precisely because CPI targets cannot be gated.
+  adversary and where the design earns its keep. Every top-level instruction is
+  decoded and constrained (System, SPL Token, Token-2022, ComputeBudget, ATA), and
+  the Jupiter route's amounts and destination are bound. We do *not* claim to
+  enumerate what runs *below* a CPI: Jupiter v6 CPIs into many DEX programs and a
+  Token-2022 mint can invoke a transfer hook — those are trusted to CPI correctly.
+  **Positional destination binding + on-chain amount binding (D1/D3) are the real
+  defense**, precisely because nested CPI targets cannot be gated from outside.
 - **(c) Malicious RPC** → D5 (security-relevant accounts must be static, so
   lookup-table contents are never trusted for an address role). Residual, stated
   honestly: the genesis-hash pin defends against *cluster misconfiguration*, not a

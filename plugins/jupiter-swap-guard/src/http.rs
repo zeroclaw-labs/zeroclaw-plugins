@@ -16,9 +16,12 @@ pub trait SwapApi {
 }
 
 /// The minimal Solana JSON-RPC surface the plugin needs. `get_account_base64`
-/// returns the account's base64 data (None if the account does not exist).
+/// returns the account's base64 data (None if the account does not exist);
+/// `get_account_owner` returns the owning program (base58) — used to resolve a
+/// mint's real token program from a TRUSTED source rather than the aggregator.
 pub trait Rpc {
     fn get_account_base64(&self, url: &str, pubkey_b58: &str) -> Result<Option<String>, String>;
+    fn get_account_owner(&self, url: &str, pubkey_b58: &str) -> Result<String, String>;
     fn get_genesis_hash(&self, url: &str) -> Result<String, String>;
     fn get_latest_blockhash(&self, url: &str) -> Result<String, String>;
 }
@@ -110,6 +113,15 @@ mod waki_impl {
                 .as_str()
                 .map(|s| Some(s.to_string()))
                 .ok_or_else(|| "account data not base64".to_string())
+        }
+
+        fn get_account_owner(&self, url: &str, pubkey_b58: &str) -> Result<String, String> {
+            let params = format!(r#"["{pubkey_b58}",{{"encoding":"base64"}}]"#);
+            let result = rpc_call(url, "getAccountInfo", &params)?;
+            result["value"]["owner"]
+                .as_str()
+                .map(str::to_string)
+                .ok_or_else(|| "account has no owner (does it exist?)".to_string())
         }
 
         fn get_genesis_hash(&self, url: &str) -> Result<String, String> {

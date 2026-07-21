@@ -27,8 +27,6 @@ const KNOWN_KEYS: &[&str] = &[
     "max_priority_fee_lamports",
     "allowed_programs",
     "expected_genesis_hash",
-    "nonce_account",
-    "nonce_authority",
 ];
 
 /// Per-mint operator policy. Decimals are operator-owned (never inferred from a
@@ -51,7 +49,6 @@ pub struct Policy {
     pub max_priority_fee_lamports: u64,
     pub allowed_programs: Vec<Pubkey>,
     pub expected_genesis_hash: Option<String>,
-    pub nonce: Option<(Pubkey, Pubkey)>,
 }
 
 /// Why the guard refused. Rendered into the human summary and the error string;
@@ -78,6 +75,18 @@ pub enum Reject {
     FundsToNonPayer(String),
     DestinationNotBound(String),
     UnsupportedInstruction(String),
+    AmountMismatch {
+        authorized: u64,
+        on_chain: u64,
+    },
+    QuoteMismatch {
+        quoted: u64,
+        on_chain: u64,
+    },
+    MinOutBelowFloor {
+        floor: u64,
+        on_chain: u64,
+    },
     Upstream(String),
     BuildFailed(String),
 }
@@ -114,6 +123,18 @@ impl Reject {
             Reject::UnsupportedInstruction(s) => {
                 format!("refusing an instruction the guard cannot fully account for: {s}")
             }
+            Reject::AmountMismatch {
+                authorized,
+                on_chain,
+            } => format!(
+                "the transaction spends {on_chain} atoms but you authorized {authorized}"
+            ),
+            Reject::QuoteMismatch { quoted, on_chain } => format!(
+                "the transaction's quoted output {on_chain} does not match the quote we received {quoted}"
+            ),
+            Reject::MinOutBelowFloor { floor, on_chain } => format!(
+                "the transaction's on-chain minimum output {on_chain} is below the required floor {floor}"
+            ),
             Reject::Upstream(s) => format!("upstream request failed: {s}"),
             Reject::BuildFailed(s) => format!("transaction build failed: {s}"),
         }
@@ -177,15 +198,6 @@ impl Policy {
         }
 
         let expected_genesis_hash = config.get("expected_genesis_hash").cloned();
-        let nonce = match (config.get("nonce_account"), config.get("nonce_authority")) {
-            (Some(a), Some(b)) => Some((pk("nonce_account", a)?, pk("nonce_authority", b)?)),
-            (None, None) => None,
-            _ => {
-                return Err(Reject::BadConfig(
-                    "nonce_account and nonce_authority must be set together".into(),
-                ))
-            }
-        };
 
         Ok(Policy {
             payer,
@@ -196,7 +208,6 @@ impl Policy {
             max_priority_fee_lamports,
             allowed_programs,
             expected_genesis_hash,
-            nonce,
         })
     }
 

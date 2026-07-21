@@ -14,10 +14,11 @@
 
 #![forbid(unsafe_code)]
 
-use crate::ata::associated_token_address;
+use crate::ata::{associated_token_address, TOKEN_2022_PROGRAM_ID, TOKEN_PROGRAM_ID};
 use crate::b58::{decode_pubkey, encode_pubkey};
 use crate::decode::{
-    decode_compute_budget, decode_system, ComputeBudgetIx, SystemIx, ATA_CREATE_OWNER_INDEX,
+    decode_compute_budget, decode_jupiter_route_amounts, decode_system,
+    jupiter_destination_account_index, ComputeBudgetIx, SystemIx, ATA_CREATE_OWNER_INDEX,
     COMPUTE_BUDGET_PROGRAM_ID, SYSTEM_PROGRAM_ID,
 };
 use crate::encode::Pubkey;
@@ -74,8 +75,10 @@ pub fn evaluate(
     policy.require_amount_within_cap(&request.input_mint, request.amount_atoms)?;
     policy.require_slippage_within_max(request.slippage_bps)?;
 
-    // D3: bind min_out to the quote WE received (never Jupiter's embedded field).
-    let min_out = min_out_floor(quote.out_amount, request.slippage_bps);
+    // Our required floor, computed from the quote WE received (never trusted from
+    // the summary or Jupiter's embedded value). D3 below binds the transaction's
+    // ACTUAL on-chain amounts to this.
+    let required_floor = min_out_floor(quote.out_amount, request.slippage_bps);
 
     // D1: the payer's own ATAs. The output can only legitimately land here.
     let expected_output_ata = associated_token_address(
@@ -93,6 +96,8 @@ pub fn evaluate(
 
     let system = decode_pubkey(SYSTEM_PROGRAM_ID).expect("valid system id");
     let compute_budget = decode_pubkey(COMPUTE_BUDGET_PROGRAM_ID).expect("valid cb id");
+    let token = decode_pubkey(TOKEN_PROGRAM_ID).expect("valid token id");
+    let token_2022 = decode_pubkey(TOKEN_2022_PROGRAM_ID).expect("valid token-2022 id");
 
     let mut unit_limit: u32 = 200_000; // Solana default if no SetComputeUnitLimit.
     let mut unit_price: u64 = 0;
@@ -116,6 +121,12 @@ pub fn evaluate(
         if ix.program_id == system {
             check_system_ix(&ix, &policy.payer, &expected_input_ata)?;
         }
+        // D2 (token): a top-level Token/Token-2022 instruction must not move the
+        // user's tokens or send an account's lamports to a non-payer. Only benign
+        // setup ops and a CloseAccount that returns to the payer are allowed.
+        if ix.program_id == token || ix.program_id == token_2022 {
+            check_token_ix(&ix, &policy.payer)?;
+        }
         // D4: gather the compute-budget settings.
         if ix.program_id == compute_budget {
             match decode_compute_budget(&ix.data).map_err(Reject::UnsupportedInstruction)? {
@@ -130,12 +141,65 @@ pub fn evaluate(
     let fee_lamports = priority_fee_lamports(unit_limit, unit_price);
     policy.require_priority_fee_within_cap(fee_lamports)?;
 
-    // D1b: the swap output must be bound to the payer's own ATA — it has to appear
-    // as a writable account in the swap instruction.
-    if !is_writable_account(&swap.swap, &expected_output_ata) {
-        return Err(Reject::DestinationNotBound(encode_pubkey(
-            &expected_output_ata,
-        )));
+    // D3: decode the swap instruction's OWN on-chain amounts and bind them to what
+    // we authorized and quoted. This enforces the guarantee in the signed bytes,
+    // not just in the summary. A route shape we cannot decode is refused.
+    let amounts = decode_jupiter_route_amounts(&swap.swap.data).ok_or_else(|| {
+        Reject::UnsupportedInstruction(
+            "swap is not a decodable Jupiter ExactIn route (refusing what we cannot account for)"
+                .into(),
+        )
+    })?;
+    if amounts.in_amount != request.amount_atoms {
+        return Err(Reject::AmountMismatch {
+            authorized: request.amount_atoms,
+            on_chain: amounts.in_amount,
+        });
+    }
+    if amounts.quoted_out_amount != quote.out_amount {
+        return Err(Reject::QuoteMismatch {
+            quoted: quote.out_amount,
+            on_chain: amounts.quoted_out_amount,
+        });
+    }
+    if amounts.slippage_bps > policy.max_slippage_bps {
+        return Err(Reject::SlippageOverMax {
+            max_bps: policy.max_slippage_bps,
+            requested_bps: amounts.slippage_bps,
+        });
+    }
+    // The transaction's actual on-chain minimum output.
+    let min_out = min_out_floor(amounts.quoted_out_amount, amounts.slippage_bps);
+    if min_out < required_floor {
+        return Err(Reject::MinOutBelowFloor {
+            floor: required_floor,
+            on_chain: min_out,
+        });
+    }
+
+    // D1b: bind the swap output to the payer's own ATA. For the route shapes whose
+    // destination-account index we pin, assert the credited account IS the payer's
+    // ATA (positional binding). For other shapes we require it to be present and
+    // writable (a documented weaker check) — but D3 above already refused any
+    // undecodable route, so we always have a pinned index here in practice.
+    match jupiter_destination_account_index(&swap.swap.data) {
+        Some(idx) => {
+            let credited = swap.swap.accounts.get(idx).ok_or_else(|| {
+                Reject::UnsupportedInstruction("swap missing its destination account".into())
+            })?;
+            if credited.pubkey != expected_output_ata || !credited.is_writable {
+                return Err(Reject::DestinationNotBound(encode_pubkey(
+                    &expected_output_ata,
+                )));
+            }
+        }
+        None => {
+            if !is_writable_account(&swap.swap, &expected_output_ata) {
+                return Err(Reject::DestinationNotBound(encode_pubkey(
+                    &expected_output_ata,
+                )));
+            }
+        }
     }
 
     Ok(GuardVerdict {
@@ -148,10 +212,8 @@ pub fn evaluate(
 }
 
 fn is_allowed_signer(policy: &Policy, key: &Pubkey) -> bool {
-    if *key == policy.payer {
-        return true;
-    }
-    matches!(policy.nonce, Some((_, authority)) if authority == *key)
+    // Blockhash-only lifetime: the payer is the sole permitted signer.
+    *key == policy.payer
 }
 
 fn check_ata_create_owner(ix: &Instruction, payer: &Pubkey) -> Result<(), Reject> {
@@ -184,6 +246,24 @@ fn check_system_ix(
         }
         SystemIx::Other(tag) => Err(Reject::UnsupportedInstruction(format!(
             "System instruction {tag} in a swap"
+        ))),
+    }
+}
+
+fn check_token_ix(ix: &Instruction, payer: &Pubkey) -> Result<(), Reject> {
+    match crate::decode::decode_token(&ix.data) {
+        crate::decode::TokenIx::CloseAccount { destination_index } => {
+            let dest = ix.accounts.get(destination_index).ok_or_else(|| {
+                Reject::UnsupportedInstruction("Token CloseAccount missing destination".into())
+            })?;
+            if dest.pubkey != *payer {
+                return Err(Reject::FundsToNonPayer(encode_pubkey(&dest.pubkey)));
+            }
+            Ok(())
+        }
+        crate::decode::TokenIx::Benign => Ok(()),
+        crate::decode::TokenIx::Dangerous(disc) => Err(Reject::UnsupportedInstruction(format!(
+            "top-level Token instruction {disc} moves funds or authority in a swap"
         ))),
     }
 }
@@ -323,6 +403,74 @@ mod tests {
         assert!(matches!(
             evaluate(&policy_with(200_000), &request(), &q, &s, &programs()),
             Err(Reject::ProgramNotAllowed(_))
+        ));
+    }
+
+    // NEGATIVE CONTROL (D3): a tampered on-chain quoted-out (lower than the quote
+    // the plugin received) is refused — the amounts are read from the actual bytes.
+    #[test]
+    fn tampered_on_chain_min_out_is_refused() {
+        let (q, mut s) = fixtures();
+        // Rewrite the swap instruction's tail quoted_out_amount to 1 (a drain).
+        let n = s.swap.data.len();
+        s.swap.data[n - 11..n - 3].copy_from_slice(&1u64.to_le_bytes());
+        let err = evaluate(&policy_with(200_000), &request(), &q, &s, &programs()).unwrap_err();
+        assert!(matches!(err, Reject::QuoteMismatch { .. }));
+    }
+
+    // NEGATIVE CONTROL (D3): an ExactOut / unknown route discriminator is refused
+    // (the guard fails closed on a shape it cannot fully account for).
+    #[test]
+    fn unaccountable_route_shape_is_refused() {
+        let (q, mut s) = fixtures();
+        s.swap.data[..8].copy_from_slice(&[208, 51, 239, 151, 123, 43, 237, 92]); // exact_out_route
+        assert!(matches!(
+            evaluate(&policy_with(200_000), &request(), &q, &s, &programs()),
+            Err(Reject::UnsupportedInstruction(_))
+        ));
+    }
+
+    // NEGATIVE CONTROL (D3): spending more than authorized is refused.
+    #[test]
+    fn amount_over_authorized_is_refused() {
+        let (q, mut s) = fixtures();
+        let n = s.swap.data.len();
+        s.swap.data[n - 19..n - 11].copy_from_slice(&999_999_999u64.to_le_bytes());
+        let err = evaluate(&policy_with(200_000), &request(), &q, &s, &programs()).unwrap_err();
+        assert!(matches!(err, Reject::AmountMismatch { .. }));
+    }
+
+    // NEGATIVE CONTROL (D2-token): a Token CloseAccount that sends the unwrapped
+    // SOL + rent to an attacker instead of the payer is refused.
+    #[test]
+    fn close_account_to_attacker_is_refused() {
+        let (q, mut s) = fixtures();
+        let attacker = [9u8; 32];
+        if let Some(c) = s.cleanup.as_mut() {
+            c.accounts[1].pubkey = attacker; // destination
+        }
+        assert!(matches!(
+            evaluate(&policy_with(200_000), &request(), &q, &s, &programs()),
+            Err(Reject::FundsToNonPayer(_))
+        ));
+    }
+
+    // NEGATIVE CONTROL (D2-token): a top-level Token.Transfer (moving the user's
+    // tokens) smuggled into setup is refused.
+    #[test]
+    fn top_level_token_transfer_is_refused() {
+        let (q, mut s) = fixtures();
+        let token = decode_pubkey(TOKEN_PROGRAM_ID).unwrap();
+        // Turn a benign setup Token ix into a Transfer (disc 3).
+        for ix in s.setup.iter_mut() {
+            if ix.program_id == token {
+                ix.data = vec![3, 0, 0, 0, 0, 0, 0, 0, 0]; // Transfer, amount 0
+                break;
+            }
+        }
+        assert!(matches!(
+            evaluate(&policy_with(200_000), &request(), &q, &s, &programs()),
+            Err(Reject::UnsupportedInstruction(_))
         ));
     }
 
