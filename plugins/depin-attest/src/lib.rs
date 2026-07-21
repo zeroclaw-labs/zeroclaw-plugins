@@ -15,6 +15,12 @@
 
 pub mod depin_attest;
 
+// Host-only demo driver (`--features demo`): a reqwest-backed Rpc impl that
+// runs execute_t1 against a real devnet durable-nonce account on camera
+// (chunk 6 of the recording guide). Excluded from the wasm component build.
+#[cfg(feature = "demo")]
+pub mod demo_rpc;
+
 #[cfg(target_family = "wasm")]
 mod component {
     wit_bindgen::generate!({

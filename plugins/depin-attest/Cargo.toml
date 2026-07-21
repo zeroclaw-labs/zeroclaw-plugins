@@ -16,6 +16,11 @@ publish = false
 [lib]
 crate-type = ["cdylib", "rlib"]
 
+[[bin]]
+name = "depin-attest-demo"
+path = "src/bin/depin-attest-demo.rs"
+required-features = ["demo"]
+
 [dependencies]
 # The wasm32-wasip2-friendly Solana substrate (PDA, borsh, versioned-tx,
 # durable-nonce, RPC over waki, response shaping). Git dep during dev;
@@ -32,11 +37,26 @@ base64 = "0.22"
 # config, never generated on-device. No `rand_core` feature needed.
 ed25519-dalek = "2"
 bs58 = "0.5"  # base58 decode for the T2 session key (32-byte Ed25519 secret)
+# Host-only demo driver (`--features demo`): a reqwest-backed Rpc impl that
+# runs execute_t1 against a real devnet durable-nonce account on camera. NOT
+# part of the wasm component — excluded by the `optional` gate + the feature.
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"], optional = true }
 
 [dev-dependencies]
 # Host-only oracle: verify the T2 signature against the canonical Solana/Ed25519
 # verifier. NOT compiled into the wasm component (dev-dep, host tests only).
 solana-program = "2"
+# Used only by the `--features demo` integration tests (tests/demo_rpc.rs).
+# Compiles for normal `cargo test` too (unused) — small, doesn't touch wasm.
+mockito = "1"
+
+[features]
+# Host-only demo driver (`--features demo`): reqwest-backed Rpc impl + bin
+# that runs execute_t1 against a real devnet durable-nonce account on camera
+# (chunk 6 of the recording guide). Off by default — wasm build + 68 core
+# tests are unaffected.
+default = []
+demo = ["dep:reqwest"]
 
 [profile.release]
 opt-level = "s"
