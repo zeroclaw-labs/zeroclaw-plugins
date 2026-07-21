@@ -9,7 +9,7 @@
 // (crate `depin-rewards` → lib `depin_rewards`; module `depin_rewards`).
 use depin_rewards::depin_rewards::{
   do_status, do_summary, do_watch, enforce_hotspot_allowlist, fetch_hotspot, fetch_rewards,
-  format_amount, HttpError, HttpClient, HotspotInfo, MockHttp, RewardSummary,
+  format_amount, execute_entry, RewardsRequest, HttpError, HttpClient, HotspotInfo, MockHttp, RewardSummary,
   RewardsConfig, RewardsError, send_telegram,
 };
 use std::collections::HashMap;
@@ -805,4 +805,58 @@ fn telegram_chat_id_always_from_config_not_message() {
     !tg.1.iter().any(|(k, v)| k == "chat_id" && v == "666"),
     "injected chat_id must be ignored"
   );
+}
+
+
+// ── execute_entry dispatch (the WIT shim's pure-core seam) ──────────────────
+// execute_entry routes action → do_status/do_summary/do_watch, and returns an
+// honest fail-closed for claim_tx (roadmap) + unknown actions. This is the
+// host-testable seam the shim calls; the wasm WakiHttp impl is verified by the
+// wasm32-wasip2 build (waki is wasm-only, like palinurus_core::WakiRpc).
+
+fn req<'a>(action: &'a str, hotspot_id: &'a str) -> RewardsRequest<'a> {
+  RewardsRequest {
+    action,
+    hotspot_id,
+    from: "",
+    to: "",
+    prev_active: None,
+    send_summary: false,
+  }
+}
+
+#[test]
+fn execute_entry_status_dispatches_to_do_status() {
+  let mut mock = MockHttp::new();
+  mock.set_get(
+    "https://api.relaywireless.com/v1/helium/l2/hotspots/ecc-1".to_string(),
+    HOTSPOT_IOT_ONLINE.as_bytes().to_vec(),
+  );
+  let cfg = base_cfg();
+  let out = execute_entry(&req("status", "ecc-1"), &mock, &cfg).expect("status dispatch ok");
+  assert_eq!(out.is_active, Some(true));
+  assert!(out.summary.contains("ONLINE"), "summary: {}", out.summary);
+  assert!(out.summary.contains("tall-plum-ocelot"));
+}
+
+#[test]
+fn execute_entry_claim_tx_returns_roadmap_error() {
+  // claim_tx is deliberately not shipped (Helium cNFT compression path + DAS
+  // merkle proof — a focused next milestone). The shim must fail closed with an
+  // honest message, NOT silently do nothing or pretend to claim.
+  let mock = MockHttp::new();
+  let cfg = base_cfg();
+  let err = execute_entry(&req("claim_tx", "ecc-1"), &mock, &cfg).unwrap_err();
+  assert!(matches!(err, RewardsError::Config(_)), "got: {err:?}");
+  let msg = format!("{err:?}").to_lowercase();
+  assert!(msg.contains("roadmap") || msg.contains("claim"), "expected an honest claim_tx/roadmap message, got: {msg}");
+}
+
+#[test]
+fn execute_entry_unknown_action_returns_error() {
+  let mock = MockHttp::new();
+  let cfg = base_cfg();
+  let err = execute_entry(&req("bogus", "ecc-1"), &mock, &cfg).unwrap_err();
+  assert!(matches!(err, RewardsError::Config(_)), "got: {err:?}");
+  assert!(format!("{err:?}").contains("unknown action"), "got: {err:?}");
 }

@@ -18,6 +18,11 @@
 
 pub mod depin_rewards;
 
+// wasm-only `HttpClient` impl (`WakiHttp`) used by the WIT component shim
+// below. Compiles only for `wasm32-wasip2`; host tests use `MockHttp`.
+#[cfg(target_family = "wasm")]
+pub mod waki_http;
+
 // Host-only demo driver (`--features demo`): a reqwest-backed HttpClient impl
 // that runs the shipped rewards pure core against live Relay + Telegram on
 // camera (chunks 2-5 of the recording guide). Excluded from the wasm component
@@ -62,11 +67,11 @@ mod component {
 
         fn description() -> String {
             "Watch a Helium hotspot's online/offline status and rewards on the public \
-             Solana network, fire Telegram alerts (instant on offline, daily rewards \
-             summary), and optionally draft an unsigned rewards-claim transaction for \
-             the hotspot's owner. Reads public data via the Relay API. The plugin holds \
-             no key — it can read and draft, never sign. The owner or a Squads multisig \
-             signs any claim."
+             Solana network and fire Telegram alerts (instant on offline, daily rewards \
+             summary). Reads public data via the Relay API. The plugin holds no key of \
+             any kind — it can read and alert, never sign. An unsigned rewards-claim tx \
+             is roadmap-only (Helium hotspots are compressed NFTs, so the claim needs \
+             the lazy-distributor compression path + a DAS merkle proof)."
                 .to_string()
         }
 
@@ -105,24 +110,99 @@ mod component {
             .to_string()
         }
 
-        fn execute(_args: String) -> Result<ToolResult, String> {
-            // Slice A scaffold: the pure-core actions (status / summary / watch /
-            // claim_tx) are wired in slices C–G. Until then, fail closed with a
-            // clear message — no half-wired behavior.
-            emit(PluginAction::Start, None, "execute received (scaffold)");
-            emit(
-                PluginAction::Fail,
-                Some(PluginOutcome::Failure),
-                "execute not wired (slice A scaffold)",
-            );
-            Ok(ToolResult {
-                success: false,
-                output: String::new(),
-                error: Some(
-                    "depin-rewards scaffold: execute not wired yet (lands in slices C–G)"
-                        .to_string(),
-                ),
-            })
+        fn execute(args: String) -> Result<ToolResult, String> {
+            use crate::depin_rewards::{execute_entry, RewardsConfig, RewardsError};
+            use crate::waki_http::WakiHttp;
+            use std::collections::HashMap;
+
+            #[derive(serde::Deserialize)]
+            struct ExecuteArgs {
+                action: String,
+                hotspot_id: String,
+                #[serde(default)]
+                from: Option<String>,
+                #[serde(default)]
+                to: Option<String>,
+                #[serde(default)]
+                prev_active: Option<bool>,
+                #[serde(default)]
+                send_summary: Option<bool>,
+                #[serde(rename = "__config", default)]
+                config: HashMap<String, String>,
+            }
+
+            emit(PluginAction::Start, None, "execute received rewards action");
+
+            // 1. Parse args.
+            let parsed: ExecuteArgs = match serde_json::from_str(&args) {
+                Ok(a) => a,
+                Err(e) => {
+                    emit(PluginAction::Fail, Some(PluginOutcome::Failure), "invalid arguments");
+                    return Ok(ToolResult {
+                        success: false,
+                        output: String::new(),
+                        error: Some(format!("invalid arguments: {e}")),
+                    });
+                }
+            };
+
+            // 2. Build config (fail closed on missing/malformed).
+            let cfg = match RewardsConfig::from_section(&parsed.config) {
+                Ok(c) => c,
+                Err(RewardsError::Config(msg)) => {
+                    emit(PluginAction::Fail, Some(PluginOutcome::Failure), "config error");
+                    return Ok(ToolResult {
+                        success: false,
+                        output: String::new(),
+                        error: Some(format!("config error: {msg}")),
+                    });
+                }
+                Err(e) => {
+                    emit(PluginAction::Fail, Some(PluginOutcome::Failure), "config error");
+                    return Ok(ToolResult {
+                        success: false,
+                        output: String::new(),
+                        error: Some(format!("config error: {e:?}")),
+                    });
+                }
+            };
+
+            // 3. Run the shipped pure core over the wasm `waki` HTTP transport.
+            //    execute_entry dispatches action -> do_status / do_summary / do_watch;
+            //    claim_tx fails closed with an honest roadmap message.
+            let http = WakiHttp::new();
+            let request = crate::depin_rewards::RewardsRequest {
+                action: &parsed.action,
+                hotspot_id: &parsed.hotspot_id,
+                from: parsed.from.as_deref().unwrap_or(""),
+                to: parsed.to.as_deref().unwrap_or(""),
+                prev_active: parsed.prev_active,
+                send_summary: parsed.send_summary.unwrap_or(false),
+            };
+            let result = execute_entry(&request, &http, &cfg);
+            match result {
+                Ok(out) => {
+                    emit(
+                        PluginAction::Complete,
+                        Some(PluginOutcome::Success),
+                        "rewards action complete",
+                    );
+                    Ok(ToolResult {
+                        success: true,
+                        output: out.summary,
+                        error: None,
+                    })
+                }
+                Err(e) => {
+                    let msg = format!("{e:?}");
+                    emit(PluginAction::Fail, Some(PluginOutcome::Failure), "rewards action failed");
+                    Ok(ToolResult {
+                        success: false,
+                        output: String::new(),
+                        error: Some(msg),
+                    })
+                }
+            }
         }
     }
 

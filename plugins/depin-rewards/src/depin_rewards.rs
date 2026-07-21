@@ -750,3 +750,44 @@ pub fn do_watch(
     summary,
   })
 }
+
+/// The unified entry point the WIT shim calls: routes `action` to the right
+/// `do_*` pure-core fn. The host-testable dispatch seam (TDD with `MockHttp`);
+/// the wasm `WakiHttp` impl is verified by the `wasm32-wasip2` build.
+///
+/// `claim_tx` is deliberately not shipped (Helium hotspots are compressed NFTs
+/// → `distribute_compression_rewards_v0` + a DAS `get_asset_proof` merkle proof,
+/// a focused next milestone). It fails closed with an honest message — never
+/// silently no-ops or pretends to claim.
+pub struct RewardsRequest<'a> {
+  pub action: &'a str,
+  pub hotspot_id: &'a str,
+  pub from: &'a str,
+  pub to: &'a str,
+  pub prev_active: Option<bool>,
+  pub send_summary: bool,
+}
+
+pub fn execute_entry(
+  req: &RewardsRequest,
+  http: &dyn HttpClient,
+  cfg: &RewardsConfig,
+) -> Result<RewardsOutput, RewardsError> {
+  match req.action {
+    "status" => do_status(http, cfg, req.hotspot_id),
+    "summary" => do_summary(http, cfg, req.hotspot_id, req.from, req.to),
+    "watch" => do_watch(
+      http, cfg, req.hotspot_id, req.prev_active, req.send_summary, req.from, req.to,
+    ),
+    "claim_tx" => Err(RewardsError::Config(
+      "claim_tx is roadmap-only: Helium hotspots are compressed NFTs so the claim needs \
+       distribute_compression_rewards_v0 + a DAS get_asset_proof merkle proof — a \
+       focused next milestone, not yet shipped. The alerts core (status/summary/watch) \
+       ships complete."
+        .to_string(),
+    )),
+    other => Err(RewardsError::Config(format!(
+      "unknown action: '{other}' — expected one of: status | summary | watch | claim_tx"
+    ))),
+  }
+}

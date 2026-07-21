@@ -22,6 +22,10 @@ crate-type = ["cdylib", "rlib"]
 wit-bindgen = "0.46"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# wasm-only `HttpClient` impl (`WakiHttp`) used by the WIT component shim.
+# Compiles for host too (harmless) but is #[cfg(target_family="wasm")]-gated so
+# host tests never construct it — same pattern as palinurus_core::WakiRpc.
+waki = { version = "0.5", features = ["json"] }
 # Host-only demo driver (`--features demo`): a reqwest-backed HttpClient + Rpc
 # impl that runs the shipped pure core against live services on camera. NOT
 # part of the wasm component — excluded from `cargo build --target wasm32-wasip2`
