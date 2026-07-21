@@ -1,0 +1,41 @@
+[package]
+name = "safe-hands-core"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Deterministic Solana transaction-authorization core for Safe Hands ZeroClaw plugins. Pure Rust, no wasm dependency; the plugins' shims reuse this exact logic."
+publish = false
+
+[lib]
+crate-type = ["rlib"]
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+base64 = "0.22"
+bs58 = "0.5"
+sha2 = { version = "0.10", default-features = false }
+borsh = { version = "1.8", default-features = false }
+bincode = "1.3.3" # Solana wire format is bincode-1 (fixint, little-endian); v2/3 differ.
+solana-pubkey = { version = "3", features = ["curve25519"] }
+solana-hash = "3"
+solana-message = { version = "3", features = ["bincode"] }
+solana-instruction = { version = "3", features = ["bincode"] }
+solana-transaction = "3"
+
+# wasi:http client — only compiled for the wasm component, never on the host.
+[target.'cfg(target_family = "wasm")'.dependencies]
+waki = { version = "0.5.1", features = ["json"] }
+
+[dev-dependencies]
+proptest = "1"
+hex = "0.4"
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true
+codegen-units = 1
+
+# Standalone crate: built for wasm32-wasip2, not part of the host workspace.
+[workspace]
