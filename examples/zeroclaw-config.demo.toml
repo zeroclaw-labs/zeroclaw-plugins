@@ -1,0 +1,32 @@
+# Safe Hands — quick demo config (ZeroClaw)
+#
+# Copy the plugin block into ~/.zeroclaw/config.toml after `zeroclaw plugin
+# install ./plugins/solana-tx-authorize`. Point rpc_url at your own endpoint —
+# devnet needs no key; for mainnet use your provider (Helius/Triton/your own
+# node). policy_json is the operator spend policy: raw units only, deny by
+# default. NEVER put a private key anywhere in this file.
+
+[plugins]
+enabled = true
+
+[[plugins.entries]]
+name = "solana-tx-authorize"
+
+[plugins.entries.config]
+rpc_url = "https://api.devnet.solana.com"
+policy_json = "{\"version\":\"1.0.0\",\"default_action\":\"deny\",\"assets\":{\"SOL\":{\"decimals\":9,\"max_per_tx_raw\":\"2000000000\"}},\"allowed_recipients\":[\"9hSR6S7WPtxmTojgo6GG3k4yDPecgJY292j7xrsUGWBu\"],\"allowed_instructions\":{\"system\":[\"transfer\"],\"memo\":[\"memo\"]},\"unknown_program\":\"deny\",\"unknown_instruction\":\"deny\",\"missing_intent\":\"review\",\"durable_nonce\":\"review\",\"token_2022\":{\"permanent_delegate\":\"deny\",\"transfer_hook\":\"review\",\"transfer_fee\":\"review\",\"default_frozen\":\"deny\"},\"simulation\":{\"required\":true,\"max_slot_age\":32}}"
+
+# Agent + provider used for the demo (any OpenAI-compatible endpoint works):
+#
+#   [providers.models.custom.zero-g]
+#   uri = "https://router-api.0g.ai/v1"
+#   api_key = "<your key>"   # set via `zeroclaw config set`, never commit it
+#   model = "kimi-k3"
+#   native_tools = true       # required: custom endpoints disable native tools by default
+#
+#   [risk_profiles.ops]
+#   level = "full"            # use "supervised" to exercise the host approval gate
+#
+#   [agents.safehands]
+#   model_provider = "custom.zero-g"
+#   risk_profile = "ops"
