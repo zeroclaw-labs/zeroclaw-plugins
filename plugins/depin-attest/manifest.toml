@@ -1,0 +1,7 @@
+name = "depin-attest"
+version = "0.1.0"
+description = "Build fail-closed DePIN attestation memo payloads for Solana durable-nonce transactions"
+author = "ZeroClaw Labs"
+wasm_path = "depin_attest.wasm"
+capabilities = ["tool"]
+permissions = ["http_client", "config_read"]
