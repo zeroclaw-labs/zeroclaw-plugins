@@ -36,6 +36,10 @@ pub struct DecodedTx {
     /// v0 address-lookup-table references (table address + indices).
     /// Contents are NOT resolved here — that needs RPC (caller binds).
     pub alt_refs: Vec<AltRef>,
+    /// The raw instructions (program, metas, data) reconstructed from the
+    /// message — needed by builders that recompile transactions (e.g. Squads
+    /// re-payer flow).
+    pub raw_instructions: Vec<solana_instruction::Instruction>,
 }
 
 /// An address lookup table reference (unresolved without RPC).
@@ -84,7 +88,7 @@ fn decode_message(message_bytes: &[u8]) -> Result<DecodedTx, String> {
         (TxVersion::Legacy, message_bytes)
     };
 
-    let (header_signers, keys, blockhash, raw_ixs, alt_refs) = match version {
+    let (header_signers, keys, blockhash, raw_ixs, alt_refs, metas_per_ix) = match version {
         TxVersion::Legacy => parse_legacy(body)?,
         TxVersion::V0 => parse_v0(body)?,
     };
@@ -96,8 +100,14 @@ fn decode_message(message_bytes: &[u8]) -> Result<DecodedTx, String> {
     };
     facts.estimated_fee_lamports = 5_000u64.saturating_mul(header_signers as u64);
 
-    for (program_id, accounts, data) in &raw_ixs {
+    let mut raw_instructions = Vec::with_capacity(raw_ixs.len());
+    for ((program_id, accounts, data), metas) in raw_ixs.iter().zip(metas_per_ix.into_iter()) {
         classify(*program_id, accounts, data, &keys, &mut facts)?;
+        raw_instructions.push(solana_instruction::Instruction {
+            program_id: *program_id,
+            accounts: metas,
+            data: data.clone(),
+        });
     }
 
     Ok(DecodedTx {
@@ -106,6 +116,7 @@ fn decode_message(message_bytes: &[u8]) -> Result<DecodedTx, String> {
         version,
         blockhash: bs58::encode(blockhash).into_string(),
         alt_refs,
+        raw_instructions,
     })
 }
 
@@ -132,7 +143,15 @@ fn try_strip_signatures(bytes: &[u8]) -> Result<Option<(bool, &[u8])>, String> {
 }
 
 type RawIx = (Pubkey, Vec<u8>, Vec<u8>); // (program, account indices, data)
-type ParsedParts = (u8, Vec<Pubkey>, [u8; 32], Vec<RawIx>, Vec<AltRef>);
+type MetasPerIx = Vec<Vec<solana_instruction::AccountMeta>>;
+type ParsedParts = (
+    u8,
+    Vec<Pubkey>,
+    [u8; 32],
+    Vec<RawIx>,
+    Vec<AltRef>,
+    MetasPerIx,
+);
 
 /// Legacy: canonical Agave Message deserialization, then re-encode-free parse
 /// of instructions (Agave's CompiledInstruction keeps account indices).
@@ -147,6 +166,15 @@ fn parse_legacy(bytes: &[u8]) -> Result<ParsedParts, String> {
         return Err("account vector exceeds bound".to_string());
     }
     let mut ixs = Vec::new();
+    let mut metas_per_ix: MetasPerIx = Vec::new();
+    let num_signers = msg.header.num_required_signatures as usize;
+    let ro_signed = msg.header.num_readonly_signed_accounts as usize;
+    let ro_unsigned = msg.header.num_readonly_unsigned_accounts as usize;
+    let key_count = msg.account_keys.len();
+    let is_signer = |i: usize| i < num_signers;
+    let is_writable = |i: usize| {
+        (i < num_signers - ro_signed) || (i >= num_signers && i < key_count - ro_unsigned)
+    };
     for ci in &msg.instructions {
         if ixs.len() >= MAX_INSTRUCTIONS {
             return Err("instruction vector exceeds bound".to_string());
@@ -154,7 +182,20 @@ fn parse_legacy(bytes: &[u8]) -> Result<ParsedParts, String> {
         let program = keys
             .get(ci.program_id_index as usize)
             .ok_or("program id index out of range")?;
+        let metas: Vec<solana_instruction::AccountMeta> = ci
+            .accounts
+            .iter()
+            .map(|idx| {
+                let key = keys[*idx as usize];
+                solana_instruction::AccountMeta {
+                    pubkey: key,
+                    is_signer: is_signer(*idx as usize),
+                    is_writable: is_writable(*idx as usize),
+                }
+            })
+            .collect();
         ixs.push((*program, ci.accounts.clone(), ci.data.clone()));
+        metas_per_ix.push(metas);
     }
     Ok((
         msg.header.num_required_signatures,
@@ -162,6 +203,7 @@ fn parse_legacy(bytes: &[u8]) -> Result<ParsedParts, String> {
         msg.recent_blockhash.to_bytes(),
         ixs,
         vec![],
+        metas_per_ix,
     ))
 }
 
@@ -169,8 +211,8 @@ fn parse_legacy(bytes: &[u8]) -> Result<ParsedParts, String> {
 fn parse_v0(bytes: &[u8]) -> Result<ParsedParts, String> {
     let mut cur = Cursor::new(bytes);
     let num_signers = cur.u8()?;
-    let _readonly_signed = cur.u8()?;
-    let _readonly_unsigned = cur.u8()?;
+    let readonly_signed = cur.u8()?;
+    let readonly_unsigned = cur.u8()?;
     let key_count = cur.shortvec()?;
     if key_count > MAX_ACCOUNTS {
         return Err("account vector exceeds bound".to_string());
@@ -179,12 +221,18 @@ fn parse_v0(bytes: &[u8]) -> Result<ParsedParts, String> {
     for _ in 0..key_count {
         keys.push(Pubkey::new_from_array(cur.bytes32()?));
     }
+    let is_signer = |i: usize| i < num_signers as usize;
+    let is_writable = |i: usize| {
+        (i < num_signers as usize - readonly_signed as usize)
+            || (i >= num_signers as usize && i < key_count - readonly_unsigned as usize)
+    };
     let blockhash = cur.bytes32()?;
     let ix_count = cur.shortvec()?;
     if ix_count > MAX_INSTRUCTIONS {
         return Err("instruction vector exceeds bound".to_string());
     }
     let mut ixs = Vec::with_capacity(ix_count);
+    let mut metas_per_ix: MetasPerIx = Vec::with_capacity(ix_count);
     for _ in 0..ix_count {
         let program_idx = cur.u8()? as usize;
         let account_count = cur.shortvec()?;
@@ -192,8 +240,15 @@ fn parse_v0(bytes: &[u8]) -> Result<ParsedParts, String> {
             return Err("instruction account vector exceeds bound".to_string());
         }
         let mut acc_indices = Vec::with_capacity(account_count);
+        let mut metas = Vec::with_capacity(account_count);
         for _ in 0..account_count {
-            acc_indices.push(cur.u8()?);
+            let idx = cur.u8()?;
+            acc_indices.push(idx);
+            metas.push(solana_instruction::AccountMeta {
+                pubkey: *keys.get(idx as usize).ok_or("account index out of range")?,
+                is_signer: is_signer(idx as usize),
+                is_writable: is_writable(idx as usize),
+            });
         }
         let data_len = cur.shortvec()?;
         let data = cur.bytes(data_len)?.to_vec();
@@ -201,6 +256,7 @@ fn parse_v0(bytes: &[u8]) -> Result<ParsedParts, String> {
             .get(program_idx)
             .ok_or("program id index out of range")?;
         ixs.push((program, acc_indices, data));
+        metas_per_ix.push(metas);
     }
     // Address lookup tables (leftover bytes after instructions).
     let mut alt_refs = Vec::new();
@@ -225,7 +281,7 @@ fn parse_v0(bytes: &[u8]) -> Result<ParsedParts, String> {
             });
         }
     }
-    Ok((num_signers, keys, blockhash, ixs, alt_refs))
+    Ok((num_signers, keys, blockhash, ixs, alt_refs, metas_per_ix))
 }
 
 /// Classify one instruction: program label, instruction name, value movements,

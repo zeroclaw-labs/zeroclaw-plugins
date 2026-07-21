@@ -1,0 +1,11 @@
+name = "squads-proposal-build"
+version = "0.1.0"
+description = "Independently re-authorize a transaction against the operator policy, then build an unsigned Squads v4 proposal (vaultTransactionCreate + proposalCreate). Agent proposes, humans dispose. T1 — holds no keys."
+author = "Safe Hands"
+wasm_path = "squads_proposal_build.wasm"
+capabilities = ["tool"]
+# config_read: the host injects this plugin's own config section (rpc_url,
+# squads_create_key, squads_vault_index, proposer, policy_json) into execute
+# args as `__config`. http_client: outbound JSON-RPC for multisig state,
+# blockhash and simulation. The proposer holds no keys and signs nothing.
+permissions = ["config_read", "http_client"]
