@@ -18,6 +18,14 @@
 
 pub mod depin_rewards;
 
+// Host-only demo driver (`--features demo`): reqwest-backed HttpClient + Rpc
+// impls that run the shipped pure core against live services on camera.
+// Excluded from the wasm component build entirely (no feature → no module).
+#[cfg(feature = "demo")]
+pub mod demo_http;
+#[cfg(feature = "demo")]
+pub mod demo_rpc;
+
 #[cfg(target_family = "wasm")]
 mod component {
     wit_bindgen::generate!({

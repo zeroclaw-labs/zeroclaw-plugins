@@ -22,6 +22,30 @@ crate-type = ["cdylib", "rlib"]
 wit-bindgen = "0.46"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# Host-only demo driver (`--features demo`): a reqwest-backed HttpClient + Rpc
+# impl that runs the shipped pure core against live services on camera. NOT
+# part of the wasm component — excluded from `cargo build --target wasm32-wasip2`
+# (no feature) by the `optional` gate + the `demo` feature.
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"], optional = true }
+
+[dev-dependencies]
+# Used only by the `--features demo` integration tests (tests/demo_*.rs). Compiles
+# for normal `cargo test` too (unused) — small, doesn't touch the wasm build.
+mockito = "1"
+
+[features]
+# Host-only demo driver + its tests. Off by default so `cargo build --target
+# wasm32-wasip2 --release` and the 49 core tests are unaffected.
+default = []
+demo = ["dep:reqwest"]
+
+# cdylib for the wasm component; rlib so the pure rewards core is testable
+# on the host with a plain `cargo test`.
+
+[[bin]]
+name = "palinurus-demo"
+path = "src/bin/palinurus-demo.rs"
+required-features = ["demo"]
 
 [profile.release]
 opt-level = "s"
