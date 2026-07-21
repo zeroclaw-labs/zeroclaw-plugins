@@ -76,6 +76,19 @@ fn execute_rejects_payer_field_before_rpc() {
 }
 
 #[test]
+fn execute_rejects_nonce_account_field_before_rpc() {
+    let err = execute(
+        r#"{"device_id":"device-7","reading":12.5,"unit":"celsius","metric":"temperature","nonce_account":"attacker"}"#,
+        &config(),
+        &NoHttp,
+        1_720_000_000,
+    )
+    .unwrap_err();
+
+    assert!(err.contains("nonce_account must come from config"));
+}
+
+#[test]
 fn execute_rejects_extreme_reading_before_rpc() {
     let err = execute(
         r#"{"device_id":"device-7","reading":1e99,"unit":"celsius","metric":"temperature"}"#,
@@ -99,4 +112,16 @@ fn execute_rejects_drain_wallet_metric_before_rpc() {
     .unwrap_err();
 
     assert!(err.contains("metric is not allowlisted"));
+}
+
+#[test]
+fn plugin_sources_do_not_submit_transactions() {
+    for source in [
+        include_str!("../src/lib.rs"),
+        include_str!("../src/attest.rs"),
+        include_str!("../src/vendor/solana_core/rpc.rs"),
+        include_str!("../src/vendor/solana_core/tx.rs"),
+    ] {
+        assert!(!source.contains("sendTransaction"));
+    }
 }

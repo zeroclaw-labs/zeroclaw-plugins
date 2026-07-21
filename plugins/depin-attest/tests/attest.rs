@@ -181,6 +181,41 @@ fn rejects_readings_outside_configured_cap() {
 }
 
 #[test]
+fn rejects_delimiters_and_control_characters_in_memo_fields() {
+    let cfg = AttestConfig {
+        allowed_metrics: vec![
+            "temperature".to_string(),
+            "temperature|humidity".to_string(),
+            "uptime\nseconds".to_string(),
+        ],
+        max_abs_reading: 1_000_000.0,
+    };
+
+    for (label, json) in [
+        (
+            "device_id",
+            r#"{"device_id":"device|7","reading":12.5,"unit":"celsius","metric":"temperature"}"#,
+        ),
+        (
+            "metric",
+            r#"{"device_id":"device-7","reading":12.5,"unit":"celsius","metric":"temperature|humidity"}"#,
+        ),
+        (
+            "unit",
+            "{\"device_id\":\"device-7\",\"reading\":12.5,\"unit\":\"uptime\\nseconds\",\"metric\":\"temperature\"}",
+        ),
+    ] {
+        let args = parse_args_strict(json).unwrap();
+        let err = validate_policy(&cfg, &args).unwrap_err();
+
+        assert!(
+            err.contains("must not contain `|` or control characters"),
+            "{label}: {err}"
+        );
+    }
+}
+
+#[test]
 fn execute_builds_durable_unsigned_memo_tx_summary() {
     let payer = Pubkey::new([1u8; 32]);
     let nonce_account = Pubkey::new([2u8; 32]);

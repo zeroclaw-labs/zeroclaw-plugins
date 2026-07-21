@@ -248,6 +248,9 @@ pub fn validate_policy(cfg: &AttestConfig, args: &AttestArgs) -> Result<(), Stri
     if args.reading.abs() > cfg.max_abs_reading {
         return Err("reading exceeds max_abs_reading".to_string());
     }
+    validate_memo_field("device_id", &args.device_id)?;
+    validate_memo_field("metric", &args.metric)?;
+    validate_memo_field("unit", &args.unit)?;
     if !cfg
         .allowed_metrics
         .iter()
@@ -275,6 +278,16 @@ fn parse_allowed_metrics(csv: &str) -> Result<Vec<String>, String> {
     }
 
     Ok(metrics)
+}
+
+fn validate_memo_field(label: &str, value: &str) -> Result<(), String> {
+    if value.contains('|') || value.chars().any(char::is_control) {
+        return Err(format!(
+            "{label} must not contain `|` or control characters"
+        ));
+    }
+
+    Ok(())
 }
 
 fn required_string(object: &serde_json::Map<String, Value>, key: &str) -> Result<String, String> {

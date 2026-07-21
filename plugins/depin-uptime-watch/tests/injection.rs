@@ -106,3 +106,14 @@ fn execute_rejects_metric_field_before_rpc() {
 
     assert!(err.contains("unknown field"));
 }
+
+#[test]
+fn plugin_sources_do_not_submit_transactions() {
+    for source in [
+        include_str!("../src/lib.rs"),
+        include_str!("../src/watch.rs"),
+        include_str!("../src/vendor/solana_core/rpc.rs"),
+    ] {
+        assert!(!source.contains("sendTransaction"));
+    }
+}

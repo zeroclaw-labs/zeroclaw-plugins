@@ -227,6 +227,84 @@ fn get_transaction_memo_returns_none_when_no_memo_instruction_exists() {
 }
 
 #[test]
+fn get_transaction_memo_returns_none_for_null_transaction() {
+    let signature = "missing-txsig";
+    let body = json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "getTransaction",
+        "params": [
+            signature,
+            { "encoding": "jsonParsed", "maxSupportedTransactionVersion": 0 }
+        ]
+    });
+    let http = MapHttp::with_response(
+        RPC_URL,
+        body,
+        json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": null
+        }),
+    );
+    let rpc = Rpc {
+        url: RPC_URL,
+        http: &http,
+    };
+
+    assert_eq!(rpc.get_transaction_memo(signature).unwrap(), None);
+}
+
+#[test]
+fn get_transaction_memo_accepts_legacy_memo_program_id_and_parsed_info_fallback() {
+    let signature = "legacy-memo-txsig";
+    let body = json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "getTransaction",
+        "params": [
+            signature,
+            { "encoding": "jsonParsed", "maxSupportedTransactionVersion": 0 }
+        ]
+    });
+    let http = MapHttp::with_response(
+        RPC_URL,
+        body,
+        json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {
+                "blockTime": 789,
+                "transaction": {
+                    "message": {
+                        "instructions": [
+                            {
+                                "programId": "Memo1UhkJRfHyvLMcVucJwxXeuD728EqVDDwQDxFMNo",
+                                "parsed": {
+                                    "info": {
+                                        "memo": "ZCDEPIN|legacy memo"
+                                    }
+                                }
+                            }
+                        ]
+                    }
+                }
+            }
+        }),
+    );
+    let rpc = Rpc {
+        url: RPC_URL,
+        http: &http,
+    };
+
+    let memo = rpc.get_transaction_memo(signature).unwrap().unwrap();
+
+    assert_eq!(memo.signature, signature);
+    assert_eq!(memo.block_time, Some(789));
+    assert_eq!(memo.memo, "ZCDEPIN|legacy memo");
+}
+
+#[test]
 fn empty_url_is_rejected_before_http_call() {
     let address = Pubkey::new([4u8; 32]);
     let http = MapHttp::new(HashMap::new());

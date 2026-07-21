@@ -18,6 +18,12 @@ The crate exists so Track C plugins can share Solana message, memo, nonce, key, 
 
 Legacy Solana message encoding is implemented first because it keeps the wasip2 substrate simple and dependency-light. Versioned v0 messages can be added later if plugins need address lookup tables or newer transaction features.
 
+## Wire-Format Confidence
+
+`tx` includes a pinned golden `unsigned_tx_base64` fixture for a deterministic durable-nonce memo transaction. That test locks the hand-rolled legacy encoder's signature count, header bytes, account-key order, instruction program indices, instruction data bytes, and final base64 output without adding `solana-sdk` as a normal dependency.
+
+This is a regression guard for this implementation, not an independent Solana SDK oracle. Before a public demo or production signing flow, verify a signed transaction from this encoder against an external oracle: sign the fixture-shaped transaction, submit it to a local validator or devnet, and confirm the transaction is accepted and the Memo instruction renders as expected in validator logs or an explorer.
+
 ## HttpClient Trait
 
 `solana-core` does not own networking. Runtime-specific code implements the small `HttpClient` trait:
