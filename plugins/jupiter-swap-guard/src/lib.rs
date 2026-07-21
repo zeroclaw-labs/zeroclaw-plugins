@@ -23,12 +23,18 @@
 //! wit-bindgen's `export!` macro generates in the wasm shim, which cannot be
 //! avoided.
 
-// `ata` pulls curve25519-dalek/sha2, which the Kani backend compiles very slowly
-// and the proofs never exercise; exclude it from verification builds only.
+// `ata` (curve25519-dalek/sha2) and `jupiter`/`instruction` (serde_json) are
+// compiled very slowly by the Kani backend and the proofs never exercise them;
+// exclude them from verification builds only so `cargo kani` stays fast on the
+// scalar core it actually checks.
 #[cfg(not(kani))]
 pub mod ata;
 pub mod b58;
 pub mod encode;
+#[cfg(not(kani))]
+pub mod instruction;
+#[cfg(not(kani))]
+pub mod jupiter;
 pub mod policy;
 
 #[cfg(kani)]
