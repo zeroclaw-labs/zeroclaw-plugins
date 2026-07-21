@@ -1,0 +1,11 @@
+name = "portfolio-brief"
+version = "0.1.0"
+description = "Compact USD-valued brief of a Solana wallet's SOL + SPL/Token-2022 holdings with 24h price deltas"
+author = "greyat-labs"
+wasm_path = "portfolio_brief.wasm"
+capabilities = ["tool"]
+# http_client: read-only JSON-RPC to the operator-configured Solana endpoint and
+#   a read-only GET to the price API (Jupiter by default). No writes, no signing.
+# config_read: read this plugin's own `rpc_url` and `price_api_url` settings.
+#   Without it the plugin falls back to public endpoints and still works.
+permissions = ["http_client", "config_read"]
