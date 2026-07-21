@@ -114,3 +114,22 @@ cargo +1.96.1 build --locked --target wasm32-wasip2 --release
 
 The component is written to
 `target/wasm32-wasip2/release/realms_proposal_firewall.wasm`.
+
+## Reproduce A Result Without A Host
+
+`examples/live_lookup.rs` runs one live analysis outside ZeroClaw. It drives the
+same pure core across the same `Transport` seam the component crosses with
+`wasi:http`, but posts through `curl`, so it adds no dependency to the plugin.
+
+```bash
+cargo +1.96.1 run --locked --example live_lookup -- \
+  6wR1jdhhJ31bbdRNXva8MxqsgsNLKTxargcdAyZ7FcRj
+```
+
+Operator configuration comes from the environment using the same key names the
+host injects, prefixed with `REALMS_` (for example `REALMS_RPC_URL`). Only the
+proposal address is supplied on the command line, mirroring what a model may
+supply. Defaults are the public mainnet endpoint and mainnet genesis hash.
+
+`DEMO.md` walks through the live lookup, the prompt-injection regression, and
+the benign-payment case in about two and a half minutes.
