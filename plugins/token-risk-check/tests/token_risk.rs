@@ -2,7 +2,7 @@ use std::collections::VecDeque;
 
 use base64::Engine;
 use serde_json::{json, Value};
-use token_risk_check::liquidity::{parse_liquidity, parse_usd_micros};
+use token_risk_check::liquidity::{parse_liquidity, parse_usd_micros, LiquidityError};
 use token_risk_check::model::{
     serialize_bounded, Assessment, ModelArgs, Verdict, MAX_OUTPUT_BYTES,
 };
@@ -134,7 +134,7 @@ fn scripted_assessment(
 ) -> (Assessment, ScriptedTransport) {
     let mint = address(9);
     let rpc = "https://rpc.example";
-    let liquidity_url = format!("https://api.dexscreener.com/token-pairs/v1/solana/{mint}");
+    let liquidity_url = format!("https://api.dexscreener.com/latest/dex/tokens/{mint}");
     let program = if mint_data.len() == 82 {
         TOKEN_PROGRAM_ID
     } else {
@@ -185,13 +185,16 @@ fn scripted_assessment(
 }
 
 fn positive_liquidity() -> Value {
-    json!([{
-        "chainId":"solana",
-        "pairAddress":address(80),
-        "baseToken":{"address":address(9)},
-        "quoteToken":{"address":address(81)},
-        "liquidity":{"usd":"1234.500001"}
-    }])
+    json!({
+        "schemaVersion":"1.0.0",
+        "pairs":[{
+            "chainId":"solana",
+            "pairAddress":address(80),
+            "baseToken":{"address":address(9)},
+            "quoteToken":{"address":address(81)},
+            "liquidity":{"usd":"1234.500001"}
+        }]
+    })
 }
 
 macro_rules! invalid_mint_case {
@@ -854,17 +857,15 @@ fn rejects_more_than_six_liquidity_decimals() {
 }
 
 #[test]
-fn empty_liquidity_array_is_not_observed() {
-    let parsed = parse_liquidity(&address(9), "[]").unwrap();
+fn empty_liquidity_pairs_is_not_observed() {
+    let parsed = parse_liquidity(&address(9), r#"{"pairs":[]}"#).unwrap();
     assert_eq!(parsed.status, "not_observed");
     assert_eq!(parsed.indexed_pair_count, 0);
 }
 
 #[test]
 fn unrelated_chain_is_not_observed() {
-    let body =
-        json!([{"chainId":"ethereum","baseToken":{"address":address(9)},"liquidity":{"usd":1}}])
-            .to_string();
+    let body = json!({"pairs":[{"chainId":"ethereum","baseToken":{"address":address(9)},"liquidity":{"usd":1}}]}).to_string();
     assert_eq!(
         parse_liquidity(&address(9), &body).unwrap().status,
         "not_observed"
@@ -873,7 +874,7 @@ fn unrelated_chain_is_not_observed() {
 
 #[test]
 fn unrelated_solana_token_is_not_observed() {
-    let body = json!([{"chainId":"solana","baseToken":{"address":address(8)},"quoteToken":{"address":address(7)},"liquidity":{"usd":1}}]).to_string();
+    let body = json!({"pairs":[{"chainId":"solana","baseToken":{"address":address(8)},"quoteToken":{"address":address(7)},"liquidity":{"usd":1}}]}).to_string();
     assert_eq!(
         parse_liquidity(&address(9), &body).unwrap().status,
         "not_observed"
@@ -883,7 +884,7 @@ fn unrelated_solana_token_is_not_observed() {
 #[test]
 fn zero_liquidity_pair_is_not_positive() {
     let mut body = positive_liquidity();
-    body[0]["liquidity"]["usd"] = json!(0);
+    body["pairs"][0]["liquidity"]["usd"] = json!(0);
     let parsed = parse_liquidity(&address(9), &body.to_string()).unwrap();
     assert_eq!(parsed.status, "not_observed");
     assert_eq!(parsed.indexed_pair_count, 1);
@@ -904,9 +905,39 @@ fn positive_liquidity_is_observed_but_lp_control_unknown() {
 }
 
 #[test]
+fn parses_latest_dexscreener_object_pairs_contract() {
+    let body = positive_liquidity();
+    let parsed = parse_liquidity(&address(9), &body.to_string()).unwrap();
+    assert_eq!(parsed.status, "observed");
+    assert_eq!(parsed.indexed_pair_count, 1);
+}
+
+#[test]
+fn rejects_array_root_for_latest_dexscreener_contract() {
+    assert_eq!(
+        parse_liquidity(&address(9), &positive_liquidity()["pairs"].to_string()),
+        Err(LiquidityError::InvalidShape)
+    );
+}
+
+#[test]
+fn latest_dexscreener_object_rejects_more_than_64_pairs() {
+    let pair = positive_liquidity()["pairs"][0].clone();
+    let body = json!({"pairs":vec![pair; 65]});
+    assert_eq!(
+        parse_liquidity(&address(9), &body.to_string()),
+        Err(LiquidityError::BoundExceeded)
+    );
+}
+
+#[test]
 fn duplicate_pair_evidence_is_rejected() {
-    let pair = positive_liquidity()[0].clone();
-    assert!(parse_liquidity(&address(9), &json!([pair.clone(), pair]).to_string()).is_err());
+    let pair = positive_liquidity()["pairs"][0].clone();
+    assert!(parse_liquidity(
+        &address(9),
+        &json!({"pairs":[pair.clone(), pair]}).to_string()
+    )
+    .is_err());
 }
 
 #[test]
@@ -948,6 +979,22 @@ fn workflow_calls_fixed_methods_in_order() {
             "getMultipleAccounts",
             "liquidity"
         ]
+    );
+}
+
+#[test]
+fn workflow_uses_exact_latest_dexscreener_url() {
+    let mint = address(9);
+    let (_, transport) = scripted_assessment(
+        legacy_mint(None, None),
+        (10, 10, 10),
+        &[(100_000, 1)],
+        positive_liquidity(),
+        None,
+    );
+    assert_eq!(
+        transport.requests[3].url,
+        format!("https://api.dexscreener.com/latest/dex/tokens/{mint}")
     );
 }
 
@@ -1779,6 +1826,13 @@ fn readme_documents_build_test_run_friction_and_host_gate() {
         "wasi:http",
         "first-byte",
         "between-bytes",
+        "latest/dex/tokens",
+        "absolute 20-second deadline",
+        "wasi:io/poll",
+        "transitive WASI CLI imports",
+        "wasi:cli/stdout",
+        "empty sinks",
+        "does not call stdout or stderr",
         "zero-supply",
         "empty holder",
         "Next steps",
@@ -1806,15 +1860,13 @@ fn wasm_shim_uses_structured_logging_and_no_stdout() {
 }
 
 #[test]
-fn wasi_http_explicitly_sets_all_transport_and_total_deadlines() {
+fn wasi_http_explicitly_sets_all_transport_timeouts() {
     let source =
         std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/lib.rs")).unwrap();
     assert!(source.contains("RequestOptions::new()"));
     assert!(source.contains("set_connect_timeout(Some(CONNECT_TIMEOUT_NANOS))"));
     assert!(source.contains("set_first_byte_timeout(Some(FIRST_BYTE_TIMEOUT_NANOS))"));
     assert!(source.contains("set_between_bytes_timeout(Some(BETWEEN_BYTES_TIMEOUT_NANOS))"));
-    assert!(source.contains("REQUEST_TOTAL_TIMEOUT_NANOS"));
-    assert!(source.contains("monotonic_clock::now"));
     assert!(!source.contains(".connect_timeout("));
 }
 

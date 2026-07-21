@@ -79,13 +79,16 @@ Untrusted model arguments can contain instructions, endpoint overrides, RPC
 method names, or key-like strings. The JSON schema exposes only `mint`, rejects
 additional properties, and validates canonical 32-byte Base58 before the first
 request. The core constructs four fixed read-only RPC methods and one fixed
-DexScreener path. It rejects 3xx responses, mismatched response URL identity,
+DexScreener `latest/dex/tokens/{mint}` path, whose root must be an object with
+a bounded `pairs` array. It rejects 3xx responses, mismatched response URL identity,
 non-200 status, oversized bodies, malformed JSON/base64, RPC errors, wrong IDs,
 wrong token program owners, inconsistent slots, and hostile provider shapes.
 Every WASI request explicitly sets 10-second connect, first-byte, and
-between-bytes transport timeouts. A 20-second component budget is checked
-between blocking stages, with at most one 10-second in-flight transport stage
-beyond that check; no response timeout uses the host default.
+between-bytes transport timeouts. Each request also has one absolute 20-second deadline
+that is raced against response, outgoing-body, and incoming-body readiness through
+`wasi:io/poll`; the body path uses non-blocking reads. If the deadline wins, the
+assessment fails closed as incomplete Amber with a fixed timeout reason. No response
+timeout uses the host default and no provider error text is returned.
 
 Executable prompt-injection regression transcript:
 
@@ -115,6 +118,15 @@ as `token_risk_check.wasm`, then load it through a ZeroClaw build with the
 plugin runtime enabled. A successful source build alone is not a runtime claim:
 the real host must grant `http_client`, link `wasi:http`, inject `rpc_url` via
 `config_read`, instantiate the component, and execute an actual bounded read.
+
+The Rust `wasm32-wasip2` adapter leaves transitive WASI CLI imports such as
+`wasi:cli/stdout`, `wasi:cli/stderr`, terminal/environment/exit, and
+`wasi:random/insecure-seed` in the component link surface. The same imports are
+present in the upstream `redact-text` and `telegram` reference components built
+with this toolchain. This plugin source does not call stdout or stderr; it uses
+`logging/log-record` for structured events. The stock ZeroClaw host builds its
+WASI context without inheriting process streams, so guest stdout and stderr are
+empty sinks. These transitive imports are not additional manifest permissions.
 
 ## Next steps
 

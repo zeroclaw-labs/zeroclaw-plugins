@@ -5,6 +5,9 @@ pub mod model;
 pub mod risk;
 pub mod solana;
 
+#[cfg(any(target_family = "wasm", test))]
+mod deadline;
+
 #[cfg(target_family = "wasm")]
 mod component {
     wit_bindgen::generate!({
@@ -15,9 +18,12 @@ mod component {
 
     use std::collections::HashMap;
 
-    use crate::risk::{
-        classify_transport_error, execute_json_with, tool_description, tool_name,
-        tool_parameters_schema, Config, ReadTransport, Request, Response, TransportError,
+    use crate::{
+        deadline::{read_all_bounded, wait_ready_until, DeadlineRead, DeadlineWait, ReadChunk},
+        risk::{
+            classify_transport_error, execute_json_with, tool_description, tool_name,
+            tool_parameters_schema, Config, ReadTransport, Request, Response, TransportError,
+        },
     };
     use exports::zeroclaw::plugin::plugin_info::Guest as PluginInfo;
     use exports::zeroclaw::plugin::tool::{Guest as Tool, ToolResult};
@@ -29,7 +35,10 @@ mod component {
             outgoing_handler,
             types::{Headers, Method, OutgoingBody, OutgoingRequest, RequestOptions, Scheme},
         },
-        io::streams::StreamError,
+        io::{
+            poll,
+            streams::{InputStream, StreamError},
+        },
     };
     use zeroclaw::plugin::logging::{
         log_record, LogLevel, PluginAction, PluginEvent, PluginOutcome,
@@ -51,6 +60,48 @@ mod component {
     }
 
     struct WasiTransport;
+
+    struct WasiWait<'a> {
+        pollable: &'a poll::Pollable,
+    }
+
+    impl DeadlineWait for WasiWait<'_> {
+        fn wait_until(&mut self, deadline_ns: u64) -> Result<bool, ()> {
+            let timer = monotonic_clock::subscribe_instant(deadline_ns);
+            let ready = poll::poll(&[self.pollable, &timer]);
+            if ready.contains(&1) {
+                Ok(false)
+            } else if ready.contains(&0) {
+                Ok(true)
+            } else {
+                Err(())
+            }
+        }
+    }
+
+    struct WasiInput<'a> {
+        input: &'a InputStream,
+        pollable: poll::Pollable,
+    }
+
+    impl DeadlineWait for WasiInput<'_> {
+        fn wait_until(&mut self, deadline_ns: u64) -> Result<bool, ()> {
+            WasiWait {
+                pollable: &self.pollable,
+            }
+            .wait_until(deadline_ns)
+        }
+    }
+
+    impl DeadlineRead for WasiInput<'_> {
+        fn read_chunk(&mut self, max_bytes: u64) -> Result<ReadChunk, ()> {
+            match self.input.read(max_bytes) {
+                Ok(bytes) => Ok(ReadChunk::Data(bytes)),
+                Err(StreamError::Closed) => Ok(ReadChunk::Closed),
+                Err(_) => Err(()),
+            }
+        }
+    }
 
     impl ReadTransport for WasiTransport {
         fn send(&mut self, request: Request) -> Result<Response, TransportError> {
@@ -103,31 +154,30 @@ mod component {
             .set_between_bytes_timeout(Some(BETWEEN_BYTES_TIMEOUT_NANOS))
             .map_err(|_| TransportError::Unavailable)?;
 
-        let started = monotonic_clock::now();
+        let deadline = monotonic_clock::now().saturating_add(REQUEST_TOTAL_TIMEOUT_NANOS);
         let future_response = outgoing_handler::handle(outgoing, Some(options))
             .map_err(|error| classify_transport_error(&format!("{error:?}")))?;
         write_outgoing_body(
             &outgoing_body,
             request.body.unwrap_or_default().as_bytes(),
-            started,
+            deadline,
         )?;
         OutgoingBody::finish(outgoing_body, None).map_err(|_| TransportError::Unavailable)?;
 
-        let incoming = match future_response.get() {
-            Some(result) => result.map_err(|_| TransportError::Unavailable)?,
-            None => {
-                if request_timed_out(started) {
-                    return Err(TransportError::Timeout);
-                }
-                let pollable = future_response.subscribe();
-                pollable.block();
-                future_response
-                    .get()
-                    .ok_or(TransportError::Unavailable)?
-                    .map_err(|_| TransportError::Unavailable)?
-            }
-        }
-        .map_err(|error| classify_transport_error(&format!("{error:?}")))?;
+        let response_pollable = future_response.subscribe();
+        wait_ready_until(
+            &mut WasiWait {
+                pollable: &response_pollable,
+            },
+            deadline,
+        )
+        .map_err(TransportError::from)?;
+        let incoming = future_response
+            .get()
+            .ok_or(TransportError::Unavailable)?
+            .map_err(|_| TransportError::Unavailable)?
+            .map_err(|error| classify_transport_error(&format!("{error:?}")))?;
+        drop(response_pollable);
         drop(future_response);
 
         let status = incoming.status();
@@ -141,22 +191,19 @@ mod component {
         let input = incoming_body
             .stream()
             .map_err(|_| TransportError::Unavailable)?;
-        let mut body = Vec::new();
-        loop {
-            if request_timed_out(started) {
-                return Err(TransportError::Timeout);
-            }
-            match input.blocking_read(BODY_CHUNK_BYTES) {
-                Ok(chunk) => {
-                    if body.len().saturating_add(chunk.len()) > request.max_response_bytes {
-                        return Err(TransportError::TooLarge);
-                    }
-                    body.extend_from_slice(&chunk);
-                }
-                Err(StreamError::Closed) => break,
-                Err(_) => return Err(TransportError::Unavailable),
-            }
-        }
+        let input_pollable = input.subscribe();
+        let mut reader = WasiInput {
+            input: &input,
+            pollable: input_pollable,
+        };
+        let body = read_all_bounded(
+            &mut reader,
+            deadline,
+            BODY_CHUNK_BYTES,
+            request.max_response_bytes,
+        )
+        .map_err(TransportError::from)?;
+        drop(reader);
         drop(input);
         drop(incoming_body);
         Ok(Response {
@@ -169,7 +216,7 @@ mod component {
     fn write_outgoing_body(
         outgoing_body: &OutgoingBody,
         mut body: &[u8],
-        started: u64,
+        deadline: u64,
     ) -> Result<(), TransportError> {
         if body.is_empty() {
             return Ok(());
@@ -179,10 +226,13 @@ mod component {
             .map_err(|_| TransportError::Unavailable)?;
         let pollable = output.subscribe();
         while !body.is_empty() {
-            if request_timed_out(started) {
-                return Err(TransportError::Timeout);
-            }
-            pollable.block();
+            wait_ready_until(
+                &mut WasiWait {
+                    pollable: &pollable,
+                },
+                deadline,
+            )
+            .map_err(TransportError::from)?;
             let permit = output
                 .check_write()
                 .map_err(|_| TransportError::Unavailable)?;
@@ -194,15 +244,17 @@ mod component {
             body = remaining;
         }
         output.flush().map_err(|_| TransportError::Unavailable)?;
-        pollable.block();
+        wait_ready_until(
+            &mut WasiWait {
+                pollable: &pollable,
+            },
+            deadline,
+        )
+        .map_err(TransportError::from)?;
         output
             .check_write()
             .map_err(|_| TransportError::Unavailable)?;
         Ok(())
-    }
-
-    fn request_timed_out(started: u64) -> bool {
-        monotonic_clock::now().saturating_sub(started) >= REQUEST_TOTAL_TIMEOUT_NANOS
     }
 
     struct TokenRiskCheck;

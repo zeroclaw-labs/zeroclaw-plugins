@@ -224,7 +224,7 @@ fn liquidity_request(mint: &str) -> Request {
     Request {
         kind: RequestKind::Liquidity,
         method: "GET",
-        url: format!("https://api.dexscreener.com/token-pairs/v1/solana/{mint}"),
+        url: format!("https://api.dexscreener.com/latest/dex/tokens/{mint}"),
         body: None,
         max_response_bytes: MAX_LIQUIDITY_RESPONSE_BYTES,
     }

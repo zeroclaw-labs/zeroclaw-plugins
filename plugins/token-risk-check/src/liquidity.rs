@@ -53,8 +53,12 @@ pub fn parse_usd_micros(value: &Value) -> Result<u128, LiquidityError> {
 
 pub fn parse_liquidity(mint: &str, body: &str) -> Result<LiquidityEvidence, LiquidityError> {
     validate_mint(mint).map_err(|_| LiquidityError::InvalidShape)?;
-    let rows: Value = serde_json::from_str(body).map_err(|_| LiquidityError::InvalidShape)?;
-    let rows = rows.as_array().ok_or(LiquidityError::InvalidShape)?;
+    let root: Value = serde_json::from_str(body).map_err(|_| LiquidityError::InvalidShape)?;
+    let rows = root
+        .as_object()
+        .and_then(|object| object.get("pairs"))
+        .and_then(Value::as_array)
+        .ok_or(LiquidityError::InvalidShape)?;
     if rows.len() > MAX_LIQUIDITY_PAIRS {
         return Err(LiquidityError::BoundExceeded);
     }
