@@ -181,10 +181,9 @@ fn coption(data: &[u8]) -> Result<Option<[u8; 32]>, ParseError> {
     if data.len() != 36 {
         return Err(ParseError::InvalidLength);
     }
-    let key = array32(&data[4..36])?;
     match read_u32(&data[..4])? {
-        0 if key == [0; 32] => Ok(None),
-        1 => Ok(Some(key)),
+        0 => Ok(None),
+        1 => Ok(Some(array32(&data[4..36])?)),
         _ => Err(ParseError::InvalidOption),
     }
 }
