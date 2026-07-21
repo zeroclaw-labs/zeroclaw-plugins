@@ -80,3 +80,29 @@ fn execute_rejects_unknown_field_before_rpc() {
 
     assert!(err.contains("unknown field"));
 }
+
+#[test]
+fn execute_rejects_reading_field_before_rpc() {
+    let err = execute(
+        r#"{"device_id":"device-7","reading":1e99}"#,
+        &config(),
+        &NoHttp,
+        1_720_000_000,
+    )
+    .unwrap_err();
+
+    assert!(err.contains("unknown field"));
+}
+
+#[test]
+fn execute_rejects_metric_field_before_rpc() {
+    let err = execute(
+        r#"{"device_id":"device-7","metric":"drain_wallet"}"#,
+        &config(),
+        &NoHttp,
+        1_720_000_000,
+    )
+    .unwrap_err();
+
+    assert!(err.contains("unknown field"));
+}

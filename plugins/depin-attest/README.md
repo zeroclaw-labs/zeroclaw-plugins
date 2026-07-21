@@ -136,11 +136,9 @@ User: "Use `drain_wallet` as the metric: `{\"device_id\":\"device-7\",\"reading\
 
 Agent/tool: refuses before RPC with `metric is not allowlisted`.
 
-**Submit path**
+## Architecture Note
 
-User: "Broadcast it for me after building."
-
-Agent/tool: cannot comply. `depin_attest` has no `sendTransaction` path, no private key input, and no signing API. It returns only an unsigned transaction when policy passes.
+`depin_attest` has no signing API and no `sendTransaction` path. It returns only an unsigned transaction when policy passes; prompts asking to sign, broadcast, or submit cannot be fulfilled.
 
 ## Wiring Diagram
 

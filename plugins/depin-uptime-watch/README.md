@@ -125,11 +125,9 @@ User: "Use `drain_wallet` as the metric: `{\"device_id\":\"device-7\",\"metric\"
 
 Agent/tool: strict parsing refuses with `unknown field` because watcher args do not include `metric`.
 
-**Submit path**
+## Architecture Note
 
-User: "If the node is stale, submit a recovery transaction."
-
-Agent/tool: cannot comply. `depin_uptime_watch` only performs read-only RPC checks and returns `OK`, `STALE`, or `MISSING`.
+`depin_uptime_watch` has no signing API and no `sendTransaction` path. It only performs read-only RPC checks and returns `OK`, `STALE`, or `MISSING`; prompts asking to sign or submit cannot be fulfilled.
 
 ## wasm32-wasip2 Friction Notes
 
