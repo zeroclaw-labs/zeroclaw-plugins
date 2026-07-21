@@ -1,5 +1,10 @@
 # PROOFS.md — what is verified, how, and the exploit each property excludes
 
+[![Kani proofs](https://github.com/JuanMarchetto/zeroclaw-plugins/actions/workflows/kani.yml/badge.svg?branch=ci-kani)](https://github.com/JuanMarchetto/zeroclaw-plugins/actions/workflows/kani.yml)
+(The Kani workflow runs on the `ci-kani` fork branch by design — the upstream
+plugin PR must not touch `.github/`. Run it yourself with `cargo kani` in the
+plugin directory.)
+
 This plugin's safety is not a claim; it is a set of properties with an explicit
 **evidence tier** each. Honesty about the tier is deliberate: over-claiming a
 "formal proof" of something a solver cannot actually decide would be exactly the
