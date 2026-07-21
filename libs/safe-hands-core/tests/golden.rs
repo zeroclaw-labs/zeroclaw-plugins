@@ -34,7 +34,10 @@ fn one_sol_legacy_transfer_matches_web3js_byte_for_byte() {
     let ours = bincode::serialize(&msg).expect("serialize");
     let golden = hex::decode(GOLDEN_TRANSFER_HEX).expect("golden hex");
 
-    assert_eq!(ours, golden, "legacy 1-SOL transfer must match web3.js bytes");
+    assert_eq!(
+        ours, golden,
+        "legacy 1-SOL transfer must match web3.js bytes"
+    );
 }
 
 /// Message account ordering: signer-writable first, then writable non-signers,

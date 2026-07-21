@@ -17,4 +17,5 @@
 
 pub mod codec;
 pub mod crypto;
+pub mod policy;
 pub mod rpc;
