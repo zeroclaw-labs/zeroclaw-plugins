@@ -73,6 +73,11 @@ pub enum Reject {
         max_lamports: u64,
         fee_lamports: u64,
     },
+    ProgramNotAllowed(String),
+    UnexpectedSigner(String),
+    FundsToNonPayer(String),
+    DestinationNotBound(String),
+    UnsupportedInstruction(String),
 }
 
 impl Reject {
@@ -92,6 +97,21 @@ impl Reject {
                 max_lamports,
                 fee_lamports,
             } => format!("priority fee {fee_lamports} lamports exceeds the cap {max_lamports}"),
+            Reject::ProgramNotAllowed(p) => {
+                format!("instruction invokes non-allowlisted program {p}")
+            }
+            Reject::UnexpectedSigner(s) => {
+                format!("transaction requires a signature from {s}, not just the payer")
+            }
+            Reject::FundsToNonPayer(d) => {
+                format!("an instruction moves funds to {d}, which the payer does not own")
+            }
+            Reject::DestinationNotBound(d) => {
+                format!("the swap output is not bound to the payer's own token account ({d})")
+            }
+            Reject::UnsupportedInstruction(s) => {
+                format!("refusing an instruction the guard cannot fully account for: {s}")
+            }
         }
     }
 }

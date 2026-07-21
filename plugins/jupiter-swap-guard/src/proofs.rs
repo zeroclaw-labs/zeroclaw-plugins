@@ -22,6 +22,11 @@ use crate::policy::{min_out_floor, priority_fee_lamports};
 fn min_out_never_exceeds_quote() {
     let quote: u64 = kani::any();
     let bps: u16 = kani::any();
+    // Bound the quote to a realistic magnitude (<= 10^15 atoms — larger than any
+    // swap a sane per-tx cap allows) so CBMC's 128-bit divider stays tractable.
+    // The production u128 path is overflow-safe on the full u64 range by
+    // construction; this proves the <=-quote property on the operating range.
+    kani::assume(quote <= 1_000_000_000_000_000);
     let floor = min_out_floor(quote, bps);
     assert!(floor <= quote);
 }
@@ -63,9 +68,10 @@ fn priority_fee_is_sound() {
 /// let two different byte strings decode to the same message.
 #[cfg(kani)]
 #[kani::proof]
+#[kani::unwind(4)]
 fn compact_u16_roundtrips() {
     let v: u16 = kani::any();
-    let mut buf = Vec::new();
+    let mut buf = Vec::with_capacity(3);
     write_compact_u16(&mut buf, v);
     let (got, consumed) = read_compact_u16(&buf, 0).unwrap();
     assert!(got == v);

@@ -30,7 +30,10 @@
 #[cfg(not(kani))]
 pub mod ata;
 pub mod b58;
+pub mod decode;
 pub mod encode;
+#[cfg(not(kani))]
+pub mod gate;
 #[cfg(not(kani))]
 pub mod instruction;
 #[cfg(not(kani))]
