@@ -458,13 +458,17 @@ pub fn do_status(
   })
 }
 
-// ── Rewards (Relay iot/mobile-reward-shares/totals) ───────────────────────────
+// ── Rewards (Relay iot/mobile-reward-shares list → client-side sum) ───────────────────────────
 
-/// Aggregated rewards for a hotspot over a time range (from the Relay
-/// `/totals` endpoint — one call, returns the breakdown directly). The list
-/// endpoint (`/iot-reward-shares`) has a deeply-nested per-reward `amount`
-/// path that needs real-response verification (Relay key) — deferred; the
-/// totals endpoint is the clean primary for the daily-summary use case.
+/// Aggregated rewards for a hotspot over a time range, summed client-side from
+/// the Relay **list** endpoint (`/helium/l2/{iot|mobile}-reward-shares`). The
+/// `/totals` aggregate endpoint exists but is **gated behind the OracleData
+/// feature** (HTTP 401 `feature_not_available` on the free Community plan —
+/// verified live 2026-07-21), so the list endpoint is the only path that works
+/// for the bounty demo + every free-tier user. Each record carries a nested
+/// `reward_detail` with `beacon_amount` / `witness_amount` / `dc_transfer_amount`
+/// in **HNT bones (1 HNT = 10⁸ bones)** (Relay `formatted_*` fields confirm the
+/// 10⁸ scaling); summed here.
 #[derive(Debug)]
 pub struct RewardSummary {
   pub total_amount: u64,
@@ -476,32 +480,61 @@ pub struct RewardSummary {
 }
 
 impl RewardSummary {
-  /// Parse the Relay `/totals` response: four u64 totals. `from_iso`/`to_iso`
-  /// are carried through (the endpoint doesn't echo them) for the shaped output.
-  pub fn parse_totals(json: &[u8], from_iso: &str, to_iso: &str) -> Result<Self, RewardsError> {
+  /// Parse + sum the Relay list response `{ records: [{ reward_detail: {
+  /// beacon_amount, witness_amount, dc_transfer_amount } }], meta }`.
+  /// `from_iso`/`to_iso` are carried through (the list endpoint doesn't echo
+  /// them as a single range) for the shaped output. Records with a missing
+  /// `reward_detail` contribute 0. Sums use `saturating_add` (defensive against
+  /// overflow). **Single page only** (`per_page=100`, the endpoint max); a
+  /// hotspot with >100 records in the window would under-count — documented as
+  /// a known cap, fine for single-hotspot daily summaries (the real fixture has
+  /// 6 records). Full pagination is a future enhancement if fleets need it.
+  pub fn from_records(json: &[u8], from_iso: &str, to_iso: &str) -> Result<Self, RewardsError> {
     #[derive(serde::Deserialize)]
-    struct RawTotals {
-      total_beacon_amount: u64,
-      total_witness_amount: u64,
-      total_dc_transfer_amount: u64,
-      total_amount: u64,
+    struct RawDetail {
+      #[serde(default)]
+      beacon_amount: u64,
+      #[serde(default)]
+      witness_amount: u64,
+      #[serde(default)]
+      dc_transfer_amount: u64,
     }
-    let raw: RawTotals = serde_json::from_slice(json)
-      .map_err(|e| RewardsError::Parse(format!("reward totals: {e}")))?;
+    #[derive(serde::Deserialize)]
+    struct RawRecord {
+      #[serde(default)]
+      reward_detail: Option<RawDetail>,
+    }
+    #[derive(serde::Deserialize)]
+    struct RawList {
+      #[serde(default)]
+      records: Vec<RawRecord>,
+    }
+    let raw: RawList = serde_json::from_slice(json)
+      .map_err(|e| RewardsError::Parse(format!("reward shares list: {e}")))?;
+    let (mut beacon, mut witness, mut dc) = (0u64, 0u64, 0u64);
+    for r in raw.records {
+      if let Some(d) = r.reward_detail {
+        beacon = beacon.saturating_add(d.beacon_amount);
+        witness = witness.saturating_add(d.witness_amount);
+        dc = dc.saturating_add(d.dc_transfer_amount);
+      }
+    }
+    let total = beacon.saturating_add(witness).saturating_add(dc);
     Ok(RewardSummary {
-      total_amount: raw.total_amount,
-      beacon_amount: raw.total_beacon_amount,
-      witness_amount: raw.total_witness_amount,
-      dc_transfer_amount: raw.total_dc_transfer_amount,
+      total_amount: total,
+      beacon_amount: beacon,
+      witness_amount: witness,
+      dc_transfer_amount: dc,
       from_iso: from_iso.to_string(),
       to_iso: to_iso.to_string(),
     })
   }
 }
 
-/// `GET {base}/helium/l2/{net}-reward-shares/totals?from=&to=&hotspot_key=` →
-/// parsed [`RewardSummary`]. `net` = "iot" | "mobile". Status codes map as in
-/// `fetch_hotspot`.
+/// `GET {base}/helium/l2/{net}-reward-shares?from=&to=&hotspot_key=&per_page=100`
+/// → summed [`RewardSummary`]. `net` = "iot" | "mobile". Uses the **list**
+/// endpoint (not `/totals`, which is OracleData-gated on the free plan — see
+/// [`RewardSummary`]). Status codes map as in `fetch_hotspot`.
 pub fn fetch_rewards(
   http: &dyn HttpClient,
   cfg: &RewardsConfig,
@@ -511,12 +544,12 @@ pub fn fetch_rewards(
   to: &str,
 ) -> Result<RewardSummary, RewardsError> {
   let url = format!(
-    "{}/helium/l2/{}-reward-shares/totals?from={}&to={}&hotspot_key={}",
+    "{}/helium/l2/{}-reward-shares?from={}&to={}&hotspot_key={}&per_page=100",
     cfg.relay_base_url, net, from, to, hotspot_key
   );
   let bearer = format!("Bearer {}", cfg.relay_api_key);
   let body = http.get(&url, &bearer).map_err(map_relay_http)?;
-  RewardSummary::parse_totals(&body, from, to)
+  RewardSummary::from_records(&body, from, to)
 }
 
 /// Format an atomic-token amount (Helium IOT/MOBILE = 6 decimals) to a
@@ -544,17 +577,19 @@ pub fn format_amount(atomic: u64, decimals: u8) -> String {
 
 /// Shape a rewards summary into a ≤200-token summary (SPEC-3 §7).
 fn shape_summary(info: &HotspotInfo, rewards: &RewardSummary, net: &str) -> String {
-  let symbol = if net == "mobile" { "MOBILE" } else { "IOT" };
+  // Relay returns rewards in HNT bones (10⁸) regardless of subnetwork (manifest
+  // token = `*_reward_token_hnt`), so the symbol is HNT + amounts format at 8
+  // decimals. `net` labels the earning subnetwork.
   format!(
-    "✓ rewards {} — earned {} {} ({}–{})\n  beacon {} · witness {} · dc-transfer {}\n  owner: {}",
+    "✓ rewards {} — earned {} HNT [{}] ({}–{})\n  beacon {} · witness {} · dc-transfer {}\n  owner: {}",
     info.name,
-    format_amount(rewards.total_amount, 6),
-    symbol,
+    format_amount(rewards.total_amount, 8),
+    net,
     rewards.from_iso,
     rewards.to_iso,
-    format_amount(rewards.beacon_amount, 6),
-    format_amount(rewards.witness_amount, 6),
-    format_amount(rewards.dc_transfer_amount, 6),
+    format_amount(rewards.beacon_amount, 8),
+    format_amount(rewards.witness_amount, 8),
+    format_amount(rewards.dc_transfer_amount, 8),
     short_addr(&info.owner),
   )
 }
@@ -672,12 +707,12 @@ pub fn do_watch(
   // Daily rewards summary (SOP sets send_summary=true on the 08:00 tick).
   if send_summary {
     let rewards = fetch_rewards(http, cfg, net, id, from, to)?;
-    let symbol = if net == "mobile" { "MOBILE" } else { "IOT" };
+    // HNT bones (10⁸) — see `shape_summary`.
     let msg = format!(
-      "✓ {} daily rewards — earned {} {} ({}–{})",
+      "✓ {} daily rewards — earned {} HNT [{}] ({}–{})",
       info.name,
-      format_amount(rewards.total_amount, 6),
-      symbol,
+      format_amount(rewards.total_amount, 8),
+      net,
       rewards.from_iso,
       rewards.to_iso,
     );

@@ -443,31 +443,61 @@ fn do_status_rejects_unknown_hotspot() {
 
 // ── Slice D: RewardSummary + fetch_rewards + do_summary ───────────────────────
 
-const REWARD_TOTALS: &str = r#"{"total_beacon_amount":1100000,"total_witness_amount":2200000,"total_dc_transfer_amount":120000,"total_amount":3420000}"#;
+// Synthetic LIST response (two records) summing to beacon=10M, witness=15M,
+// dc=0, total=25M HNT bones (= 0.25 HNT at 10^8). Mirrors the real Relay
+// `{records:[{reward_detail:{...}}],meta}` shape (see rewards-iot-real.json).
+const REWARD_LIST: &str = r#"{"records":[{"reward_detail":{"beacon_amount":5000000,"witness_amount":7500000,"dc_transfer_amount":0}},{"reward_detail":{"beacon_amount":5000000,"witness_amount":7500000,"dc_transfer_amount":0}}],"meta":{"pagination":{"count":2,"total_pages":1,"current_page":1}}}"#;
 
 #[test]
-fn reward_summary_parses_totals() {
-  let s = RewardSummary::parse_totals(
-    REWARD_TOTALS.as_bytes(),
+fn reward_summary_from_records_sums_detail() {
+  let s = RewardSummary::from_records(
+    REWARD_LIST.as_bytes(),
     "2026-07-20T00:00:00Z",
     "2026-07-20T17:00:00Z",
   )
   .unwrap();
-  assert_eq!(s.total_amount, 3_420_000);
-  assert_eq!(s.beacon_amount, 1_100_000);
-  assert_eq!(s.witness_amount, 2_200_000);
-  assert_eq!(s.dc_transfer_amount, 120_000);
+  assert_eq!(s.beacon_amount, 10_000_000);
+  assert_eq!(s.witness_amount, 15_000_000);
+  assert_eq!(s.dc_transfer_amount, 0);
+  assert_eq!(s.total_amount, 25_000_000);
   assert_eq!(s.from_iso, "2026-07-20T00:00:00Z");
+}
+
+// Real Relay capture (Capybara hotspot, 2026-06-21..07-21, 6 records) — locks
+// the live shape + the 10⁸ HNT-bones scaling against drift.
+const REWARDS_IOT_REAL: &str = include_str!("fixtures/rewards-iot-real.json");
+
+#[test]
+fn reward_summary_from_records_real_fixture() {
+  let s = RewardSummary::from_records(
+    REWARDS_IOT_REAL.as_bytes(),
+    "2026-06-21T00:00:00Z",
+    "2026-07-21T00:00:00Z",
+  )
+  .unwrap();
+  assert_eq!(s.beacon_amount, 635_403);
+  assert_eq!(s.witness_amount, 1_423_666);
+  assert_eq!(s.dc_transfer_amount, 0);
+  assert_eq!(s.total_amount, 2_059_069);
+}
+
+#[test]
+fn reward_summary_from_records_handles_missing_detail() {
+  // Records with no reward_detail contribute 0 (defensive parsing).
+  let body = r#"{"records":[{"reward_detail":{"beacon_amount":1000,"witness_amount":0,"dc_transfer_amount":0}},{"reward_detail":null},{"other":1}]}"#;
+  let s = RewardSummary::from_records(body.as_bytes(), "f", "t").unwrap();
+  assert_eq!(s.beacon_amount, 1000);
+  assert_eq!(s.total_amount, 1000);
 }
 
 #[test]
 fn fetch_rewards_200_returns_summary() {
   let mut mock = MockHttp::new();
   mock.set_get(
-    "https://api.relaywireless.com/v1/helium/l2/iot-reward-shares/totals\
-?from=2026-07-20T00:00:00Z&to=2026-07-20T17:00:00Z&hotspot_key=ecc-1"
+    "https://api.relaywireless.com/v1/helium/l2/iot-reward-shares\
+?from=2026-07-20T00:00:00Z&to=2026-07-20T17:00:00Z&hotspot_key=ecc-1&per_page=100"
       .to_string(),
-    REWARD_TOTALS.as_bytes().to_vec(),
+    REWARD_LIST.as_bytes().to_vec(),
   );
   let cfg = base_cfg();
   let s = fetch_rewards(
@@ -479,7 +509,28 @@ fn fetch_rewards_200_returns_summary() {
     "2026-07-20T17:00:00Z",
   )
   .unwrap();
-  assert_eq!(s.total_amount, 3_420_000);
+  assert_eq!(s.total_amount, 25_000_000);
+}
+
+#[test]
+fn fetch_rewards_does_not_hit_totals_endpoint() {
+  // Regression guard: the `/totals` endpoint is OracleData-gated (HTTP 401
+  // `feature_not_available`) on the free Community plan — verified live
+  // 2026-07-21. So fetch_rewards MUST use the LIST endpoint. We register ONLY
+  // the list URL; if the code regresses to `/totals` (unregistered) it gets
+  // NotRegistered → this `.expect` panics → test fails.
+  let mut mock = MockHttp::new();
+  mock.set_get(
+    "https://api.relaywireless.com/v1/helium/l2/iot-reward-shares\
+?from=f&to=t&hotspot_key=ecc-1&per_page=100"
+      .to_string(),
+    REWARD_LIST.as_bytes().to_vec(),
+  );
+  let cfg = base_cfg();
+  let s = fetch_rewards(&mock, &cfg, "iot", "ecc-1", "f", "t").expect(
+    "must hit the LIST endpoint (not /totals) — /totals is 401-gated on the free plan",
+  );
+  assert_eq!(s.total_amount, 25_000_000);
 }
 
 #[test]
@@ -500,15 +551,16 @@ fn do_summary_shape_contains_amount_and_name() {
     HOTSPOT_IOT_ONLINE.as_bytes().to_vec(),
   );
   mock.set_get(
-    "https://api.relaywireless.com/v1/helium/l2/iot-reward-shares/totals\
-?from=f&to=t&hotspot_key=ecc-1"
+    "https://api.relaywireless.com/v1/helium/l2/iot-reward-shares\
+?from=f&to=t&hotspot_key=ecc-1&per_page=100"
       .to_string(),
-    REWARD_TOTALS.as_bytes().to_vec(),
+    REWARD_LIST.as_bytes().to_vec(),
   );
   let cfg = base_cfg();
   let out = do_summary(&mock, &cfg, "ecc-1", "f", "t").unwrap();
   assert!(out.summary.contains("earned"), "summary: {}", out.summary);
-  assert!(out.summary.contains("3.42"), "summary: {}", out.summary);
+  assert!(out.summary.contains("0.25"), "summary: {}", out.summary);
+  assert!(out.summary.contains("HNT"), "summary: {}", out.summary);
   assert!(out.summary.contains("tall-plum-ocelot"));
   assert!(out.summary.len() <= 800, "too long: {}", out.summary.len());
 }
@@ -610,10 +662,10 @@ fn watch_send_summary_sends_summary() {
     HOTSPOT_IOT_ONLINE.as_bytes().to_vec(),
   );
   mock.set_get(
-    "https://api.relaywireless.com/v1/helium/l2/iot-reward-shares/totals\
-?from=f&to=t&hotspot_key=ecc-1"
+    "https://api.relaywireless.com/v1/helium/l2/iot-reward-shares\
+?from=f&to=t&hotspot_key=ecc-1&per_page=100"
       .to_string(),
-    REWARD_TOTALS.as_bytes().to_vec(),
+    REWARD_LIST.as_bytes().to_vec(),
   );
   mock.set_post(TG_URL.to_string(), TG_OK.as_bytes().to_vec());
   let cfg = base_cfg();
@@ -631,10 +683,10 @@ fn watch_flip_and_summary_both_sent() {
     HOTSPOT_IOT_OFFLINE.as_bytes().to_vec(),
   );
   mock.set_get(
-    "https://api.relaywireless.com/v1/helium/l2/iot-reward-shares/totals\
-?from=f&to=t&hotspot_key=ecc-1"
+    "https://api.relaywireless.com/v1/helium/l2/iot-reward-shares\
+?from=f&to=t&hotspot_key=ecc-1&per_page=100"
       .to_string(),
-    REWARD_TOTALS.as_bytes().to_vec(),
+    REWARD_LIST.as_bytes().to_vec(),
   );
   mock.set_post(TG_URL.to_string(), TG_OK.as_bytes().to_vec());
   let cfg = base_cfg();

@@ -126,11 +126,11 @@ output:
 
 **`summary` — daily rewards:**
 ```
-args: {"action":"summary","hotspot_id":"11dZ…DxKc","from":"2026-07-20T00:00:00Z","to":"2026-07-20T08:00:00Z"}
-→ Relay GET /helium/l2/iot-reward-shares/totals?from=…&to=…&hotspot_key=…
+args: {"action":"summary","hotspot_id":"11dZ…DxKc","from":"2026-06-21T00:00:00Z","to":"2026-07-21T00:00:00Z"}
+→ Relay GET /helium/l2/iot-reward-shares?from=…&to=…&hotspot_key=…&per_page=100  (200; client-side sum of per-record reward_detail)
 output:
-  ✓ rewards tall-plum-ocelot — earned 3.42 IOT (2026-07-20T00:00:00Z–2026-07-20T08:00:00Z)
-    beacon 1.10 · witness 2.20 · dc-transfer 0.12
+  ✓ rewards tall-plum-ocelot — earned 0.02 HNT [iot] (2026-06-21T00:00:00Z–2026-07-21T00:00:00Z)
+    beacon 0.01 · witness 0.01 · dc-transfer 0.00
     owner: BcJz…AAWrR
 ```
 
