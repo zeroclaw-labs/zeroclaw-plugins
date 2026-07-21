@@ -1,0 +1,54 @@
+{
+  "fixture": "BonkDAO BIP #76 finalized live-state capture",
+  "captured_at": "2026-07-19T20:35:02Z",
+  "provider": "Solana Foundation public mainnet RPC",
+  "rpc_url": "https://api.mainnet-beta.solana.com",
+  "commitment": "finalized",
+  "genesis_hash": "5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d",
+  "account_context_slot": "433964983",
+  "accounts_sha256": "f07fc834d9d14edfe2a425d46841444f6f5cb3186e3e82c8898f67b8bb8f8407",
+  "transaction_sha256": "01a8b6c66da5551253b3fb9881aee616b4cc4c07b0675fd46d8dcf7c424394a6",
+  "account_request": {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "method": "getMultipleAccounts",
+    "params": [
+      [
+        "6wR1jdhhJ31bbdRNXva8MxqsgsNLKTxargcdAyZ7FcRj",
+        "Uq5BRkVfdBpMknZJHw6huS3dunEgJpUDv3M2DG3BfQg",
+        "84pGFuy1Y27ApK67ApethaPvexeDWA66zNV8gm38TVeQ",
+        "4XCcPHj6GuSMg8vgGGGE56DQyNPXG4b9B1jdrz1PYkNr",
+        "4oZNDZdVDGy68vnErEynTqsJqfHH6A6PDEUWBxz6QpLr",
+        "6zvWWwTopzfwabrv3EXHYoMRreJX2ayWmWaVFq6UsipU",
+        "FMe1f7weHQ83Mvj9TEjTZGPdesm1m2f1uUprwXGUgRyM",
+        "5y9dZT4nELdqrpQY4Zfm3ZUXgeANr5tABB8vphkKv2u7",
+        "F8FqZuUKfoy58aHLW6bfeEhfW9sTtJyqFTqnxVmGZ6dU",
+        "28AymsqjJ6p312raqaNUNn8DADT4kyRAwT2nJ87scmPy",
+        "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263"
+      ],
+      {
+        "encoding": "base64",
+        "commitment": "finalized"
+      }
+    ]
+  },
+  "transaction_signature": "5tPU1srcRcnmibB7KJi2WQ7cK4zuq5iKTMrSCLjq7hvGjuK4KUTmaHfwicixkJa5jZJmp3y98T7r2qecKV5mWw8P",
+  "transaction_request": {
+    "jsonrpc": "2.0",
+    "id": 3,
+    "method": "getTransaction",
+    "params": [
+      "5tPU1srcRcnmibB7KJi2WQ7cK4zuq5iKTMrSCLjq7hvGjuK4KUTmaHfwicixkJa5jZJmp3y98T7r2qecKV5mWw8P",
+      {
+        "encoding": "base64",
+        "commitment": "finalized",
+        "maxSupportedTransactionVersion": 0
+      }
+    ]
+  },
+  "notes": [
+    "The account capture is current live state at the recorded slot, not a historical account proof.",
+    "The signed execution transaction is retained independently in transaction.json.",
+    "A second independent archival provider was not available for this capture."
+  ]
+}

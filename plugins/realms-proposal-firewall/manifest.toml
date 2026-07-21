@@ -1,0 +1,7 @@
+name = "realms-proposal-firewall"
+version = "0.1.0"
+description = "Deterministically inspect SPL Governance proposal instructions for security risks"
+author = "ZeroClaw Contributors"
+wasm_path = "realms_proposal_firewall.wasm"
+capabilities = ["tool"]
+permissions = ["http_client", "config_read"]

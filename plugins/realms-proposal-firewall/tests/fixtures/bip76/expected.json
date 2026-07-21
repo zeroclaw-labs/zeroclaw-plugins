@@ -1,0 +1,16 @@
+{
+  "verdict": "CRITICAL",
+  "complete": true,
+  "raw_transfer_amount": "442610445030596600",
+  "decimals": 5,
+  "display_amount": "4426104450305.966",
+  "required_findings": [
+    "TREASURY_DRAIN",
+    "EXTERNAL_RECIPIENT",
+    "FRESH_DESTINATION_ACCOUNT",
+    "LOW_APPROVAL_THRESHOLD",
+    "BARELY_ABOVE_THRESHOLD",
+    "ZERO_EXECUTION_HOLDUP",
+    "UNKNOWN_PROGRAM"
+  ]
+}
