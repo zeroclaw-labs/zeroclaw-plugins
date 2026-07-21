@@ -536,6 +536,7 @@ dependencies = [
  "form_urlencoded",
  "http",
  "serde",
+ "serde_json",
  "waki-macros",
  "wit-bindgen 0.34.0",
 ]

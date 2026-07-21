@@ -1,7 +1,16 @@
 # depin-attest
 
-Stub README for the Task 6 pure policy and memo payload crate.
+ZeroClaw tool plugin for building unsigned durable-nonce Solana memo
+attestations from DePIN device sensor readings.
 
-This crate currently implements host-testable DePIN attestation policy and SPL
-Memo payload construction only. It does not execute RPC calls, submit
-transactions, sign transactions, or expose a wasm execution shim yet.
+The `depin_attest` tool reads policy and Solana account settings from the
+plugin config section, fetches the durable nonce account over the host-provided
+HTTP client, and returns a summary plus unsigned transaction payload. It does
+not sign or submit transactions.
+
+Build:
+
+```bash
+rustup target add wasm32-wasip2
+cargo build --manifest-path plugins/depin-attest/Cargo.toml --target wasm32-wasip2 --release
+```

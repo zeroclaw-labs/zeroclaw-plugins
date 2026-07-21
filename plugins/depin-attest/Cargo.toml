@@ -19,7 +19,7 @@ base64 = "0.22"
 thiserror = "2"
 
 [target.'cfg(target_family = "wasm")'.dependencies]
-waki = "0.5"
+waki = { version = "0.5", features = ["json"] }
 
 [profile.release]
 opt-level = "s"
