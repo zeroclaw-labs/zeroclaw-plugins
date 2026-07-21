@@ -184,6 +184,51 @@ fn scripted_assessment(
     (assessment, transport)
 }
 
+fn scripted_assessment_with_liquidity_response(
+    config: Config,
+    liquidity_response: Result<Response, TransportError>,
+) -> (Assessment, ScriptedTransport) {
+    let mint = address(9);
+    let rpc = config.rpc_url().to_string();
+    let account_address = address(50);
+    let responses = VecDeque::from([
+        response(
+            &rpc,
+            context_response(
+                1,
+                10,
+                raw_account(TOKEN_PROGRAM_ID, &legacy_mint(None, None)),
+            ),
+        ),
+        response(
+            &rpc,
+            context_response(
+                2,
+                10,
+                json!([{"address":account_address,"amount":"100000","decimals":6,"uiAmountString":"0"}]),
+            ),
+        ),
+        response(
+            &rpc,
+            context_response(
+                3,
+                10,
+                json!([raw_account(
+                    TOKEN_PROGRAM_ID,
+                    &token_account(key(9), key(1), 100_000, 1),
+                )]),
+            ),
+        ),
+        liquidity_response,
+    ]);
+    let mut transport = ScriptedTransport {
+        responses,
+        requests: Vec::new(),
+    };
+    let assessment = analyze_with(&mint, &config, &mut transport).unwrap();
+    (assessment, transport)
+}
+
 fn positive_liquidity() -> Value {
     json!({
         "schemaVersion":"1.0.0",
@@ -1037,6 +1082,135 @@ fn workflow_uses_bounded_response_limits() {
 }
 
 #[test]
+fn default_liquidity_url_is_unchanged() {
+    let mint = address(9);
+    let (_, transport) = scripted_assessment(
+        legacy_mint(None, None),
+        (10, 10, 10),
+        &[(100_000, 1)],
+        positive_liquidity(),
+        None,
+    );
+    assert_eq!(
+        transport.requests[3].url,
+        format!("https://api.dexscreener.com/latest/dex/tokens/{mint}")
+    );
+}
+
+#[test]
+fn custom_liquidity_url_appends_only_canonical_mint() {
+    let mint = address(9);
+    let expected = format!("https://relay.example/dexscreener/{mint}");
+    for base in [
+        "https://relay.example/dexscreener",
+        "https://relay.example/dexscreener/",
+        "https://relay.example/dexscreener///",
+    ] {
+        let config = Config::with_liquidity_url("https://rpc.example", Some(base));
+        let (assessment, transport) = scripted_assessment_with_liquidity_response(
+            config,
+            response(&expected, positive_liquidity().to_string()),
+        );
+        assert!(assessment.complete);
+        assert_eq!(transport.requests[3].url, expected);
+        assert_eq!(transport.requests[3].method, "GET");
+        assert!(transport.requests[3].body.is_none());
+    }
+}
+
+#[test]
+fn unsafe_liquidity_urls_make_zero_transport_calls() {
+    let mint = address(9);
+    let args = json!({"mint":mint}).to_string();
+    for unsafe_url in [
+        "not a url",
+        "http://relay.example/dexscreener",
+        "https://user:pass@relay.example/dexscreener",
+        "https://relay.example:443/dexscreener",
+        "https://relay.example:8443/dexscreener",
+        "https://relay.example/dexscreener?mode=unsafe",
+        "https://relay.example/dexscreener#fragment",
+        "https://localhost/dexscreener",
+        "https://relay.localhost/dexscreener",
+        "https://relay.local/dexscreener",
+        "https://10.1.2.3/dexscreener",
+        "https://172.20.1.2/dexscreener",
+        "https://192.168.1.2/dexscreener",
+        "https://169.254.169.254/dexscreener",
+        "https://192.0.2.1/dexscreener",
+        "https://198.51.100.1/dexscreener",
+        "https://203.0.113.1/dexscreener",
+        "https://[::1]/dexscreener",
+        "https://[fd00::1]/dexscreener",
+        "https://[2001:db8::1]/dexscreener",
+    ] {
+        let config = Config::with_liquidity_url("https://rpc.example", Some(unsafe_url));
+        let mut transport = ScriptedTransport::default();
+        let output = execute_json_with(&args, &config, &mut transport);
+        let parsed: Value = serde_json::from_str(&output).unwrap();
+        assert_eq!(
+            parsed["reasons"][0]["code"], "INVALID_CONFIG",
+            "unsafe URL was accepted: {unsafe_url}"
+        );
+        assert!(!output.contains(unsafe_url));
+        assert!(
+            transport.requests.is_empty(),
+            "unexpected request for {unsafe_url}"
+        );
+    }
+}
+
+#[test]
+fn custom_liquidity_redirect_status_remains_unknown() {
+    let mint = address(9);
+    let expected = format!("https://relay.example/dexscreener/{mint}");
+    let config = Config::with_liquidity_url(
+        "https://rpc.example",
+        Some("https://relay.example/dexscreener"),
+    );
+    let (assessment, transport) = scripted_assessment_with_liquidity_response(
+        config,
+        Ok(Response {
+            status: 302,
+            final_url: expected.clone(),
+            body: Vec::new(),
+        }),
+    );
+    assert_eq!(transport.requests[3].url, expected);
+    assert_eq!(assessment.liquidity.status, "unknown");
+    assert!(!assessment.complete);
+    assert!(assessment
+        .reasons
+        .iter()
+        .any(|reason| reason.code == "LIQUIDITY_NOT_PROVEN"));
+}
+
+#[test]
+fn custom_liquidity_final_url_mismatch_remains_unknown() {
+    let mint = address(9);
+    let expected = format!("https://relay.example/dexscreener/{mint}");
+    let config = Config::with_liquidity_url(
+        "https://rpc.example",
+        Some("https://relay.example/dexscreener"),
+    );
+    let (assessment, transport) = scripted_assessment_with_liquidity_response(
+        config,
+        Ok(Response {
+            status: 200,
+            final_url: "https://other.example/dexscreener".to_string(),
+            body: positive_liquidity().to_string().into_bytes(),
+        }),
+    );
+    assert_eq!(transport.requests[3].url, expected);
+    assert_eq!(assessment.liquidity.status, "unknown");
+    assert!(!assessment.complete);
+    assert!(assessment
+        .reasons
+        .iter()
+        .any(|reason| reason.code == "LIQUIDITY_NOT_PROVEN"));
+}
+
+#[test]
 fn invalid_mint_makes_zero_transport_calls() {
     let mut transport = ScriptedTransport::default();
     assert!(analyze_with(
@@ -1669,6 +1843,20 @@ fn model_args_reject_additional_properties() {
         &json!({"mint":address(9),"rpc_url":"https://evil.invalid"}).to_string(),
     );
     assert!(parsed.is_err());
+}
+
+#[test]
+fn model_args_cannot_override_liquidity_url() {
+    let raw = json!({
+        "mint": address(9),
+        "liquidity_url": "https://evil.invalid/dexscreener"
+    })
+    .to_string();
+    let mut transport = ScriptedTransport::default();
+    let output = execute_json_with(&raw, &Config::new("https://rpc.example"), &mut transport);
+    let parsed: Value = serde_json::from_str(&output).unwrap();
+    assert_eq!(parsed["reasons"][0]["code"], "INVALID_EXECUTE_ARGS");
+    assert!(transport.requests.is_empty());
 }
 
 #[test]

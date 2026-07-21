@@ -305,13 +305,18 @@ mod component {
                 }
             };
             let rpc_url = parsed.config.get("rpc_url").cloned().unwrap_or_default();
+            let liquidity_url = parsed.config.get("liquidity_url").cloned();
             let model_args = serde_json::json!({"mint": parsed.mint}).to_string();
             emit(
                 PluginAction::Query,
                 PluginOutcome::Success,
                 "starting bounded read-only assessment",
             );
-            let output = execute_json_with(&model_args, &Config::new(rpc_url), &mut WasiTransport);
+            let output = execute_json_with(
+                &model_args,
+                &Config::with_liquidity_url(rpc_url, liquidity_url),
+                &mut WasiTransport,
+            );
             let complete = serde_json::from_str::<serde_json::Value>(&output)
                 .ok()
                 .and_then(|value| value.get("complete").and_then(serde_json::Value::as_bool))

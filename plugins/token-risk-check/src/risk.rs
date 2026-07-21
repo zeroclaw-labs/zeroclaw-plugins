@@ -19,6 +19,7 @@ use crate::solana::{
 pub const MAX_RPC_RESPONSE_BYTES: usize = 256 * 1024;
 pub const MAX_LIQUIDITY_RESPONSE_BYTES: usize = 128 * 1024;
 pub const MAX_SLOT_SKEW: u64 = 32;
+const DEFAULT_LIQUIDITY_BASE_URL: &str = "https://api.dexscreener.com/latest/dex/tokens";
 
 pub fn tool_name() -> &'static str {
     "token-risk-check"
@@ -73,7 +74,7 @@ pub fn execute_json_with<T: ReadTransport>(
         Err(AnalysisError::InvalidConfig) => serialize_bounded(&Assessment::unknown(
             &args.mint,
             "INVALID_CONFIG",
-            "jailed rpc_url configuration is missing or unsafe",
+            "jailed endpoint configuration is missing or unsafe",
         )),
         Err(AnalysisError::InvalidMint) => serialize_bounded(&Assessment::unknown(
             "",
@@ -141,12 +142,24 @@ pub trait ReadTransport {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Config {
     rpc_url: String,
+    liquidity_url: Option<String>,
 }
 
 impl Config {
     pub fn new(rpc_url: impl Into<String>) -> Self {
         Self {
             rpc_url: rpc_url.into(),
+            liquidity_url: None,
+        }
+    }
+
+    pub fn with_liquidity_url(
+        rpc_url: impl Into<String>,
+        liquidity_url: Option<impl Into<String>>,
+    ) -> Self {
+        Self {
+            rpc_url: rpc_url.into(),
+            liquidity_url: liquidity_url.map(Into::into),
         }
     }
 
@@ -155,39 +168,78 @@ impl Config {
     }
 
     fn validate(&self) -> Result<(), AnalysisError> {
-        let url = Url::parse(&self.rpc_url).map_err(|_| AnalysisError::InvalidConfig)?;
-        if url.scheme() != "https"
-            || url.host_str().is_none()
-            || !url.username().is_empty()
-            || url.password().is_some()
-            || url.query().is_some()
-            || url.fragment().is_some()
-            || url.port().is_some()
-        {
-            return Err(AnalysisError::InvalidConfig);
-        }
-        let unsafe_host = match url.host() {
-            Some(Host::Domain(host)) => {
-                let host = host.to_ascii_lowercase();
-                host == "localhost" || host.ends_with(".localhost") || host.ends_with(".local")
-            }
-            Some(Host::Ipv4(address)) => ipv4_is_non_public(address.octets()),
-            Some(Host::Ipv6(address)) => {
-                address.is_unspecified()
-                    || address.is_loopback()
-                    || address.is_multicast()
-                    || (address.segments()[0] & 0xfe00) == 0xfc00
-                    || (address.segments()[0] & 0xffc0) == 0xfe80
-                    || address
-                        .to_ipv4_mapped()
-                        .is_some_and(|value| ipv4_is_non_public(value.octets()))
-            }
-            None => true,
-        };
-        if unsafe_host {
-            return Err(AnalysisError::InvalidConfig);
+        validate_public_https_url(&self.rpc_url)?;
+        if let Some(liquidity_url) = &self.liquidity_url {
+            validate_public_https_url(liquidity_url)?;
         }
         Ok(())
+    }
+
+    fn liquidity_request_url(&self, mint: &str) -> Result<String, AnalysisError> {
+        let base = self
+            .liquidity_url
+            .as_deref()
+            .unwrap_or(DEFAULT_LIQUIDITY_BASE_URL);
+        let validated = validate_public_https_url(base)?;
+        Ok(format!(
+            "{}/{mint}",
+            validated.as_str().trim_end_matches('/')
+        ))
+    }
+}
+
+fn validate_public_https_url(value: &str) -> Result<Url, AnalysisError> {
+    let url = Url::parse(value).map_err(|_| AnalysisError::InvalidConfig)?;
+    if !value.starts_with("https://")
+        || url.scheme() != "https"
+        || url.host_str().is_none()
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+        || has_explicit_port(value)
+    {
+        return Err(AnalysisError::InvalidConfig);
+    }
+    let unsafe_host = match url.host() {
+        Some(Host::Domain(host)) => {
+            let host = host.to_ascii_lowercase();
+            host == "localhost" || host.ends_with(".localhost") || host.ends_with(".local")
+        }
+        Some(Host::Ipv4(address)) => ipv4_is_non_public(address.octets()),
+        Some(Host::Ipv6(address)) => {
+            let segments = address.segments();
+            address.is_unspecified()
+                || address.is_loopback()
+                || address.is_multicast()
+                || (segments[0] & 0xfe00) == 0xfc00
+                || (segments[0] & 0xffc0) == 0xfe80
+                || (segments[0] == 0x2001 && segments[1] == 0x0db8)
+                || address
+                    .to_ipv4_mapped()
+                    .is_some_and(|value| ipv4_is_non_public(value.octets()))
+        }
+        None => true,
+    };
+    if unsafe_host {
+        return Err(AnalysisError::InvalidConfig);
+    }
+    Ok(url)
+}
+
+fn has_explicit_port(value: &str) -> bool {
+    let Some(authority) = value
+        .strip_prefix("https://")
+        .and_then(|rest| rest.split(['/', '?', '#']).next())
+    else {
+        return true;
+    };
+    if authority.starts_with('[') {
+        authority
+            .rfind(']')
+            .is_none_or(|end| authority[end + 1..].starts_with(':'))
+    } else {
+        authority.contains(':')
     }
 }
 
@@ -201,7 +253,10 @@ fn ipv4_is_non_public([a, b, c, _d]: [u8; 4]) -> bool {
         || (a == 172 && (16..=31).contains(&b))
         || (a == 192 && b == 168)
         || (a == 192 && b == 0 && c == 0)
+        || (a == 192 && b == 0 && c == 2)
         || (a == 198 && (18..=19).contains(&b))
+        || (a == 198 && b == 51 && c == 100)
+        || (a == 203 && b == 0 && c == 113)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -220,14 +275,14 @@ fn rpc_request(url: &str, id: u64, method: &'static str, params: serde_json::Val
     }
 }
 
-fn liquidity_request(mint: &str) -> Request {
-    Request {
+fn liquidity_request(config: &Config, mint: &str) -> Result<Request, AnalysisError> {
+    Ok(Request {
         kind: RequestKind::Liquidity,
         method: "GET",
-        url: format!("https://api.dexscreener.com/latest/dex/tokens/{mint}"),
+        url: config.liquidity_request_url(mint)?,
         body: None,
         max_response_bytes: MAX_LIQUIDITY_RESPONSE_BYTES,
-    }
+    })
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -320,6 +375,7 @@ pub fn analyze_with<T: ReadTransport>(
 ) -> Result<Assessment, AnalysisError> {
     let mint_bytes = validate_mint(mint).map_err(|_| AnalysisError::InvalidMint)?;
     config.validate()?;
+    let liquidity_request = liquidity_request(config, mint)?;
 
     let mint_body = match get_body(
         transport,
@@ -493,7 +549,7 @@ pub fn analyze_with<T: ReadTransport>(
         None
     };
 
-    let liquidity = match get_body(transport, liquidity_request(mint)) {
+    let liquidity = match get_body(transport, liquidity_request) {
         Ok(body) => parse_liquidity(mint, &body).unwrap_or_else(|_| LiquidityEvidence::unknown()),
         Err(_) => LiquidityEvidence::unknown(),
     };

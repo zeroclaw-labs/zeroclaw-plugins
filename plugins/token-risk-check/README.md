@@ -12,7 +12,8 @@ liquidity, and dangerous Token-2022 extensions.
 private-key, custody, trading, filesystem, process, socket, or WebSocket path.
 Every outbound operation is an HTTP GET or a read-only Solana JSON-RPC method.
 
-The plugin requires one jailed configuration key:
+The plugin requires `rpc_url` and accepts one optional jailed configuration
+key, `liquidity_url`:
 
 ```toml
 [[plugins.entries.token-risk-check]]
@@ -20,14 +21,31 @@ enabled = true
 
 [plugins.entries.token-risk-check.config]
 rpc_url = "https://your-solana-rpc.example"
+# Optional: base URL for an operator-controlled DexScreener response relay.
+liquidity_url = "https://your-relay.example/dexscreener"
 ```
 
-`rpc_url` is never hardcoded or accepted from model arguments. It must be an
-HTTPS URL without credentials, query, fragment, explicit port, or a local host.
-The manifest grants only `http_client` and `config_read`. Stock ZeroClaw removes
-caller-supplied `__config` and injects this jailed section at execution time.
-Host egress policy should additionally restrict DNS resolution to approved
-public RPC destinations.
+Neither endpoint is accepted from model arguments. Both must be HTTPS URLs
+without credentials, query, fragment, explicit port, local hostnames, or
+non-public IP literals. Stock ZeroClaw removes caller-supplied `__config` and
+injects this jailed section at execution time. The manifest grants only
+`http_client` and `config_read`.
+
+When `liquidity_url` is absent, the component reads the fixed direct
+`https://api.dexscreener.com/latest/dex/tokens/{mint}` URL. When present, it is
+an operator-owned base URL for hosts whose WASI HTTP egress cannot reach the
+public provider. All trailing slashes are removed and exactly `/{mint}` is
+appended, where `mint` has already passed canonical Base58 validation. The
+relay must forward the unmodified DexScreener token response object; it must
+not return a risk verdict or reinterpret provider data. Redirects and final-URL
+changes remain rejected, and the component applies the same body bound and
+strict local `pairs` parser as the direct path.
+
+The component rejects explicit private/local address literals, but a hostname
+can still be subject to DNS rebinding outside the guest's view. Host egress
+policy must restrict resolution and destinations to the approved RPC and relay
+services. The operator also owns relay availability and raw-response fidelity;
+malformed, missing, or altered evidence remains UNKNOWN rather than safe.
 
 ## Evidence and interpretation
 
@@ -78,11 +96,13 @@ Abbreviated output:
 Untrusted model arguments can contain instructions, endpoint overrides, RPC
 method names, or key-like strings. The JSON schema exposes only `mint`, rejects
 additional properties, and validates canonical 32-byte Base58 before the first
-request. The core constructs four fixed read-only RPC methods and one fixed
-DexScreener `latest/dex/tokens/{mint}` path, whose root must be an object with
-a bounded `pairs` array. It rejects 3xx responses, mismatched response URL identity,
-non-200 status, oversized bodies, malformed JSON/base64, RPC errors, wrong IDs,
-wrong token program owners, inconsistent slots, and hostile provider shapes.
+request. The core constructs four fixed read-only RPC methods and one
+host-configured GET whose path appends only the canonical mint. Its response
+must retain the DexScreener object root with a bounded `pairs` array. It rejects
+unsafe jailed endpoints before any network request, 3xx responses, mismatched
+response URL identity, non-200 status, oversized bodies, malformed JSON/base64,
+RPC errors, wrong IDs, wrong token program owners, inconsistent slots, and
+hostile provider shapes.
 Every WASI request explicitly sets 10-second connect, first-byte, and
 between-bytes transport timeouts. Each request also has one absolute 20-second deadline
 that is raced against response, outgoing-body, and incoming-body readiness through
@@ -116,8 +136,9 @@ same pure parser, consistency, aggregation, and policy core without network.
 Copy `target/wasm32-wasip2/release/token_risk_check.wasm` beside the manifest
 as `token_risk_check.wasm`, then load it through a ZeroClaw build with the
 plugin runtime enabled. A successful source build alone is not a runtime claim:
-the real host must grant `http_client`, link `wasi:http`, inject `rpc_url` via
-`config_read`, instantiate the component, and execute an actual bounded read.
+the real host must grant `http_client`, link `wasi:http`, inject `rpc_url` and
+any optional `liquidity_url` via `config_read`, instantiate the component, and
+execute an actual bounded read.
 
 The Rust `wasm32-wasip2` adapter leaves transitive WASI CLI imports such as
 `wasi:cli/stdout`, `wasi:cli/stderr`, terminal/environment/exit, and
