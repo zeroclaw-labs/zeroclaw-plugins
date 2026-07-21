@@ -1,0 +1,9 @@
+name = "token-risk-check"
+version = "0.1.0"
+description = "Bounded read-only Solana mint risk assessment"
+author = "ZeroClaw community"
+wasm_path = "token_risk_check.wasm"
+capabilities = ["tool"]
+# http_client: finalized Solana JSON-RPC plus fixed DexScreener token-pairs reads.
+# config_read: obtain rpc_url from this plugin's jailed host configuration.
+permissions = ["http_client", "config_read"]
