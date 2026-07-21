@@ -10,6 +10,9 @@ use sha2::{Digest, Sha256};
 const DEFAULT_MEMO_PREFIX: &str = "ZCDEPIN";
 const DEFAULT_MAX_ABS_READING: f64 = 1_000_000.0;
 const MEMO_MAX_BYTES: usize = 566;
+/// Chat-safe tool output budget (~200–300 model tokens). The only bulky field
+/// is `unsigned_tx_base64`, required for the T1 human approval / signing path.
+const SUMMARY_MAX_CHARS: usize = 900;
 const DEFAULT_ALLOWED_METRICS: [&str; 5] = [
     "temperature",
     "humidity",
@@ -94,8 +97,8 @@ pub fn parse_args_strict(json: &str) -> Result<AttestArgs, String> {
     let device_id = required_string(object, "device_id")?;
     let reading = object
         .get("reading")
-        .and_then(Value::as_f64)
-        .ok_or_else(|| "reading must be a number".to_string())?;
+        .ok_or_else(|| "reading is required".to_string())
+        .and_then(parse_finite_number)?;
     let unit = required_string(object, "unit")?;
     let metric = required_string(object, "metric")?;
     let memo_prefix = match object.get("memo_prefix") {
@@ -115,6 +118,24 @@ pub fn parse_args_strict(json: &str) -> Result<AttestArgs, String> {
         metric,
         memo_prefix,
     })
+}
+
+/// Accept JSON numbers or numeric strings (LLMs often stringify tool args).
+fn parse_finite_number(value: &Value) -> Result<f64, String> {
+    let n = match value {
+        Value::Number(num) => num
+            .as_f64()
+            .ok_or_else(|| "reading must be a number".to_string())?,
+        Value::String(s) => s
+            .trim()
+            .parse::<f64>()
+            .map_err(|_| "reading must be a number".to_string())?,
+        _ => return Err("reading must be a number".to_string()),
+    };
+    if !n.is_finite() {
+        return Err("reading must be a number".to_string());
+    }
+    Ok(n)
 }
 
 pub fn execute<H: HttpClient>(
@@ -186,7 +207,7 @@ unsigned_tx_base64: {}",
         nonce_account_str,
         unsigned_tx_base64
     );
-    assert_budget(&summary, 1200).map_err(|e| e.to_string())?;
+    assert_budget(&summary, SUMMARY_MAX_CHARS).map_err(|e| e.to_string())?;
 
     Ok(AttestOutput {
         summary,

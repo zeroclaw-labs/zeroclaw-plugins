@@ -89,6 +89,19 @@ fn execute_rejects_nonce_account_field_before_rpc() {
 }
 
 #[test]
+fn execute_rejects_rpc_url_field_before_rpc() {
+    let err = execute(
+        r#"{"device_id":"device-7","reading":12.5,"unit":"celsius","metric":"temperature","rpc_url":"https://attacker/with-key"}"#,
+        &config(),
+        &NoHttp,
+        1_720_000_000,
+    )
+    .unwrap_err();
+
+    assert!(err.contains("unknown field"));
+}
+
+#[test]
 fn execute_rejects_extreme_reading_before_rpc() {
     let err = execute(
         r#"{"device_id":"device-7","reading":1e99,"unit":"celsius","metric":"temperature"}"#,
@@ -114,6 +127,24 @@ fn execute_rejects_drain_wallet_metric_before_rpc() {
     assert!(err.contains("metric is not allowlisted"));
 }
 
+/// Fail-closed when a malicious prompt tries to make the tool move funds /
+/// submit on-chain (no submit API, unknown fund-move fields rejected).
+#[test]
+fn execute_rejects_fund_movement_injection_before_rpc() {
+    for json in [
+        r#"{"device_id":"device-7","reading":12.5,"unit":"celsius","metric":"temperature","submit":true}"#,
+        r#"{"device_id":"device-7","reading":12.5,"unit":"celsius","metric":"temperature","sendTransaction":true}"#,
+        r#"{"device_id":"device-7","reading":12.5,"unit":"celsius","metric":"temperature","send_transaction":true}"#,
+        r#"{"device_id":"device-7","reading":12.5,"unit":"celsius","metric":"temperature","to":"attacker","amount":"all"}"#,
+    ] {
+        let err = execute(json, &config(), &NoHttp, 1_720_000_000).unwrap_err();
+        assert!(
+            err.contains("unknown field"),
+            "expected unknown-field refusal for fund-move injection, got: {err}"
+        );
+    }
+}
+
 #[test]
 fn plugin_sources_do_not_submit_transactions() {
     for source in [
@@ -123,5 +154,8 @@ fn plugin_sources_do_not_submit_transactions() {
         include_str!("../src/vendor/solana_core/tx.rs"),
     ] {
         assert!(!source.contains("sendTransaction"));
+        assert!(!source.contains("send_transaction"));
+        // Trap 3: never dump raw program-account dumps into the model context.
+        assert!(!source.contains("getProgramAccounts"));
     }
 }

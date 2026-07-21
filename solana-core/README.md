@@ -56,14 +56,19 @@ The script copies `solana-core/src/` into each plugin vendor directory with `rsy
 
 ## wasm32-wasip2 Notes
 
-The substrate intentionally uses small crates that compile cleanly in the plugin builds:
+The substrate intentionally uses small crates that compile cleanly in the plugin builds (Track E):
 
 - `bs58` for public keys
 - `base64` for transaction and RPC account data encoding
 - `sha2` for attestation hashes
 - `serde` and `serde_json` for JSON-RPC payloads
+- Hand-rolled System / Memo instruction encoding (no `borsh`, no `solana-sdk`)
 
 `solana-sdk` and `solana-client` are deliberately avoided. WIT bindings and `waki` stay in plugin shims, not in `solana-core`.
+
+`shape::{truncate, assert_budget}` exists so plugins return ~hundreds of chars to the model, not raw RPC dumps (`getProgramAccounts` is intentionally absent).
+
+Pinned ABI assumption for consumers: ZeroClaw repo `wit/v0` `tool-plugin` world is experimental (no `.frozen`); expect a rebuild when it moves.
 
 ## License
 

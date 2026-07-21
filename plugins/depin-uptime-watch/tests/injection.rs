@@ -107,6 +107,22 @@ fn execute_rejects_metric_field_before_rpc() {
     assert!(err.contains("unknown field"));
 }
 
+/// Fail-closed when a malicious prompt tries to make the watcher move funds.
+#[test]
+fn execute_rejects_fund_movement_injection_before_rpc() {
+    for json in [
+        r#"{"device_id":"device-7","submit":true}"#,
+        r#"{"device_id":"device-7","sendTransaction":true}"#,
+        r#"{"device_id":"device-7","to":"attacker","amount":"all"}"#,
+    ] {
+        let err = execute(json, &config(), &NoHttp, 1_720_000_000).unwrap_err();
+        assert!(
+            err.contains("unknown field"),
+            "expected unknown-field refusal for fund-move injection, got: {err}"
+        );
+    }
+}
+
 #[test]
 fn plugin_sources_do_not_submit_transactions() {
     for source in [
@@ -115,5 +131,8 @@ fn plugin_sources_do_not_submit_transactions() {
         include_str!("../src/vendor/solana_core/rpc.rs"),
     ] {
         assert!(!source.contains("sendTransaction"));
+        assert!(!source.contains("send_transaction"));
+        // Trap 3: never dump raw program-account dumps into the model context.
+        assert!(!source.contains("getProgramAccounts"));
     }
 }

@@ -1,4 +1,16 @@
-//! A ZeroClaw WIT tool plugin for DePIN uptime freshness checks.
+//! A ZeroClaw WIT tool plugin: `depin_uptime_watch`.
+//!
+//! Checks recent Solana DePIN memo attestations and returns a shaped freshness
+//! verdict (`OK` / `STALE` / `MISSING`). Custody **T0**: read-only RPC, no keys,
+//! no signing, no submit path.
+//!
+//! The pure watcher core lives in [`watch`] with no wasm dependency, so it
+//! compiles and tests on the host with a plain `cargo test` (mocked RPC). The
+//! wasm component is a `#[cfg(target_family = "wasm")]` shim that calls into
+//! that core and emits structured `log-record` events (never stdout).
+//!
+//! Build:  rustup target add wasm32-wasip2
+//!         cargo build --target wasm32-wasip2 --release
 
 pub mod watch;
 

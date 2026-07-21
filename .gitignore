@@ -4,5 +4,13 @@ zeroclaw/
 __pycache__/
 *.pyc
 target/
+.tmp-target/
 *.wasm
 .superpowers/
+
+# Demo secrets
+demo/keys/
+demo/*.mp4
+demo/recording/
+.env
+.env.*

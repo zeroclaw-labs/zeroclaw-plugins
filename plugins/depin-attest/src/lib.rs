@@ -1,4 +1,16 @@
-//! A ZeroClaw WIT tool plugin for DePIN attestation memo payloads.
+//! A ZeroClaw WIT tool plugin: `depin_attest`.
+//!
+//! Builds an unsigned durable-nonce Solana memo attestation from a DePIN device
+//! sensor reading (custody **T1**). The plugin never accepts a private key,
+//! never signs, and never submits transactions.
+//!
+//! The pure attestation core lives in [`attest`] with no wasm dependency, so it
+//! compiles and tests on the host with a plain `cargo test` (mocked RPC). The
+//! wasm component is a `#[cfg(target_family = "wasm")]` shim that calls into
+//! that core and emits structured `log-record` events (never stdout).
+//!
+//! Build:  rustup target add wasm32-wasip2
+//!         cargo build --target wasm32-wasip2 --release
 
 pub mod attest;
 

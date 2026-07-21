@@ -147,6 +147,24 @@ fn uses_default_allowlist_when_allowed_metrics_absent() {
 }
 
 #[test]
+fn accepts_numeric_string_readings_from_llm_tool_args() {
+    let args = parse_args_strict(
+        r#"{"device_id":"device-7","reading":"21.4","unit":"celsius","metric":"temperature"}"#,
+    )
+    .unwrap();
+    assert!((args.reading - 21.4).abs() < 1e-9);
+}
+
+#[test]
+fn rejects_non_numeric_string_readings() {
+    let err = parse_args_strict(
+        r#"{"device_id":"device-7","reading":"hot","unit":"celsius","metric":"temperature"}"#,
+    )
+    .unwrap_err();
+    assert!(err.contains("reading must be a number"));
+}
+
+#[test]
 fn rejects_metrics_outside_allowlist() {
     let cfg = AttestConfig::from_section(&HashMap::new()).unwrap();
     let args =
@@ -237,7 +255,7 @@ fn execute_builds_durable_unsigned_memo_tx_summary() {
         "162751dec7d2299ebf6a032862b6a5fe59aa3f1abe5ece3b70a0c9b3da8f682a"
     );
     assert!(!output.unsigned_tx_base64.is_empty());
-    assert!(output.summary.chars().count() <= 1200);
+    assert!(output.summary.chars().count() <= 900);
     assert_eq!(
         output.summary,
         format!(
