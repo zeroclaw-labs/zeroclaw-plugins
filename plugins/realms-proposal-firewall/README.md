@@ -133,3 +133,19 @@ supply. Defaults are the public mainnet endpoint and mainnet genesis hash.
 
 `DEMO.md` walks through the live lookup, the prompt-injection regression, and
 the benign-payment case in about two and a half minutes.
+
+## Verified Through The Real Host
+
+Beyond this crate's own suite, the component has been run end to end through the
+ZeroClaw wasmtime component host (zeroclaw master `f0b92f1`, feature
+`plugins-wasm-cranelift`) with real `wasi:http` egress, the real config jail,
+and real fuel limits:
+
+- It instantiates against the host's own `wit/v0` and reports the declared tool
+  name and schema.
+- A live mainnet lookup of BIP #76 returns `CRITICAL` / `complete: true` in
+  1.28 s, matching `tests/fixtures/bip76/expected.json` on every required
+  finding, well inside a 1e9 call-fuel budget.
+- A model-supplied `__config.rpc_url` pointing at an attacker endpoint does not
+  survive the host boundary: the plugin sees an empty config and fails closed on
+  the missing `rpc_url` rather than making the call.
