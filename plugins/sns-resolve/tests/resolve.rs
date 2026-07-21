@@ -46,6 +46,20 @@ fn fails_closed_on_malformed_address_or_status() {
     ));
 }
 #[test]
+fn rejects_non_base58_and_all_zero_decoded_addresses() {
+    // Same length as a valid address but with a non-base58 char ('0') swapped in;
+    // a plain alphanumeric check would have passed this through.
+    assert_eq!(
+        parse_proxy_response(&json!({"s":"ok","result":"0w1ETanDZafof7xEULsnq9UY6o71Tpds89tNwPkWLb1v"})),
+        Err(ResolveError::MalformedResponse)
+    );
+    // Decodes to 32 all-zero bytes (the System Program sentinel), not a real resolution.
+    assert_eq!(
+        parse_proxy_response(&json!({"s":"ok","result":"11111111111111111111111111111111"})),
+        Err(ResolveError::MalformedResponse)
+    );
+}
+#[test]
 fn output_is_under_200_tokens() {
     let text = format("bonfida.sol", ADDRESS);
     assert!(text.chars().count() <= MAX_OUTPUT_CHARS);

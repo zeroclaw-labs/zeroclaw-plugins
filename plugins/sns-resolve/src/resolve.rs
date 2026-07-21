@@ -50,7 +50,11 @@ pub fn normalize_domain(input: &str) -> Result<String, ResolveError> {
 }
 
 fn valid_address(value: &str) -> bool {
-    (32..=44).contains(&value.len()) && value.bytes().all(|b| b.is_ascii_alphanumeric())
+    (32..=44).contains(&value.len())
+        && bs58::decode(value)
+            .into_vec()
+            .map(|decoded| decoded.len() == 32 && decoded.iter().any(|byte| *byte != 0))
+            .unwrap_or(false)
 }
 
 pub fn parse_proxy_response(value: &Value) -> Result<String, ResolveError> {
