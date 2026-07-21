@@ -107,7 +107,7 @@ pub fn evaluate(
         if !policy.allowed_programs.contains(&ix.program_id) {
             return Err(Reject::ProgramNotAllowed(encode_pubkey(&ix.program_id)));
         }
-        // P5: the only signer may be the payer (plus the nonce authority in nonce mode).
+        // P5: the payer must be the only signer.
         for acc in &ix.accounts {
             if acc.is_signer && !is_allowed_signer(policy, &acc.pubkey) {
                 return Err(Reject::UnexpectedSigner(encode_pubkey(&acc.pubkey)));
