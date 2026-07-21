@@ -4,7 +4,7 @@ use crate::{CoreError, CoreResult};
 pub struct Pubkey([u8; 32]);
 
 impl Pubkey {
-    pub fn new(bytes: [u8; 32]) -> Self {
+    pub const fn new(bytes: [u8; 32]) -> Self {
         Self(bytes)
     }
 
