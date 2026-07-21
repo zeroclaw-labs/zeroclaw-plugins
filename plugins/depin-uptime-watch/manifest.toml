@@ -1,0 +1,7 @@
+name = "depin-uptime-watch"
+version = "0.1.0"
+description = "Check recent Solana DePIN memo attestations and return a freshness verdict (T0)"
+author = "Superteam Brasil bounty submission"
+wasm_path = "depin_uptime_watch.wasm"
+capabilities = ["tool"]
+permissions = ["http_client", "config_read"]
