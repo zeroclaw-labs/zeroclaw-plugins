@@ -18,10 +18,10 @@
 //! quote -> gate -> rebuild pipeline is being wired; `execute` fails closed until
 //! it lands.
 //!
-//! `unsafe` is forbidden in every pure module (`encode`, `b58`, and the policy
-//! core to come); the only `unsafe` in the crate is the FFI glue that
-//! wit-bindgen's `export!` macro generates in the wasm shim, which cannot be
-//! avoided.
+//! `unsafe` is forbidden in every pure module (`encode`, `b58`, `policy`, `ata`,
+//! `decode`, `gate`, `compile`, `jupiter`, `summary`, `pipeline`); the only
+//! `unsafe` in the crate is the FFI glue that wit-bindgen's `export!` macro
+//! generates in the wasm shim, which cannot be avoided.
 
 // `ata` (curve25519-dalek/sha2) and `jupiter`/`instruction` (serde_json) are
 // compiled very slowly by the Kani backend and the proofs never exercise them;
