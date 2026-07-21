@@ -70,6 +70,7 @@ impl ExecuteOutput {
 /// - `proposer`: the member pubkey that creates proposals (Initiate-only is
 ///   the recommended role — it cannot approve or execute)
 /// - `rpc_url`, `policy_json` — same contract as the authorizer
+///
 /// Optional: `squads_vault_index` (default 0).
 pub fn run(args_json: &str, transport: Option<&dyn RpcTransport>) -> ExecuteOutput {
     let args: Args = match serde_json::from_str(args_json) {

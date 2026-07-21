@@ -147,7 +147,6 @@ fn bad_inputs_error() {
 /// the same policy (roundtrip through the authorizer's own flow logic).
 #[test]
 fn build_then_authorize_roundtrip_allows() {
-    use safe_hands_core::decode::decode as _;
     let args = format!(
         r#"{{"recipient":"{RECIP}","amount_raw":"25000000","mint":"{USDC}","memo":"invoice-412","__config":{}}}"#,
         config()

@@ -101,7 +101,7 @@ fn decode_message(message_bytes: &[u8]) -> Result<DecodedTx, String> {
     facts.estimated_fee_lamports = 5_000u64.saturating_mul(header_signers as u64);
 
     let mut raw_instructions = Vec::with_capacity(raw_ixs.len());
-    for ((program_id, accounts, data), metas) in raw_ixs.iter().zip(metas_per_ix.into_iter()) {
+    for ((program_id, accounts, data), metas) in raw_ixs.iter().zip(metas_per_ix) {
         classify(*program_id, accounts, data, &keys, &mut facts)?;
         raw_instructions.push(solana_instruction::Instruction {
             program_id: *program_id,

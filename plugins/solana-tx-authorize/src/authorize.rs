@@ -23,7 +23,11 @@ struct Args {
     intent: Option<Intent>,
     #[serde(default)]
     detail_level: Option<String>,
+    /// Free-form context from the agent. Accepted for future policy
+    /// conditions but NEVER trusted and never read today — the verdict comes
+    /// from bytes and chain state only.
     #[serde(default)]
+    #[allow(dead_code)]
     context: Option<String>,
     #[serde(rename = "__config", default)]
     config: HashMap<String, String>,
@@ -66,10 +70,15 @@ pub fn run(args_json: &str, transport: Option<&dyn RpcTransport>) -> ExecuteOutp
     let policy = match policy_from_config(&args.config) {
         Ok(p) => p,
         Err(e) => {
+            let code = if args.config.contains_key("policy_json") {
+                "SH-DENY-CONFIG-061" // present but unparseable (malformed)
+            } else {
+                "SH-DENY-CONFIG-060" // missing entirely
+            };
             return ExecuteOutput::verdict(json!({
                 "verdict": "DENY",
-                "summary": format!("No spend policy is configured. Everything is denied by default. ({e})"),
-                "reason_codes": ["SH-DENY-CONFIG-060"],
+                "summary": format!("No valid spend policy is configured — fail closed ({e})."),
+                "reason_codes": [code],
                 "next_action": "CONFIGURE_POLICY"
             }));
         }
@@ -128,7 +137,22 @@ pub fn run(args_json: &str, transport: Option<&dyn RpcTransport>) -> ExecuteOutp
         };
     }
 
-    // 4. Deterministic policy evaluation.
+    // --- 4. Token-2022 mint risk (delegate / hook / fee / default-frozen) --
+    // Fetch every involved mint once; classic SPL mints are a single cheap read.
+    if let Some(rpc) = transport {
+        for tr in &decoded.facts.transfers {
+            if let Some(mint) = &tr.mint {
+                if let Some(risk) = fetch_mint_risk(rpc, mint) {
+                    facts.token2022.permanent_delegate |= risk.permanent_delegate;
+                    facts.token2022.transfer_hook |= risk.transfer_hook;
+                    facts.token2022.transfer_fee |= risk.transfer_fee;
+                    facts.token2022.default_frozen |= risk.default_frozen;
+                }
+            }
+        }
+    }
+
+    // --- 5. Evaluate -------------------------------------------------------
     let report = evaluate(&policy, &facts);
 
     // 5. Shape the verdict (slim by default; full evidence on request).
@@ -225,6 +249,24 @@ fn short_key(key: &str) -> String {
     } else {
         key.to_string()
     }
+}
+
+/// Fetch a mint account and parse Token-2022 risk signals. Unavailable RPC or
+/// missing account yields None — evaluation continues with the signals that
+/// exist (the simulation gate still fail-closes independently).
+fn fetch_mint_risk(rpc: &dyn RpcTransport, mint: &str) -> Option<safe_hands_core::tlv::MintRisk> {
+    let resp = rpc
+        .call("getAccountInfo", json!([mint, {"encoding": "base64"}]))
+        .ok()?;
+    let owner = resp
+        .pointer("/result/value/owner")
+        .and_then(Value::as_str)?
+        .to_string();
+    let data = resp
+        .pointer("/result/value/data/0")
+        .and_then(Value::as_str)?;
+    let bytes = base64_decode(data, 65_536).ok()?;
+    Some(safe_hands_core::tlv::parse_mint_risk(&owner, &bytes))
 }
 
 /// Verdict → the next tool the agent should call (routing, never a dead end).

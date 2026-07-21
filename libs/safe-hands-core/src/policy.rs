@@ -39,15 +39,6 @@ pub enum Outcome {
     Review,
 }
 
-impl Outcome {
-    fn verdict(self) -> Verdict {
-        match self {
-            Outcome::Deny => Verdict::Deny,
-            Outcome::Review => Verdict::Review,
-        }
-    }
-}
-
 /// Per-asset spend policy. Amounts are raw smallest-unit decimal strings.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AssetPolicy {

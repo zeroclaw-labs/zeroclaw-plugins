@@ -1,0 +1,5 @@
+name: level-05 USDC intent, SOL transaction → DENY
+policy: merchant
+intent: {action: spl_transfer, mint: USDC, amount_raw: "25000000", recipient: RECIP}
+tx: {kind: sol, amount: 25000000, recipient: RECIP}
+expect: {verdict: DENY, reason_codes: [SH-INTENT-MINT]}

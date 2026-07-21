@@ -1,0 +1,17 @@
+[package]
+name = "conformance"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Safe Hands public conformance suite: YAML attack fixtures executed against the real plugins. One command, offline, deterministic."
+publish = false
+
+[dependencies]
+safe-hands-core = { path = "../libs/safe-hands-core" }
+solana-tx-authorize = { path = "../plugins/solana-tx-authorize" }
+squads-proposal-build = { path = "../plugins/squads-proposal-build" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+
+[workspace]

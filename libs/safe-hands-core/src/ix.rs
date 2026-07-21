@@ -38,12 +38,45 @@ fn meta(key: Pubkey, signer: bool, writable: bool) -> AccountMeta {
 
 /// SystemProgram::Transfer { lamports } — data: u32 LE 2 + u64 LE lamports.
 pub fn system_transfer(from: &Pubkey, to: &Pubkey, lamports: u64) -> Instruction {
-    let mut data = Vec::with_capacity(12);
-    data.extend_from_slice(&SYSTEM_IX_TRANSFER.to_le_bytes());
+    let mut data = SYSTEM_IX_TRANSFER.to_le_bytes().to_vec();
     data.extend_from_slice(&lamports.to_le_bytes());
     Instruction {
         program_id: parse_pubkey(SYSTEM_PROGRAM).expect("constant"),
         accounts: vec![meta(*from, true, true), meta(*to, false, true)],
+        data,
+    }
+}
+
+/// SystemProgram::Assign — disc u32 1 + owner pubkey. Handing account
+/// ownership to another program: an authority attack the guard flags.
+pub fn system_assign(target: &Pubkey, owner_program: &str) -> Instruction {
+    let owner = crate::crypto::parse_pubkey(owner_program).expect("owner program id");
+    let mut data = SYSTEM_IX_ASSIGN.to_le_bytes().to_vec();
+    data.extend_from_slice(owner.as_ref());
+    Instruction {
+        program_id: parse_pubkey(SYSTEM_PROGRAM).expect("constant"),
+        accounts: vec![meta(*target, true, true), meta(*target, true, false)],
+        data,
+    }
+}
+
+/// SPL Token::Approve — disc u8 7 + amount u64. Granting a delegate (often
+/// unlimited) is an authority attack the guard flags.
+pub fn token_approve(
+    source: &Pubkey,
+    delegate: &Pubkey,
+    owner: &Pubkey,
+    amount: u64,
+) -> Instruction {
+    let mut data = vec![TOKEN_IX_APPROVE];
+    data.extend_from_slice(&amount.to_le_bytes());
+    Instruction {
+        program_id: spl_token_program(),
+        accounts: vec![
+            AccountMeta::new(*source, false),
+            AccountMeta::new_readonly(*delegate, false),
+            AccountMeta::new_readonly(*owner, true),
+        ],
         data,
     }
 }

@@ -1,0 +1,6 @@
+name: level-19 simulation returns error → UNKNOWN (fail closed)
+policy: merchant
+intent: {action: transfer, amount_raw: "1000000000", recipient: RECIP}
+tx: {kind: sol, amount: 1000000000, recipient: RECIP}
+simulation: fail
+expect: {verdict: UNKNOWN, reason_codes: [SH-UNKNOWN-SIM-051]}

@@ -1,0 +1,5 @@
+name: level-07 unknown program present → DENY
+policy: merchant
+intent: {action: transfer, amount_raw: "1000000000", recipient: RECIP}
+tx: {kind: sol, amount: 1000000000, recipient: RECIP, unknown_program: true}
+expect: {verdict: DENY, reason_codes: [SH-DENY-PROGRAM-011]}

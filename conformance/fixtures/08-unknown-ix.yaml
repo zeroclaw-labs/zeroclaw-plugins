@@ -1,0 +1,5 @@
+name: level-08 unknown instruction in allowed program → DENY
+policy: merchant
+intent: {action: transfer, amount_raw: "1000000000", recipient: RECIP}
+tx: {kind: sol, amount: 1000000000, recipient: RECIP, unknown_instruction: true}
+expect: {verdict: DENY, reason_codes: [SH-DENY-IX-012]}

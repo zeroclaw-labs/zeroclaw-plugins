@@ -1,0 +1,4 @@
+name: level-13 transaction without declared intent → REVIEW
+policy: merchant
+tx: {kind: sol, amount: 1000000000, recipient: RECIP}
+expect: {verdict: REVIEW, reason_codes: [SH-REVIEW-NOINTENT-005]}

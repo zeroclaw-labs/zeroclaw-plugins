@@ -105,6 +105,7 @@ fn meta(key: Pubkey, signer: bool, writable: bool) -> AccountMeta {
 /// transaction_message Vec<u8>, memo Option<String>.
 /// Accounts: multisig (mut), transaction (mut), creator (signer),
 /// rent_payer (mut signer), system_program.
+#[allow(clippy::too_many_arguments)] // mirrors the official instruction's account list
 pub fn vault_transaction_create(
     multisig: &Pubkey,
     transaction: &Pubkey,
@@ -188,7 +189,7 @@ pub fn compile_inner_message(instructions: &[Instruction], vault: &Pubkey) -> Ve
     // then readonly non-signers (first-seen). No other signers in our flows.
     let mut writable: Vec<Pubkey> = Vec::new();
     let mut readonly: Vec<Pubkey> = Vec::new();
-    let mut seen = |k: &Pubkey, writable: &mut Vec<Pubkey>, readonly: &mut Vec<Pubkey>| {
+    let seen = |k: &Pubkey, writable: &mut Vec<Pubkey>, readonly: &mut Vec<Pubkey>| {
         k == vault || writable.contains(k) || readonly.contains(k)
     };
     for ix in instructions {
