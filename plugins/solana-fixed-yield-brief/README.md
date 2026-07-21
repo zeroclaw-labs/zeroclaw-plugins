@@ -152,27 +152,51 @@ cargo build --locked --target wasm32-wasip2 --release
 cp target/wasm32-wasip2/release/solana_fixed_yield_brief.wasm solana_fixed_yield_brief.wasm
 ```
 
-Copy the manifest and component into the plugins directory configured by your
-ZeroClaw host:
+Build a source ZeroClaw host with both the plugin umbrella and a compiler
+backend. The release installer binary does not currently include this host:
 
 ```bash
-export ZEROCLAW_PLUGINS_DIR=/path/from/your/zeroclaw/config
-mkdir -p "$ZEROCLAW_PLUGINS_DIR/solana-fixed-yield-brief"
-cp manifest.toml solana_fixed_yield_brief.wasm \
-  "$ZEROCLAW_PLUGINS_DIR/solana-fixed-yield-brief/"
+cargo build --locked --release \
+  --manifest-path /path/to/zeroclaw/Cargo.toml \
+  --features plugins-wasm,plugins-wasm-cranelift
 ```
 
-Enable plugins in the host config:
+Install this local unsigned build through an isolated development config. The
+explicit `disabled` signature policy is only for a plugin you built and
+inspected yourself; do not weaken a production host that uses strict publisher
+verification.
 
-```toml
-[plugins]
-enabled = true
+```bash
+zeroclaw_bin=/path/to/zeroclaw/target/release/zeroclaw
+demo_config_dir=/path/to/isolated/zeroclaw-config
+
+"$zeroclaw_bin" --config-dir "$demo_config_dir" config set --no-interactive \
+  plugins.security.signature_mode disabled
+"$zeroclaw_bin" --config-dir "$demo_config_dir" config set --no-interactive \
+  plugins.enabled true
+"$zeroclaw_bin" --config-dir "$demo_config_dir" plugin install "$PWD"
+"$zeroclaw_bin" --config-dir "$demo_config_dir" plugin list
+"$zeroclaw_bin" --config-dir "$demo_config_dir" \
+  plugin info solana-fixed-yield-brief
 ```
 
-Run the agent with a build that includes a compiler backend, for example
-`--features plugins-wasm,plugins-wasm-cranelift`. Runtime-only hosts built with
-`--features plugins-wasm` must precompile the component with a matching Wasmtime
-and point `wasm_path` at that `.cwasm` artifact.
+This copies the adjacent manifest and component into the host's resolved
+`plugins.plugins_dir`. Runtime-only hosts with no compiler backend must instead
+precompile the component with matching Wasmtime and point `wasm_path` at that
+`.cwasm` artifact.
+
+For a deterministic CLI-channel smoke test with an already configured agent:
+
+```bash
+"$zeroclaw_bin" --config-dir "$demo_config_dir" agent -a AGENT_ALIAS -m \
+  'Call solana-fixed-yield-brief exactly once with {"sol_notional_lamports":200000000,"hurdle_apy_bps":550,"execution_cost_lamports":1000000,"minimum_excess_lamports":1000000,"minimum_tvl_multiple":20,"max_results":1}. Return the tool output verbatim. Call no other tool and do not build, sign, simulate, or submit a transaction.'
+```
+
+At supervised autonomy the CLI can surface the approval prompt. For a
+non-interactive Telegram or Discord demo, configure a live approval route or
+narrowly allow this exact T0 tool in that agent's risk profile. If
+`allowed_tools` is nonempty, include it; ensure it is absent from
+`excluded_tools`. Keep all unrelated permissions and approvals unchanged.
 
 After the component is published in the registry:
 
@@ -180,12 +204,10 @@ After the component is published in the registry:
 zeroclaw plugin install solana-fixed-yield-brief
 ```
 
-For a real-channel demo, ask the connected agent for a fixed-yield brief with
-the JSON arguments above, then show the quote coverage, explicit normalized
-notional, underlying-leg gap, and non-approval warning. Repeat with a mock or
-intercepted malicious ticker carrying the transfer instruction from the threat
-model and show that neither the instruction nor target address is rendered. No
-wallet connection is needed.
+For the required real-channel demo, send the same request through Telegram or
+Discord and show the quote coverage, explicit normalized notional,
+underlying-leg gap, and non-approval warning. Then show the host regression for
+the malicious ticker in the threat model. No wallet connection is needed.
 
 ## What fought us on `wasm32-wasip2`
 
