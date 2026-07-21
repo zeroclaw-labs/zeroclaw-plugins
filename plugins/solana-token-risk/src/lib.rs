@@ -1,6 +1,8 @@
 //! A ZeroClaw WIT tool component that turns two Solana JSON-RPC read calls into
-//! a bounded token-mint safety summary. It is deliberately a T0 plugin: it has
-//! no signing code, no wallet connection, and never constructs a transaction.
+//! a bounded token-mint safety summary. It decodes canonical mint account data
+//! so Token-2022 extension flags are never guessed from a display-oriented RPC
+//! response. It is deliberately a T0 plugin: it has no signing code, no wallet
+//! connection, and never constructs a transaction.
 //!
 //! Build: `rustup target add wasm32-wasip2`
 //!        `cargo build --target wasm32-wasip2 --release`
@@ -94,7 +96,7 @@ mod component {
             let account_result = match rpc_call(
                 &rpc_url,
                 "getAccountInfo",
-                json!([mint, {"encoding": "jsonParsed", "commitment": "confirmed"}]),
+                json!([mint, {"encoding": "base64", "commitment": "confirmed"}]),
             ) {
                 Ok(value) => value,
                 Err(error) => return Ok(failure(&error)),

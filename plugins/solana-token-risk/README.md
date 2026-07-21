@@ -14,8 +14,9 @@ It is deliberately **T0 (read-only)**:
 - exactly two RPC methods: `getAccountInfo` and `getTokenLargestAccounts`;
 - output is bounded and says what the data cannot prove.
 
-The tool works with legacy SPL Token and Token-2022 mint accounts when the
-configured RPC returns `jsonParsed` account data.
+The tool requests canonical base64 mint-account data from the configured RPC.
+That keeps the decoder independent of display-oriented RPC parsing and lets it
+recognize Token-2022 extension TLVs without guessing from UI labels.
 
 ## Why this is useful
 
@@ -26,6 +27,8 @@ custody:
 - mint program, supply, and decimals;
 - whether a mint authority can change supply;
 - whether a freeze authority can freeze token accounts;
+- Token-2022 extension flags, including transfer fees, permanent delegates,
+  and transfer hooks when present;
 - top-one and top-five **token-account** concentration; and
 - explicit caveats that token accounts are not unique owners, and that pools or
   custody services may aggregate many users.
@@ -100,9 +103,10 @@ cargo build --target wasm32-wasip2 --release
 cp target/wasm32-wasip2/release/solana_token_risk.wasm solana_token_risk.wasm
 ```
 
-The host tests cover mint validation, parsed mint metadata, authority states,
-concentration calculation, malformed RPC responses, and the output's safety
-disclosures. They use fixtures and make no live RPC calls.
+The host tests cover mint validation, base64 legacy and Token-2022 mint
+metadata, authority states, extension-TLV rejection, concentration calculation,
+malformed RPC responses, and the output's safety disclosures. They use fixtures
+and make no live RPC calls.
 
 ## Example interpretation
 
