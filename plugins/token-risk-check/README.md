@@ -131,3 +131,35 @@ that includes a compiler backend (for example
 ## License
 
 MIT
+
+## What's next
+
+The bounty's ideal scope for this tool also includes LP lock status and
+Token-2022 extension risk (transfer hooks, transfer fees, permanent
+delegate). This first version covers the base SPL Token layout only:
+freeze authority, mint authority, and holder concentration. Extending
+decode_mint_account to parse the TLV extension data Token-2022 appends
+after byte 82, and adding an LP-lock check against the relevant AMM
+program accounts, are the two things I'd build next.
+
+## What fought me on wasm32-wasip2
+
+- Termux's cc-crate build scripts expect an NDK-style compiler name
+  (aarch64-linux-android21-clang) that Termux's plain clang binary
+  doesn't provide. Fixed with a symlink from the expected name to the
+  real clang binary.
+- The wasm32-wasip2 std library and the native rustc version have to
+  match exactly, or you get "found crate core compiled by an
+  incompatible version of rustc." Installing rust-std-wasm32-wasip2 via
+  pkg pulled a newer version than the pkg-installed rust compiler;
+  upgrading rust to match fixed it.
+- cargo build --target wasm32-wasip2 needs the wasm-component-ld linker
+  on PATH separately from the target itself; it's not bundled with the
+  target install.
+- waki's .json() convenience method needs the json feature enabled
+  explicitly (waki = { version = "0.4", features = ["json"] }); it's
+  not on by default.
+- Full local end-to-end testing (a running zeroclaw daemon with
+  plugins-wasm-cranelift) needed real RAM and swap headroom that a
+  phone doesn't have; moved that step to a GitHub Codespace once local
+  builds started hitting SIGSEGV stack overflows in cranelift-codegen.
