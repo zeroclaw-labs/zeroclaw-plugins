@@ -1,9 +1,81 @@
 use std::collections::HashMap;
 
+use base64::Engine;
 use depin_attest::attest::{
-    attestation_hash, build_memo, format_reading, parse_args_strict, period_bucket,
+    attestation_hash, build_memo, execute, format_reading, parse_args_strict, period_bucket,
     validate_policy, AttestConfig,
 };
+use depin_attest::keys::Pubkey;
+use depin_attest::nonce::NONCE_ACCOUNT_SIZE;
+use depin_attest::rpc::HttpClient;
+use depin_attest::{CoreError, CoreResult};
+use serde_json::{json, Value};
+
+const RPC_URL: &str = "https://rpc.test";
+
+struct MapHttp {
+    responses: HashMap<String, Value>,
+}
+
+impl MapHttp {
+    fn with_nonce(nonce_account: &Pubkey, authority: &Pubkey, durable_nonce: &[u8; 32]) -> Self {
+        let nonce_data = initialized_nonce_fixture(authority, durable_nonce, 5_000);
+        let nonce_b64 = base64::engine::general_purpose::STANDARD.encode(&nonce_data);
+        let body = json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "getAccountInfo",
+            "params": [
+                nonce_account.to_base58(),
+                { "encoding": "base64" }
+            ]
+        });
+        let response = json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {
+                "value": {
+                    "data": [nonce_b64, "base64"]
+                }
+            }
+        });
+
+        Self {
+            responses: HashMap::from([(fingerprint(RPC_URL, &body), response)]),
+        }
+    }
+}
+
+impl HttpClient for MapHttp {
+    fn post_json(&self, url: &str, body: &Value) -> CoreResult<Value> {
+        self.responses
+            .get(&fingerprint(url, body))
+            .cloned()
+            .ok_or_else(|| CoreError::msg(format!("missing mock response for {url}: {body}")))
+    }
+}
+
+fn fingerprint(url: &str, body: &Value) -> String {
+    format!("{url}\n{body}")
+}
+
+fn initialized_nonce_fixture(authority: &Pubkey, durable_nonce: &[u8; 32], fee: u64) -> Vec<u8> {
+    let mut data = Vec::with_capacity(NONCE_ACCOUNT_SIZE);
+    data.extend_from_slice(&1u32.to_le_bytes());
+    data.extend_from_slice(&1u32.to_le_bytes());
+    data.extend_from_slice(authority.as_bytes());
+    data.extend_from_slice(durable_nonce);
+    data.extend_from_slice(&fee.to_le_bytes());
+    data
+}
+
+fn execute_config(payer: &Pubkey, nonce_account: &Pubkey) -> HashMap<String, String> {
+    HashMap::from([
+        ("payer".to_string(), payer.to_base58()),
+        ("nonce_account".to_string(), nonce_account.to_base58()),
+        ("rpc_url".to_string(), RPC_URL.to_string()),
+    ])
+}
 
 #[test]
 fn formats_reading_with_six_decimal_places_and_trims_trailing_zeros() {
@@ -106,4 +178,62 @@ fn rejects_readings_outside_configured_cap() {
 
     let err = validate_policy(&cfg, &args).unwrap_err();
     assert!(err.contains("reading exceeds max_abs_reading"));
+}
+
+#[test]
+fn execute_builds_durable_unsigned_memo_tx_summary() {
+    let payer = Pubkey::new([1u8; 32]);
+    let nonce_account = Pubkey::new([2u8; 32]);
+    let durable_nonce = [7u8; 32];
+    let http = MapHttp::with_nonce(&nonce_account, &payer, &durable_nonce);
+
+    let output = execute(
+        r#"{"device_id":"device-7","reading":21.2345678,"unit":"celsius","metric":"temperature"}"#,
+        &execute_config(&payer, &nonce_account),
+        &http,
+        1_720_000_000,
+    )
+    .expect("execute attest");
+
+    assert_eq!(output.durability, "durable-nonce");
+    assert_eq!(output.nonce_account, nonce_account.to_base58());
+    assert_eq!(
+        output.attestation_hash,
+        "162751dec7d2299ebf6a032862b6a5fe59aa3f1abe5ece3b70a0c9b3da8f682a"
+    );
+    assert!(!output.unsigned_tx_base64.is_empty());
+    assert!(output.summary.chars().count() <= 1200);
+    assert_eq!(
+        output.summary,
+        format!(
+            "DEPIN attest OK\ndevice: device-7\nmetric: temperature=21.234568 celsius\nperiod: 5733333\nhash: 162751dec7d2…\nnonce: {}\ndurability: durable-nonce\nunsigned_tx_base64: {}",
+            nonce_account.to_base58(),
+            output.unsigned_tx_base64
+        )
+    );
+
+    let tx = base64::engine::general_purpose::STANDARD
+        .decode(&output.unsigned_tx_base64)
+        .expect("base64 tx");
+    assert_eq!(tx[0], 1);
+    assert_eq!(&tx[1..65], &[0u8; 64]);
+}
+
+#[test]
+fn execute_rejects_nonce_authority_that_does_not_match_payer() {
+    let payer = Pubkey::new([1u8; 32]);
+    let nonce_account = Pubkey::new([2u8; 32]);
+    let wrong_authority = Pubkey::new([3u8; 32]);
+    let durable_nonce = [7u8; 32];
+    let http = MapHttp::with_nonce(&nonce_account, &wrong_authority, &durable_nonce);
+
+    let err = execute(
+        r#"{"device_id":"device-7","reading":21.2345678,"unit":"celsius","metric":"temperature"}"#,
+        &execute_config(&payer, &nonce_account),
+        &http,
+        1_720_000_000,
+    )
+    .unwrap_err();
+
+    assert!(err.contains("nonce authority must match payer"));
 }

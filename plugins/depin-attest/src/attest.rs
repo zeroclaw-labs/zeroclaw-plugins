@@ -1,5 +1,9 @@
 use std::collections::HashMap;
 
+use crate::keys::Pubkey;
+use crate::rpc::{HttpClient, Rpc};
+use crate::shape::assert_budget;
+use crate::tx::{build_durable_memo_tx, to_base64};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
@@ -27,6 +31,15 @@ pub struct AttestArgs {
     pub unit: String,
     pub metric: String,
     pub memo_prefix: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AttestOutput {
+    pub summary: String,
+    pub unsigned_tx_base64: String,
+    pub attestation_hash: String,
+    pub nonce_account: String,
+    pub durability: &'static str,
 }
 
 impl AttestConfig {
@@ -101,6 +114,86 @@ pub fn parse_args_strict(json: &str) -> Result<AttestArgs, String> {
         unit,
         metric,
         memo_prefix,
+    })
+}
+
+pub fn execute<H: HttpClient>(
+    args_json: &str,
+    config: &HashMap<String, String>,
+    http: &H,
+    now_unix: u64,
+) -> Result<AttestOutput, String> {
+    let args = parse_args_strict(args_json)?;
+    let cfg = AttestConfig::from_section(config)?;
+    validate_policy(&cfg, &args)?;
+
+    let payer = config_pubkey(config, "payer")?;
+    let nonce_account = config_pubkey(config, "nonce_account")?;
+    let rpc_url = required_config(config, "rpc_url")?;
+    let rpc = Rpc { url: rpc_url, http };
+    let nonce = rpc
+        .get_nonce(&nonce_account)
+        .map_err(|e| format!("get nonce failed: {e}"))?;
+
+    if nonce.authority != payer {
+        return Err("nonce authority must match payer".to_string());
+    }
+
+    let reading_str = format_reading(args.reading);
+    let period = period_bucket(now_unix);
+    let hash = attestation_hash(
+        &args.device_id,
+        &args.metric,
+        &reading_str,
+        &args.unit,
+        period,
+    );
+    let hash12 = &hash[..12];
+    let memo = build_memo(
+        memo_prefix(&args),
+        &args.device_id,
+        &args.metric,
+        &reading_str,
+        &args.unit,
+        period,
+        hash12,
+    )?;
+    let unsigned_tx = build_durable_memo_tx(
+        &payer,
+        &nonce_account,
+        &nonce.authority,
+        &nonce.durable_nonce,
+        &memo,
+    )
+    .map_err(|e| format!("build transaction failed: {e}"))?;
+    let unsigned_tx_base64 = to_base64(&unsigned_tx);
+    let nonce_account_str = nonce_account.to_base58();
+    let summary = format!(
+        "DEPIN attest OK\n\
+device: {}\n\
+metric: {}={} {}\n\
+period: {}\n\
+hash: {}…\n\
+nonce: {}\n\
+durability: durable-nonce\n\
+unsigned_tx_base64: {}",
+        args.device_id,
+        args.metric,
+        reading_str,
+        args.unit,
+        period,
+        hash12,
+        nonce_account_str,
+        unsigned_tx_base64
+    );
+    assert_budget(&summary, 1200).map_err(|e| e.to_string())?;
+
+    Ok(AttestOutput {
+        summary,
+        unsigned_tx_base64,
+        attestation_hash: hash,
+        nonce_account: nonce_account_str,
+        durability: "durable-nonce",
     })
 }
 
@@ -190,6 +283,18 @@ fn required_string(object: &serde_json::Map<String, Value>, key: &str) -> Result
         .and_then(Value::as_str)
         .map(ToString::to_string)
         .ok_or_else(|| format!("{key} must be a string"))
+}
+
+fn required_config<'a>(config: &'a HashMap<String, String>, key: &str) -> Result<&'a str, String> {
+    config
+        .get(key)
+        .map(String::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| format!("{key} must come from config"))
+}
+
+fn config_pubkey(config: &HashMap<String, String>, key: &str) -> Result<Pubkey, String> {
+    Pubkey::from_base58(required_config(config, key)?).map_err(|e| format!("{key}: {e}"))
 }
 
 fn hex_lower(bytes: &[u8]) -> String {
