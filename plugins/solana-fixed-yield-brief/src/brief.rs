@@ -40,7 +40,7 @@ fn default_minimum_tvl_multiple() -> u32 {
 }
 
 fn default_max_results() -> u8 {
-    3
+    1
 }
 
 #[derive(Debug, Clone, Deserialize)]

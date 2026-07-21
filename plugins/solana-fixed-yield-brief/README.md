@@ -45,7 +45,7 @@ SSRF client.
 | `execution_cost_lamports` | `1000000` | Estimated base-token acquisition/redemption + entry + priority + tip + other non-market costs. Hard floor: 100000. |
 | `minimum_excess_lamports` | `1000000` | Net term advantage used only as a displayed arithmetic floor. Hard floor: 1000000. |
 | `minimum_tvl_multiple` | `20` | Required reported SOL-denominated TVL divided by notional. Hard floor: 20. |
-| `max_results` | `3` | Maximum compact results, from one to three. |
+| `max_results` | `1` | Maximum compact results, from one to three. Defaults to the single best candidate to limit agent-context cost. |
 
 All cash-flow amounts remain integer lamports until display. APY compounding is
 used only to calculate the hurdle return over the market's remaining years.
@@ -60,8 +60,7 @@ Input:
   "hurdle_apy_bps": 550,
   "execution_cost_lamports": 1000000,
   "minimum_excess_lamports": 1000000,
-  "minimum_tvl_multiple": 20,
-  "max_results": 3
+  "minimum_tvl_multiple": 20
 }
 ```
 

@@ -49,6 +49,16 @@ fn args() -> BriefArgs {
     }
 }
 
+#[test]
+fn omitted_max_results_defaults_to_one_compact_candidate() {
+    let parsed: BriefArgs = serde_json::from_value(json!({
+        "sol_notional_lamports": 900_000_000
+    }))
+    .unwrap();
+
+    assert_eq!(parsed.max_results, 1);
+}
+
 fn vaults() -> Value {
     json!([{
         "address": VAULT,

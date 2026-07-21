@@ -166,7 +166,7 @@ mod component {
                         "type": "integer",
                         "minimum": 1,
                         "maximum": 3,
-                        "default": 3
+                        "default": 1
                     }
                 },
                 "required": ["sol_notional_lamports"],
