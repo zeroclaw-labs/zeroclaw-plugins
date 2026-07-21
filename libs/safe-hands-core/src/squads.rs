@@ -168,6 +168,124 @@ pub fn proposal_create(
     }
 }
 
+/// Compile an inner vault-transaction message in the exact byte format the
+/// official @sqds/multisig SDK produces — Squads' own `TransactionMessage`
+/// (instructions/vault_transaction_create.rs), NOT a Solana message:
+///
+/// ```text
+/// num_signers u8 | num_writable_signers u8 | num_writable_non_signers u8
+/// account_keys SmallVec<u8>  (u8 count + 32B each)
+/// instructions SmallVec<u8>  (u8 count; each: prog_idx u8, accounts SmallVec<u8>,
+///                             data SmallVec<u16> ← u16 LE length prefix)
+/// address_table_lookups SmallVec<u8> (u8 count)
+/// ```
+///
+/// No blockhash anywhere (vault transactions don't expire; execution fetches
+/// a fresh one). Our flows have exactly one signer: the vault (writable).
+/// `instructions` must already be rebound to the vault (see [`rebind_to_vault`]).
+pub fn compile_inner_message(instructions: &[Instruction], vault: &Pubkey) -> Vec<u8> {
+    // Key ordering: vault first, then writable non-signers (first-seen),
+    // then readonly non-signers (first-seen). No other signers in our flows.
+    let mut writable: Vec<Pubkey> = Vec::new();
+    let mut readonly: Vec<Pubkey> = Vec::new();
+    let mut seen = |k: &Pubkey, writable: &mut Vec<Pubkey>, readonly: &mut Vec<Pubkey>| {
+        k == vault || writable.contains(k) || readonly.contains(k)
+    };
+    for ix in instructions {
+        for meta in &ix.accounts {
+            if seen(&meta.pubkey, &mut writable, &mut readonly) {
+                continue;
+            }
+            if meta.is_writable {
+                writable.push(meta.pubkey);
+            } else {
+                readonly.push(meta.pubkey);
+            }
+        }
+        if seen(&ix.program_id, &mut writable, &mut readonly) {
+            continue;
+        }
+        readonly.push(ix.program_id);
+    }
+
+    let mut out = Vec::new();
+    // num_signers=1 (vault), num_writable_signers=1 (vault),
+    // num_writable_non_signers = writable.len()
+    out.push(1u8);
+    out.push(1u8);
+    out.push(writable.len() as u8);
+    // account_keys: SmallVec<u8>
+    let key_count = 1 + writable.len() + readonly.len();
+    out.push(key_count as u8);
+    out.extend_from_slice(vault.as_ref());
+    for k in &writable {
+        out.extend_from_slice(k.as_ref());
+    }
+    for k in &readonly {
+        out.extend_from_slice(k.as_ref());
+    }
+    // instructions: SmallVec<u8>; data uses SmallVec<u16> (u16 LE length).
+    let key_index = |k: &Pubkey| -> u8 {
+        if k == vault {
+            return 0;
+        }
+        if let Some(i) = writable.iter().position(|w| w == k) {
+            return 1 + i as u8;
+        }
+        1 + writable.len() as u8 + readonly.iter().position(|r| r == k).expect("key present") as u8
+    };
+    out.push(instructions.len() as u8);
+    for ix in instructions {
+        out.push(key_index(&ix.program_id));
+        out.push(ix.accounts.len() as u8);
+        for meta in &ix.accounts {
+            out.push(key_index(&meta.pubkey));
+        }
+        out.extend_from_slice(&(ix.data.len() as u16).to_le_bytes());
+        out.extend_from_slice(&ix.data);
+    }
+    // address_table_lookups: none.
+    out.push(0u8);
+    out
+}
+
+/// Rebind a decoded transfer's funding source to the multisig vault: the agent
+/// drafts "spend from the shared vault", never from a personal wallet.
+///
+/// - SystemProgram::Transfer: accounts[0] (from) → vault (signer per SDK
+///   convention: readonly-signer in the inner message)
+/// - SPL TransferChecked: source ATA → the vault's ATA for that mint, owner →
+///   vault (and the caller prepends an idempotent ATA create for the vault)
+pub fn rebind_to_vault(instructions: &[Instruction], vault: &Pubkey) -> Vec<Instruction> {
+    use crate::crypto::{SYSTEM_PROGRAM, TOKEN_2022_PROGRAM, TOKEN_PROGRAM};
+    use crate::ix::{SYSTEM_IX_TRANSFER, TOKEN_IX_TRANSFER, TOKEN_IX_TRANSFER_CHECKED};
+
+    instructions
+        .iter()
+        .map(|ix| {
+            let program_str = ix.program_id.to_string();
+            let mut new_ix = ix.clone();
+            if program_str == SYSTEM_PROGRAM
+                && ix.data.len() >= 4
+                && u32::from_le_bytes([ix.data[0], ix.data[1], ix.data[2], ix.data[3]])
+                    == SYSTEM_IX_TRANSFER
+            {
+                if let Some(from) = new_ix.accounts.get_mut(0) {
+                    *from = AccountMeta::new(*vault, true);
+                }
+            } else if (program_str == TOKEN_PROGRAM || program_str == TOKEN_2022_PROGRAM)
+                && !ix.data.is_empty()
+                && matches!(ix.data[0], TOKEN_IX_TRANSFER | TOKEN_IX_TRANSFER_CHECKED)
+            {
+                if let Some(owner) = new_ix.accounts.get_mut(3) {
+                    *owner = AccountMeta::new_readonly(*vault, true);
+                }
+            }
+            new_ix
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

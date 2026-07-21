@@ -6,7 +6,6 @@ use super::*;
 use safe_hands_core::crypto::parse_pubkey;
 use safe_hands_core::ix;
 use safe_hands_core::rpc::{DownTransport, MockTransport};
-use safe_hands_core::solana_pubkey::Pubkey;
 
 const RECIP: &str = "9hSR6S7WPtxmTojgo6GG3k4yDPecgJY292j7xrsUGWBu";
 const PAYER: &str = "AKnL4NNf3DGWZJS6cPknBuEGnVsV4A4m5tgebLHaRSZ9";
@@ -155,7 +154,7 @@ fn rpc_down_fails_closed() {
 }
 
 #[test]
-fn inner_message_repayered_to_vault() {
+fn inner_message_is_vault_bound_squads_format() {
     let args = format!(
         r#"{{"transaction_base64":"{}","intent":{},"__config":{}}}"#,
         sol_transfer_b64(1_000_000_000),
@@ -166,17 +165,20 @@ fn inner_message_repayered_to_vault() {
     assert!(out.success, "error: {:?}", out.error);
     let v: Value = serde_json::from_str(&out.output).unwrap();
     let vault = v["vault"].as_str().unwrap().to_string();
-    // Decode the proposal, extract the inner message from vaultTransactionCreate,
-    // and confirm the inner fee payer is the vault PDA.
+    // Decode the proposal, extract the inner Squads TransactionMessage from
+    // vaultTransactionCreate args: disc(8) + vault_index(1) + ephemeral(1) +
+    // msg_len u32(4) + message bytes.
     let bytes = base64_decode(v["transaction_base64"].as_str().unwrap(), 65_536).unwrap();
     let d = decode(&bytes).expect("decodes");
     let create_ix = &d.raw_instructions[0];
-    // args after 8-byte disc: vault_index(1) + ephemeral(1) + len(4) + message
     let msg_len = u32::from_le_bytes(create_ix.data[10..14].try_into().unwrap()) as usize;
-    let inner_bytes = &create_ix.data[14..14 + msg_len];
-    let inner = decode(inner_bytes).expect("inner decodes");
-    assert_eq!(
-        inner.resolved_keys[0], vault,
-        "inner fee payer must be the vault PDA"
-    );
+    let inner = &create_ix.data[14..14 + msg_len];
+    // Squads TransactionMessage: num_signers(1) num_writable_signers(1)
+    // num_writable_non_signers(1) keys(u8 count)...
+    assert_eq!(inner[0], 1, "num_signers");
+    assert_eq!(inner[1], 1, "num_writable_signers");
+    let key_count = inner[3] as usize;
+    let first_key = bs58::encode(&inner[4..36]).into_string();
+    assert_eq!(first_key, vault, "first inner key must be the vault");
+    assert!(key_count >= 2, "vault + dest + program keys present");
 }

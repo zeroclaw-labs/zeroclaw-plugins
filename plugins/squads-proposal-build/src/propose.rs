@@ -172,19 +172,16 @@ pub fn run(args_json: &str, transport: Option<&dyn RpcTransport>) -> ExecuteOutp
     let proposal_pda = squads::proposal_pda(&multisig, new_index);
     let vault = squads::vault_pda(&multisig, vault_index);
 
-    // --- 4. Recompile the inner message with the vault as fee payer ------
+    // --- 4. Rebind the inner instructions to the vault + compile in the
+    //        official Squads TransactionMessage format (no blockhash) -------
+    let rebound = squads::rebind_to_vault(&decoded.raw_instructions, &vault);
+    let inner_bytes = squads::compile_inner_message(&rebound, &vault);
+
+    // --- 5. Build the proposal transaction (unsigned, proposer pays) -----
     let blockhash = match fetch_blockhash(rpc) {
         Ok(h) => h,
         Err(e) => return ExecuteOutput::err(format!("could not fetch recent blockhash: {e}")),
     };
-    let mut inner = Message::new(&decoded.raw_instructions, Some(&vault));
-    inner.recent_blockhash = blockhash;
-    let inner_bytes = match bincode::serialize(&inner) {
-        Ok(b) => b,
-        Err(e) => return ExecuteOutput::err(format!("inner message serialize failed: {e}")),
-    };
-
-    // --- 5. Build the proposal transaction (unsigned, proposer pays) -----
     let ixs = vec![
         squads::vault_transaction_create(
             &multisig,
