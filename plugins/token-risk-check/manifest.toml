@@ -1,0 +1,9 @@
+name = "token-risk-check"
+version = "0.1.0"
+description = "Read-only Solana mint risk summary: authorities, concentration, Token-2022 extensions, and indexed liquidity"
+author = "Armando Sanchez"
+wasm_path = "token_risk_check.wasm"
+capabilities = ["tool"]
+# HTTP is limited to a configured Solana RPC and optional liquidity index.
+# config_read exposes only this plugin's jailed configuration section.
+permissions = ["http_client", "config_read"]
