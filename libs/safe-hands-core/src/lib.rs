@@ -17,6 +17,7 @@
 
 // Re-export the pinned Solana crates so every plugin shares one version.
 pub use bincode;
+pub use bs58;
 pub use solana_hash;
 pub use solana_instruction;
 pub use solana_message;

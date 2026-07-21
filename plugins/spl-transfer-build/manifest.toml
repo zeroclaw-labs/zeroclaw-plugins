@@ -1,0 +1,11 @@
+name = "spl-transfer-build"
+version = "0.1.0"
+description = "Build an unsigned SOL/SPL transfer transaction (ATA-aware, optional invoice memo) with a matching intent object for solana-tx-authorize. T1 — never signs, holds no keys."
+author = "Safe Hands"
+wasm_path = "spl_transfer_build.wasm"
+capabilities = ["tool"]
+# config_read: the host injects this plugin's own config section (rpc_url,
+# fee_payer, policy_json) into execute args as `__config`. http_client:
+# outbound JSON-RPC for blockhash + mint metadata. The builder holds no keys
+# and signs nothing — a human or the host signs its output.
+permissions = ["config_read", "http_client"]
