@@ -1,0 +1,7 @@
+name = "solana-pay-request"
+version = "0.1.0"
+description = "Generate standard Solana Pay URLs and instant scan-to-pay QR codes."
+author = "ZeroClaw Developer"
+wasm_path = "solana_pay_request.wasm"
+capabilities = ["tool"]
+permissions = ["config_read"]
