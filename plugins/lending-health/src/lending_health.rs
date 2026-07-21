@@ -8,6 +8,7 @@ use serde_json::{json, Value};
 
 const DEFAULT_API_BASE_URL: &str = "https://api.kamino.finance";
 const DEFAULT_ENV: &str = "mainnet-beta";
+const DEFAULT_MARKET_PUBKEY: &str = "7u3HeHxYDLhnCoErrtycNokbQYbWGzLs6JSDqGAv5PfF";
 const DEFAULT_HEALTH_AMBER_BPS: u32 = 12_000;
 const DEFAULT_HEALTH_RED_BPS: u32 = 10_500;
 const BPS_MIN: u32 = 10_001;
@@ -16,10 +17,13 @@ const BPS_MAX: u32 = 30_000;
 pub const ALLOWED_ENVS: &[&str] = &["mainnet-beta", "devnet"];
 
 /// Operator-configurable policy resolved from the plugin's own config section.
+/// `market_pubkey` defaults to Kamino's primary lending market, the only one
+/// exposed by the public API today.
 #[derive(Debug, Clone)]
 pub struct LendingConfig {
     pub api_base_url: String,
     pub env: String,
+    pub market_pubkey: String,
     pub health_amber_bps: u32,
     pub health_red_bps: u32,
 }
@@ -39,6 +43,14 @@ impl LendingConfig {
             .map(|value| value.trim().to_ascii_lowercase())
             .unwrap_or_else(|| DEFAULT_ENV.to_string());
         validate_env(&env)?;
+
+        let market_pubkey = section
+            .get("market_pubkey")
+            .filter(|value| !value.trim().is_empty())
+            .map(|value| value.trim().to_string())
+            .unwrap_or_else(|| DEFAULT_MARKET_PUBKEY.to_string());
+        validate_pubkey(&market_pubkey)
+            .map_err(|error| format!("market_pubkey: {error}"))?;
 
         let health_amber_bps = parse_bounded_u32(
             section.get("health_amber_bps"),
@@ -65,6 +77,7 @@ impl LendingConfig {
         Ok(Self {
             api_base_url,
             env,
+            market_pubkey,
             health_amber_bps,
             health_red_bps,
         })
@@ -174,31 +187,69 @@ pub fn validate_env(value: &str) -> Result<(), String> {
     }
 }
 
-/// Validate that a string is a Solana public key: base58, decoding to exactly
-/// 32 bytes. Rejects prompt-injection-shaped garbage before any HTTP happens.
-pub fn validate_obligation_pubkey(value: &str) -> Result<(), String> {
+/// Validate a Solana public key: base58, decoding to exactly 32 bytes.
+/// Used for wallet, market, and obligation pubkeys interchangeably.
+pub fn validate_pubkey(value: &str) -> Result<(), String> {
     if value.len() < 32 || value.len() > 44 {
-        return Err("obligation must be a base58 Solana public key".to_string());
+        return Err("pubkey must be a base58 Solana public key".to_string());
     }
     let decoded = bs58::decode(value)
         .into_vec()
-        .map_err(|_| "obligation must be a base58 Solana public key".to_string())?;
+        .map_err(|_| "pubkey must be a base58 Solana public key".to_string())?;
     if decoded.len() != 32 {
-        return Err("obligation must decode to exactly 32 bytes".to_string());
+        return Err("pubkey must decode to exactly 32 bytes".to_string());
     }
     Ok(())
 }
 
-/// Build the URL for the Kamino obligation metrics history endpoint.
-/// The path template and query key set are hard-coded here so the LLM cannot
-/// redirect requests by injecting a URL through tool arguments.
-pub fn metrics_history_url(base_url: &str, obligation: &str, env: &str) -> String {
+/// Build the URL for Kamino's per-user obligations lookup.
+/// `GET /kamino-market/{market}/users/{wallet}/obligations?env={env}`.
+pub fn user_obligations_url(base_url: &str, market: &str, wallet: &str, env: &str) -> String {
     let trimmed = base_url.trim_end_matches('/');
-    format!("{trimmed}/kamino-obligation/{obligation}/metrics/history?env={env}")
+    format!("{trimmed}/kamino-market/{market}/users/{wallet}/obligations?env={env}")
 }
 
-/// The subset of an `ObligationMetrics` snapshot we actually use. Everything
-/// else in Kamino's response is ignored to keep the parse surface minimal.
+/// Build the URL for Kamino's v2 obligation metrics history.
+/// `GET /v2/kamino-market/{market}/obligations/{obligation}/metrics/history?env={env}`.
+pub fn metrics_history_url(base_url: &str, market: &str, obligation: &str, env: &str) -> String {
+    let trimmed = base_url.trim_end_matches('/');
+    format!(
+        "{trimmed}/v2/kamino-market/{market}/obligations/{obligation}/metrics/history?env={env}"
+    )
+}
+
+/// Stub request descriptor for tests: expresses the shape of a call without
+/// making one. Method is hard-coded to GET so an LLM cannot make us POST.
+pub fn metrics_history_request(base_url: &str, market: &str, obligation: &str, env: &str) -> Value {
+    json!({
+        "url": metrics_history_url(base_url, market, obligation, env),
+        "method": "GET",
+    })
+}
+
+/// Parse the users/obligations response: a JSON array whose elements each
+/// carry an `obligationAddress`. Every returned address is re-validated as a
+/// base58 32-byte pubkey. Everything else in each element is ignored on
+/// purpose to keep the parse surface small.
+pub fn parse_user_obligations_response(response: &Value) -> Result<Vec<String>, String> {
+    let array = response
+        .as_array()
+        .ok_or_else(|| "users/obligations response must be a JSON array".to_string())?;
+
+    let mut obligations = Vec::with_capacity(array.len());
+    for (index, entry) in array.iter().enumerate() {
+        let address = entry
+            .get("obligationAddress")
+            .and_then(Value::as_str)
+            .ok_or_else(|| format!("entry {index} is missing obligationAddress"))?;
+        validate_pubkey(address)
+            .map_err(|error| format!("entry {index} obligationAddress: {error}"))?;
+        obligations.push(address.to_string());
+    }
+    Ok(obligations)
+}
+
+/// The subset of an `ObligationMetrics` snapshot we actually use.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ObligationSnapshot {
     pub timestamp: String,
@@ -210,9 +261,6 @@ pub struct ObligationSnapshot {
     pub user_total_borrow: f64,
 }
 
-/// Parse the latest snapshot out of a Kamino metrics history response.
-/// Verifies the response echoes the obligation we asked for, and that the
-/// history contains at least one snapshot. Fails closed on any mismatch.
 pub fn parse_metrics_history_response(
     response: &Value,
     expected_obligation: &str,
@@ -302,17 +350,6 @@ fn field_as_decimal(value: &Value, name: &str) -> Result<f64, String> {
     Ok(parsed)
 }
 
-/// Convenience for tests and future analyzer wiring: emit the request body
-/// shape a Kamino call would carry (currently just the URL; kept as a Value
-/// stub so downstream code can migrate to any future POST endpoint without a
-/// signature change).
-pub fn metrics_history_request(base_url: &str, obligation: &str, env: &str) -> Value {
-    json!({
-        "url": metrics_history_url(base_url, obligation, env),
-        "method": "GET",
-    })
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum AlertLevel {
@@ -321,16 +358,13 @@ pub enum AlertLevel {
     Red,
 }
 
-/// Compact report emitted by [`analyze`] and rendered via [`render_report`].
-/// Derived fields (`health_bps`, `buffer_pct`) are `None` when there is no
-/// active borrow, which serializes to JSON `null`.
+/// One obligation slice of the top-level report.
 #[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct LendingReport {
-    pub alert: AlertLevel,
-    pub summary: String,
+pub struct PositionReport {
     pub obligation: String,
     pub timestamp: String,
     pub obligation_type: &'static str,
+    pub alert: AlertLevel,
     pub loan_to_value: f64,
     pub liquidation_ltv: f64,
     pub health_bps: Option<u32>,
@@ -341,13 +375,23 @@ pub struct LendingReport {
     pub alerts: Vec<String>,
 }
 
-/// Turn a validated snapshot plus operator policy into a green/amber/red
-/// report. Pure computation on already-validated data; never fails.
+/// Top-level report aggregating a wallet's Kamino positions on one market.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct LendingReport {
+    pub alert: AlertLevel,
+    pub summary: String,
+    pub wallet: String,
+    pub market_pubkey: String,
+    pub positions: Vec<PositionReport>,
+}
+
+/// Turn a validated snapshot plus operator policy into a per-position slice.
+/// Pure computation on already-validated data; never fails.
 pub fn analyze(
     obligation: &str,
     snapshot: &ObligationSnapshot,
     config: &LendingConfig,
-) -> LendingReport {
+) -> PositionReport {
     let obligation_type = obligation_type_name(snapshot.tag);
     let mut alerts = Vec::new();
 
@@ -392,14 +436,11 @@ pub fn analyze(
         (Some(health_bps), Some(buffer_pct), level)
     };
 
-    let summary = build_summary(level, health_bps_opt, buffer_pct_opt);
-
-    LendingReport {
-        alert: level,
-        summary,
+    PositionReport {
         obligation: obligation.to_string(),
         timestamp: snapshot.timestamp.clone(),
         obligation_type,
+        alert: level,
         loan_to_value: snapshot.loan_to_value,
         liquidation_ltv: snapshot.liquidation_ltv,
         health_bps: health_bps_opt,
@@ -408,6 +449,29 @@ pub fn analyze(
         user_total_deposit: snapshot.user_total_deposit,
         user_total_borrow: snapshot.user_total_borrow,
         alerts,
+    }
+}
+
+/// Aggregate per-position reports into a wallet-level report. Overall alert
+/// is the worst tier across positions.
+pub fn aggregate_positions(
+    wallet: &str,
+    config: &LendingConfig,
+    positions: Vec<PositionReport>,
+) -> LendingReport {
+    let overall = positions
+        .iter()
+        .map(|p| p.alert)
+        .fold(AlertLevel::Green, max_level);
+
+    let summary = build_aggregate_summary(overall, &positions);
+
+    LendingReport {
+        alert: overall,
+        summary,
+        wallet: wallet.to_string(),
+        market_pubkey: config.market_pubkey.clone(),
+        positions,
     }
 }
 
@@ -433,15 +497,40 @@ fn alert_name(level: AlertLevel) -> &'static str {
     }
 }
 
-fn build_summary(level: AlertLevel, health_bps: Option<u32>, buffer_pct: Option<u32>) -> String {
-    let name = alert_name(level);
-    match (health_bps, buffer_pct) {
-        (None, _) => format!("{name}: no active borrow"),
-        (Some(bps), Some(buffer)) => format!(
-            "{name}: health {} ({buffer}% buffer to liquidation)",
-            format_health(bps)
-        ),
-        _ => format!("{name}: invalid state"),
+fn max_level(left: AlertLevel, right: AlertLevel) -> AlertLevel {
+    use AlertLevel::{Amber, Green, Red};
+    match (left, right) {
+        (Red, _) | (_, Red) => Red,
+        (Amber, _) | (_, Amber) => Amber,
+        _ => Green,
+    }
+}
+
+fn build_aggregate_summary(overall: AlertLevel, positions: &[PositionReport]) -> String {
+    let name = alert_name(overall);
+    match positions.len() {
+        0 => format!("{name}: no Kamino positions on this market"),
+        1 => {
+            let p = &positions[0];
+            match (p.health_bps, p.buffer_pct) {
+                (None, _) => format!("{name}: 1 position, no active borrow"),
+                (Some(bps), Some(buffer)) => format!(
+                    "{name}: 1 position, health {} ({buffer}% buffer to liquidation)",
+                    format_health(bps)
+                ),
+                _ => format!("{name}: 1 position"),
+            }
+        }
+        n => {
+            let worst = positions.iter().filter_map(|p| p.health_bps).min();
+            match worst {
+                Some(bps) => format!(
+                    "{name}: {n} positions, worst health {}",
+                    format_health(bps)
+                ),
+                None => format!("{name}: {n} positions, none with active borrows"),
+            }
+        }
     }
 }
 
