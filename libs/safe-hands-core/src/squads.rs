@@ -278,6 +278,18 @@ pub fn rebind_to_vault(instructions: &[Instruction], vault: &Pubkey) -> Vec<Inst
                 && !ix.data.is_empty()
                 && matches!(ix.data[0], TOKEN_IX_TRANSFER | TOKEN_IX_TRANSFER_CHECKED)
             {
+                // TransferChecked layout: source(0), mint(1), dest(2), owner(3).
+                // The vault must fund it: source → the vault's ATA for this
+                // mint, owner → vault. Without the source rewrite the vault
+                // would "own-sign" someone else's ATA and execution would fail.
+                let mint = new_ix.accounts.get(1).map(|m| m.pubkey);
+                let token_program = new_ix.program_id;
+                if let Some(mint) = mint {
+                    let vault_ata = crate::crypto::ata_address(vault, &token_program, &mint);
+                    if let Some(source) = new_ix.accounts.get_mut(0) {
+                        *source = AccountMeta::new(vault_ata, false);
+                    }
+                }
                 if let Some(owner) = new_ix.accounts.get_mut(3) {
                     *owner = AccountMeta::new_readonly(*vault, true);
                 }
@@ -362,6 +374,30 @@ mod tests {
         assert_eq!(ix.data.len(), 8 + 8 + 1);
         assert_eq!(&ix.data[8..16], &42u64.to_le_bytes());
         assert_eq!(ix.data[16], 0);
+    }
+
+    #[test]
+    fn rebind_spl_rewrites_source_and_owner_to_vault() {
+        let vault = Pubkey::new_from_array([7u8; 32]);
+        let user = Pubkey::new_from_array([8u8; 32]);
+        let mint = Pubkey::new_from_array([9u8; 32]);
+        let tp = crate::ix::spl_token_program();
+        let user_ata = crate::crypto::ata_address(&user, &tp, &mint);
+        let dest_ata = Pubkey::new_from_array([10u8; 32]);
+        let ix = crate::ix::transfer_checked(&tp, &user_ata, &mint, &dest_ata, &user, 100, 6);
+        let rebound = rebind_to_vault(&[ix], &vault);
+        let expected_vault_ata = crate::crypto::ata_address(&vault, &tp, &mint);
+        assert_eq!(
+            rebound[0].accounts[0].pubkey, expected_vault_ata,
+            "source must become the vault's ATA"
+        );
+        assert_eq!(
+            rebound[0].accounts[3].pubkey, vault,
+            "owner must be the vault"
+        );
+        assert!(rebound[0].accounts[3].is_signer);
+        assert_eq!(rebound[0].accounts[1].pubkey, mint, "mint untouched");
+        assert_eq!(rebound[0].accounts[2].pubkey, dest_ata, "dest untouched");
     }
 
     #[test]
