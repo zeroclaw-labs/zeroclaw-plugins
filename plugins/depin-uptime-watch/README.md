@@ -4,7 +4,7 @@ ZeroClaw tool plugin for checking recent Solana DePIN attestation memos and retu
 
 ## What It Does
 
-`depin_uptime_watch` reads recent successful transactions for a configured payer address, extracts memo instructions, and looks for DePIN attestation memos matching a `device_id` and memo prefix. It returns:
+`depin_uptime_watch` reads recent successful transactions for a configured payer address, extracts memo instructions, and looks for DePIN attestation memos whose pipe fields match `memo_prefix` and `device_id` exactly (no substring matching). It returns:
 
 - `OK` when the latest matching memo is fresh
 - `STALE` when the latest matching memo is older than the threshold or has unknown block time
