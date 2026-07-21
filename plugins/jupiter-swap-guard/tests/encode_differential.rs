@@ -165,3 +165,70 @@ fn hand_rolled_v0_serializer_matches_anza_on_real_jupiter_route() {
         "fixture must use at least one address lookup table"
     );
 }
+
+/// The stronger differential: the plugin's OWN compile (account partition, header,
+/// lookups, index-compiled instructions) plus its serializer must byte-match
+/// solana-message's `try_compile` + serialize. This validates `compile.rs`, not
+/// just the serializer, on the real route.
+#[test]
+fn full_compile_matches_anza_try_compile() {
+    use jupiter_swap_guard::compile::{compile_v0, AddressLookupTable};
+    use jupiter_swap_guard::jupiter::parse_swap_instructions;
+
+    let payer_str = std::fs::read_to_string(format!("{FX}/payer_pubkey.txt")).unwrap();
+    let payer = pk(payer_str.trim());
+    let body = std::fs::read_to_string(format!("{FX}/swap-instructions.json")).unwrap();
+
+    // GOLDEN via the Anza crates.
+    let s: SwapIxs = serde_json::from_str(&body).unwrap();
+    let mut sdk_ixs: Vec<Instruction> = Vec::new();
+    for j in &s.compute_budget_instructions {
+        sdk_ixs.push(to_sdk_ix(j));
+    }
+    for j in &s.setup_instructions {
+        sdk_ixs.push(to_sdk_ix(j));
+    }
+    sdk_ixs.push(to_sdk_ix(&s.swap_instruction));
+    if let Some(c) = &s.cleanup_instruction {
+        sdk_ixs.push(to_sdk_ix(c));
+    }
+    let alt_json = std::fs::read_to_string(format!("{FX}/alt_account.json")).unwrap();
+    let v: serde_json::Value = serde_json::from_str(&alt_json).unwrap();
+    let alt_data = base64::engine::general_purpose::STANDARD
+        .decode(v["result"]["value"]["data"][0].as_str().unwrap())
+        .unwrap();
+    let addresses: Vec<Pubkey> = alt_data[56..]
+        .chunks_exact(32)
+        .map(|c| Pubkey::try_from(c).unwrap())
+        .collect();
+    let sdk_alt = AddressLookupTableAccount {
+        key: pk(&s.address_lookup_table_addresses[0]),
+        addresses: addresses.clone(),
+    };
+    let blockhash = Hash::new_from_array([7u8; 32]);
+    let golden = VersionedMessage::V0(
+        v0::Message::try_compile(&payer, &sdk_ixs, &[sdk_alt], blockhash).unwrap(),
+    )
+    .serialize();
+
+    // MINE via the plugin's own parser + compiler + serializer.
+    let mine_ixs = parse_swap_instructions(&body).unwrap().ordered();
+    let mine_alt = AddressLookupTable {
+        key: pk(&s.address_lookup_table_addresses[0]).to_bytes(),
+        addresses: addresses.iter().map(|a| a.to_bytes()).collect(),
+    };
+    let msg = compile_v0(
+        payer.to_bytes(),
+        &mine_ixs,
+        &[mine_alt],
+        [7u8; 32],
+        &[payer.to_bytes()],
+    )
+    .unwrap();
+    let mine = serialize_v0(&msg);
+
+    assert_eq!(
+        golden, mine,
+        "plugin compile_v0 diverged from solana try_compile on a real Jupiter route"
+    );
+}
