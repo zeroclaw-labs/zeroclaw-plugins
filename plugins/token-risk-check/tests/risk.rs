@@ -34,6 +34,64 @@ fn red_for_rugcheck_token_2022_transfer_fee_fixture() {
     assert_eq!(a.verdict, Verdict::Red);
     assert!(a.reasons.iter().any(|x| x.contains("transfer fees")));
 }
+
+#[test]
+fn red_for_helius_permanent_delegate_fixture() {
+    let a = assess(
+        &safe(),
+        Some(&json!({"result":{"token_info":{"mint_extensions":[{"type":"permanent_delegate"}]}}})),
+    );
+    assert_eq!(a.verdict, Verdict::Red);
+    assert!(a.reasons.iter().any(|x| x.contains("permanent delegate")));
+}
+
+#[test]
+fn token_2022_without_extension_data_is_amber_not_green() {
+    let mut r = safe();
+    r["tokenProgram"] = json!("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb");
+    let a = assess(&r, None);
+    assert_eq!(a.verdict, Verdict::Amber);
+    assert!(a.reasons.iter().any(|x| x.contains("extensions unverified")));
+}
+
+#[test]
+fn red_for_top_holder_concentration_without_authority_signal() {
+    let mut r = safe();
+    r["topHolders"] = json!([{"pct": 55.0}, {"pct": 10.0}]);
+    let a = assess(&r, Some(&json!({"result":{"token_info":{"mint_extensions":[]}}})));
+    assert_eq!(a.verdict, Verdict::Red);
+    assert!(a.reasons.iter().any(|x| x.contains("top holder controls 55.0%")));
+}
+
+#[test]
+fn red_for_top_five_concentration_without_authority_signal() {
+    let mut r = safe();
+    r["topHolders"] = json!([
+        {"pct": 16.5}, {"pct": 16.5}, {"pct": 16.5}, {"pct": 16.5}, {"pct": 16.5}
+    ]);
+    let a = assess(&r, Some(&json!({"result":{"token_info":{"mint_extensions":[]}}})));
+    assert_eq!(a.verdict, Verdict::Red);
+    assert!(a.reasons.iter().any(|x| x.contains("top 5 holders control 82.5%")));
+}
+
+#[test]
+fn amber_for_missing_verified_liquidity() {
+    let mut r = safe();
+    r["totalMarketLiquidity"] = json!(0);
+    assert_eq!(
+        assess(&r, Some(&json!({"result":{"token_info":{"mint_extensions":[]}}}))).verdict,
+        Verdict::Amber
+    );
+}
+
+#[test]
+fn amber_for_unlocked_liquidity() {
+    let mut r = safe();
+    r["lockers"] = json!([]);
+    let a = assess(&r, Some(&json!({"result":{"token_info":{"mint_extensions":[]}}})));
+    assert_eq!(a.verdict, Verdict::Amber);
+    assert!(a.reasons.iter().any(|x| x.contains("not reported as locked")));
+}
 #[test]
 fn non_string_authority_is_fail_closed() {
     let mut r = safe();
@@ -72,4 +130,6 @@ fn output_stays_under_200_whitespace_tokens_with_many_risks() {
 fn validates_base58_sized_mint() {
     assert!(valid_mint("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"));
     assert!(!valid_mint("bad mint"));
+    assert!(!valid_mint("0PjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"));
+    assert!(!valid_mint("11111111111111111111111111111111"));
 }

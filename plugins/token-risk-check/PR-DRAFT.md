@@ -19,7 +19,7 @@ See `README.md` for the full threat model and a prompt-injection test transcript
 - `src/risk.rs`: pure Rust scoring/formatting core.
 - `src/lib.rs`: thin wasm-only WIT/waki/logging shim.
 - `tests/risk.rs`: host fixtures, including output bound and malformed provider-shape regressions.
-- `cargo test --locked` (8/8 passing)
+- `cargo test --locked` (14/14 passing)
 - `cargo build --locked --target wasm32-wasip2 --release`
 
 The plugin follows the repository's documented `plugins/redact-text` layout. Before merge, run the repository validation described in the root README:

@@ -175,5 +175,9 @@ pub fn format(assessment: &Assessment, mint: &str) -> String {
 }
 
 pub fn valid_mint(mint: &str) -> bool {
-    (32..=44).contains(&mint.len()) && mint.bytes().all(|b| b.is_ascii_alphanumeric())
+    (32..=44).contains(&mint.len())
+        && bs58::decode(mint)
+            .into_vec()
+            .map(|decoded| decoded.len() == 32 && decoded.iter().any(|byte| *byte != 0))
+            .unwrap_or(false)
 }

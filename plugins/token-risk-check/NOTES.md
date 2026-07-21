@@ -3,7 +3,7 @@
 ## Summary
 
 - Implemented and built the `token-risk-check` ZeroClaw WASM component.
-- Added 8 host tests, including worst-case output below 200 whitespace tokens, strict prompt-injection argument rejection, RugCheck authority-object handling, and Token-2022 transfer-fee fallback parsing.
+- Added 14 host tests, including worst-case output below 200 whitespace tokens, strict prompt-injection argument rejection, exact base58 mint validation, RugCheck authority-object handling, Token-2022 transfer-fee/permanent-delegate fixtures, concentration thresholds, and liquidity failure modes.
 - Completed three read-only live RugCheck checks; details are in `test-results-live.md`.
 - Prepared PR, Discord, and demo drafts. No PR, Discord message, Superteam submission, or public post was made.
 
