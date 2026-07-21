@@ -15,6 +15,13 @@
 
 #![forbid(unsafe_code)]
 
+// Re-export the pinned Solana crates so every plugin shares one version.
+pub use bincode;
+pub use solana_hash;
+pub use solana_instruction;
+pub use solana_message;
+pub use solana_pubkey;
+
 pub mod codec;
 pub mod crypto;
 pub mod decode;

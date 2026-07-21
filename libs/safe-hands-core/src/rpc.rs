@@ -55,6 +55,34 @@ impl RpcTransport for DownTransport {
     }
 }
 
+/// Real JSON-RPC transport over wasi:http (blocking `waki` client).
+/// Compiled only for the wasm component; host tests never link it.
+#[cfg(target_family = "wasm")]
+pub struct WakiTransport {
+    pub url: String,
+}
+
+#[cfg(target_family = "wasm")]
+impl WakiTransport {
+    pub fn new(url: String) -> Self {
+        Self { url }
+    }
+}
+
+#[cfg(target_family = "wasm")]
+impl RpcTransport for WakiTransport {
+    fn call(&self, method: &str, params: Value) -> Result<Value, String> {
+        let body = envelope(method, params);
+        waki::Client::new()
+            .post(&self.url)
+            .json(&body)
+            .send()
+            .map_err(|e| format!("rpc transport error: {e}"))?
+            .json::<Value>()
+            .map_err(|e| format!("rpc response parse error: {e}"))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

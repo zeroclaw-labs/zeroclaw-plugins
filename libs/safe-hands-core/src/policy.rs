@@ -346,9 +346,9 @@ pub fn evaluate(policy: &Policy, facts: &TxFacts) -> Report {
         }
     }
 
-    // 7. Transfers: recipient allowlist, mint allowlist, per-tx cap per asset.
+    // 7. Transfers: recipient allowlist (ATA-aware), mint allowlist, per-tx cap.
     for tr in &facts.transfers {
-        if !policy.allowed_recipients.contains(&tr.recipient) {
+        if !recipient_allowed(policy, tr) {
             deny!("SH-DENY-RECIPIENT-003", "RECIPIENT_ALLOWLIST");
         }
         let asset_key = tr.mint.clone().unwrap_or_else(|| "SOL".to_string());
@@ -384,7 +384,7 @@ pub fn evaluate(policy: &Policy, facts: &TxFacts) -> Report {
             let intent_amount = intent.amount_raw.parse::<u128>().unwrap_or(0);
             let any_match = facts.transfers.iter().any(|tr| {
                 let tr_mint = tr.mint.clone().unwrap_or_else(|| "SOL".to_string());
-                tr.recipient == intent.recipient
+                recipient_matches_intent(&intent.recipient, tr)
                     && tr_mint == intent_mint
                     && tr.amount_raw <= intent_amount
             });
@@ -393,7 +393,7 @@ pub fn evaluate(policy: &Policy, facts: &TxFacts) -> Report {
             }
             for tr in &facts.transfers {
                 let tr_mint = tr.mint.clone().unwrap_or_else(|| "SOL".to_string());
-                if tr.recipient != intent.recipient {
+                if !recipient_matches_intent(&intent.recipient, tr) {
                     deny!("SH-INTENT-RECIPIENT-031", "INTENT_MISMATCH");
                 } else if tr_mint != intent_mint {
                     deny!("SH-INTENT-MINT-032", "INTENT_MISMATCH");
@@ -444,6 +444,66 @@ pub fn evaluate(policy: &Policy, facts: &TxFacts) -> Report {
 pub fn hex_sha256(bytes: &[u8]) -> String {
     let digest = Sha256::digest(bytes);
     digest.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// ATA-aware recipient check. Agents pay wallets, but tokens land in
+/// Associated Token Accounts — so a transfer whose destination is the ATA of an
+/// allowed wallet for the same mint (under either SPL Token or Token-2022) is
+/// as legitimate as a direct transfer to that wallet.
+fn recipient_allowed(policy: &Policy, tr: &TransferFact) -> bool {
+    if policy.allowed_recipients.contains(&tr.recipient) {
+        return true;
+    }
+    let Some(mint_str) = tr.mint.as_ref() else {
+        return false;
+    };
+    let Ok(mint) = crate::crypto::parse_pubkey(mint_str) else {
+        return false;
+    };
+    let token_programs = [
+        crate::crypto::parse_pubkey(crate::crypto::TOKEN_PROGRAM),
+        crate::crypto::parse_pubkey(crate::crypto::TOKEN_2022_PROGRAM),
+    ];
+    policy.allowed_recipients.iter().any(|wallet| {
+        let Ok(wallet) = crate::crypto::parse_pubkey(wallet) else {
+            return false;
+        };
+        token_programs.iter().any(|program| {
+            program
+                .as_ref()
+                .map(|p| crate::crypto::ata_address(&wallet, p, &mint).to_string() == tr.recipient)
+                .unwrap_or(false)
+        })
+    })
+}
+
+/// Intent recipient matching, ATA-aware: the declared wallet matches a transfer
+/// to that wallet OR to the ATA of that wallet for the transfer's mint.
+fn recipient_matches_intent(intent_recipient: &str, tr: &TransferFact) -> bool {
+    if tr.recipient == intent_recipient {
+        return true;
+    }
+    let Some(mint_str) = tr.mint.as_ref() else {
+        return false;
+    };
+    let (Ok(mint), Ok(wallet)) = (
+        crate::crypto::parse_pubkey(mint_str),
+        crate::crypto::parse_pubkey(intent_recipient),
+    ) else {
+        return false;
+    };
+    for program in [
+        crate::crypto::parse_pubkey(crate::crypto::TOKEN_PROGRAM),
+        crate::crypto::parse_pubkey(crate::crypto::TOKEN_2022_PROGRAM),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        if crate::crypto::ata_address(&wallet, &program, &mint).to_string() == tr.recipient {
+            return true;
+        }
+    }
+    false
 }
 
 /// Convenience: policy from the host-injected flat config map.
