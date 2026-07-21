@@ -142,7 +142,7 @@ rustup target add wasm32-wasip2
 cargo build --locked --target wasm32-wasip2 --release
 ```
 
-Built on [`zeroclaw-solana-core`](../../crates/solana-core), the shared
+Built on [`zeroclaw-solana-core`](./vendor/zeroclaw-solana-core), the shared
 wasm32-wasip2 Solana substrate in this repo.
 
 ## License

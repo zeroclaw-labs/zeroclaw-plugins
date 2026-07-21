@@ -122,7 +122,7 @@ rustup target add wasm32-wasip2
 cargo build --locked --target wasm32-wasip2 --release
 ```
 
-Built on [`zeroclaw-solana-core`](../../crates/solana-core), including its
+Built on [`zeroclaw-solana-core`](./vendor/zeroclaw-solana-core), including its
 Token-2022 TLV extension parser.
 
 ## License

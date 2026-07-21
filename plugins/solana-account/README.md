@@ -29,7 +29,7 @@ hardcoded, never echoed into output or logs. The queried address is public.
 ## How it works
 
 Implemented in [`src/account.rs`](./src/account.rs) over the shared
-[`zeroclaw-solana-core`](../../crates/solana-core) RPC + amount helpers:
+[`zeroclaw-solana-core`](./vendor/zeroclaw-solana-core) RPC + amount helpers:
 
 1. `getAccountInfo` → SOL balance (lamports) and account type. An account owned
    by the System Program is a **wallet**; anything else is reported as
@@ -119,7 +119,7 @@ rustup target add wasm32-wasip2
 cargo build --locked --target wasm32-wasip2 --release
 ```
 
-Built on [`zeroclaw-solana-core`](../../crates/solana-core) (RPC, amount,
+Built on [`zeroclaw-solana-core`](./vendor/zeroclaw-solana-core) (RPC, amount,
 pubkey, and links modules).
 
 ## License

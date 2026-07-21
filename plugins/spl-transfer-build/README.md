@@ -146,7 +146,7 @@ rustup target add wasm32-wasip2
 cargo build --locked --target wasm32-wasip2 --release
 ```
 
-Built on [`zeroclaw-solana-core`](../../crates/solana-core); transaction
+Built on [`zeroclaw-solana-core`](./vendor/zeroclaw-solana-core); transaction
 encoding is differentially tested against `solana-sdk` byte-for-byte in that
 crate.
 

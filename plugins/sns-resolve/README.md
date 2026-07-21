@@ -28,7 +28,7 @@ echoed into output or logs.
 ## How it works
 
 Derivation follows `@bonfida/spl-name-service` exactly and is implemented in
-the shared core ([`crates/solana-core/src/sns.rs`](../../crates/solana-core/src/sns.rs)):
+the shared core ([`vendor/zeroclaw-solana-core/src/sns.rs`](./vendor/zeroclaw-solana-core/src/sns.rs)):
 
 1. `hashed = sha256("SPL Name Service" + label)`
 2. registry account = `find_program_address([hashed, class(32×0), sol_tld], NAME_PROGRAM)`
@@ -106,7 +106,7 @@ rustup target add wasm32-wasip2
 cargo build --locked --target wasm32-wasip2 --release
 ```
 
-Built on [`zeroclaw-solana-core`](../../crates/solana-core), including its
+Built on [`zeroclaw-solana-core`](./vendor/zeroclaw-solana-core), including its
 `sns` derivation module.
 
 ## License

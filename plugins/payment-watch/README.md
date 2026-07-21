@@ -33,7 +33,7 @@ never echoed into output or logs. The watched `recipient` is a public address.
 ## How it works
 
 Implemented in [`src/watch.rs`](./src/watch.rs) over the shared
-[`zeroclaw-solana-core`](../../crates/solana-core) RPC + token helpers:
+[`zeroclaw-solana-core`](./vendor/zeroclaw-solana-core) RPC + token helpers:
 
 1. `getSignaturesForAddress(recipient, limit 8)` — the wallet's recent activity.
 2. For the newest few **successful** signatures (capped at 5 —
@@ -181,7 +181,7 @@ rustup target add wasm32-wasip2
 cargo build --locked --target wasm32-wasip2 --release
 ```
 
-Built on [`zeroclaw-solana-core`](../../crates/solana-core) (RPC, amount, token,
+Built on [`zeroclaw-solana-core`](./vendor/zeroclaw-solana-core) (RPC, amount, token,
 and pubkey modules).
 
 ## License
