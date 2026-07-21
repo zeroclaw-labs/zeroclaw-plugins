@@ -150,9 +150,44 @@ pub fn serialize_v0(msg: &V0Message) -> Vec<u8> {
     out
 }
 
+/// Serialize a full UNSIGNED `VersionedTransaction`: a compact array of
+/// `num_required_signatures` empty (zeroed) 64-byte signature slots, followed by
+/// the serialized message. This is the wire format a wallet or `solana-cli`
+/// deserializes, signs in place, and submits.
+pub fn serialize_unsigned_transaction(msg: &V0Message) -> Vec<u8> {
+    let num_sigs = msg.header.num_required_signatures as usize;
+    let mut out = Vec::new();
+    write_compact_u16(&mut out, num_sigs as u16);
+    out.resize(out.len() + num_sigs * 64, 0);
+    out.extend_from_slice(&serialize_v0(msg));
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unsigned_transaction_layout() {
+        let msg = V0Message {
+            header: MessageHeader {
+                num_required_signatures: 1,
+                num_readonly_signed_accounts: 0,
+                num_readonly_unsigned_accounts: 0,
+            },
+            static_keys: vec![[1u8; 32]],
+            recent_blockhash: [2u8; 32],
+            instructions: vec![],
+            address_table_lookups: vec![],
+        };
+        let msg_bytes = serialize_v0(&msg);
+        let tx = serialize_unsigned_transaction(&msg);
+        // 1 byte compact-u16 count + 64 empty sig bytes + the message.
+        assert_eq!(tx.len(), 1 + 64 + msg_bytes.len());
+        assert_eq!(tx[0], 1);
+        assert!(tx[1..65].iter().all(|b| *b == 0));
+        assert_eq!(&tx[65..], &msg_bytes[..]);
+    }
 
     #[test]
     fn compact_u16_roundtrip_boundaries() {

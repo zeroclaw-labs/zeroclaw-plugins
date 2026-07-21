@@ -78,6 +78,8 @@ pub enum Reject {
     FundsToNonPayer(String),
     DestinationNotBound(String),
     UnsupportedInstruction(String),
+    Upstream(String),
+    BuildFailed(String),
 }
 
 impl Reject {
@@ -112,6 +114,8 @@ impl Reject {
             Reject::UnsupportedInstruction(s) => {
                 format!("refusing an instruction the guard cannot fully account for: {s}")
             }
+            Reject::Upstream(s) => format!("upstream request failed: {s}"),
+            Reject::BuildFailed(s) => format!("transaction build failed: {s}"),
         }
     }
 }
@@ -389,5 +393,41 @@ mod tests {
         assert_eq!(priority_fee_lamports(1_400_000, 1_000_000), 1_400_000);
         // absurd price cannot overflow/wrap.
         assert_eq!(priority_fee_lamports(u32::MAX, u64::MAX), u64::MAX);
+    }
+
+    // Property tests standing in for the Kani proofs of the u128-division
+    // arithmetic (intractable under CBMC's divider — see src/proofs.rs). These
+    // cover the full u64/u16/u32 domains across thousands of random cases.
+    proptest::proptest! {
+        // P2: the emitted floor never exceeds the quote, for ANY quote/slippage,
+        // and never overflows or panics.
+        #[test]
+        fn prop_min_out_never_exceeds_quote(quote in 0u64..=u64::MAX, bps in 0u16..=u16::MAX) {
+            proptest::prop_assert!(min_out_floor(quote, bps) <= quote);
+        }
+
+        // P2 (boundaries): 0 slippage keeps the quote; >=100% floors to 0.
+        #[test]
+        fn prop_min_out_boundaries(quote in 0u64..=u64::MAX) {
+            proptest::prop_assert_eq!(min_out_floor(quote, 0), quote);
+            proptest::prop_assert_eq!(min_out_floor(quote, 10_000), 0);
+        }
+
+        // D4: the fee is 0 exactly when the product is 0; otherwise it is the
+        // correct ceil and never wraps.
+        #[test]
+        fn prop_priority_fee_sound(limit in 0u32..=u32::MAX, price in 0u64..=u64::MAX) {
+            let fee = priority_fee_lamports(limit, price);
+            let product = limit as u128 * price as u128;
+            if product == 0 {
+                proptest::prop_assert_eq!(fee, 0);
+            } else {
+                proptest::prop_assert!(fee >= 1);
+                if fee < u64::MAX {
+                    proptest::prop_assert!((fee as u128) * 1_000_000 >= product);
+                    proptest::prop_assert!(((fee - 1) as u128) * 1_000_000 < product);
+                }
+            }
+        }
     }
 }

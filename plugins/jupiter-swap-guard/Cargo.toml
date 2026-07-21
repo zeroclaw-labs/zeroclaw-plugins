@@ -22,6 +22,11 @@ base64 = "0.22"
 sha2 = { version = "0.10", default-features = false }
 curve25519-dalek = { version = "4", default-features = false, features = ["alloc"] }
 
+# waki: the blocking wasi:http client. Wasm-only so host `cargo test` never
+# compiles it; the pure pipeline is tested through the SwapApi/Rpc traits.
+[target.'cfg(target_family = "wasm")'.dependencies]
+waki = { version = "0.5.1", features = ["json"] }
+
 # Host-only oracle: the differential encoder test compiles the same message with
 # the official decomposed Anza crates and byte-compares. These never enter the
 # wasm build (dev-dependencies are host + test only).
@@ -30,6 +35,9 @@ solana-message = { version = "2", features = ["bincode"] }
 solana-pubkey = "2"
 solana-instruction = "2"
 solana-hash = "2"
+# Property tests for the u128-division arithmetic guardrails, which CBMC cannot
+# verify tractably (see src/proofs.rs). Host + test only.
+proptest = "1"
 
 # `kani` is a cfg set only by the Kani verifier; register it so normal builds
 # don't warn on the #[cfg(kani)] proof harnesses.

@@ -37,9 +37,13 @@ pub mod encode;
 #[cfg(not(kani))]
 pub mod gate;
 #[cfg(not(kani))]
+pub mod http;
+#[cfg(not(kani))]
 pub mod instruction;
 #[cfg(not(kani))]
 pub mod jupiter;
+#[cfg(not(kani))]
+pub mod pipeline;
 pub mod policy;
 #[cfg(not(kani))]
 pub mod summary;
@@ -107,26 +111,70 @@ mod component {
             .to_string()
         }
 
-        fn execute(_args: String) -> Result<ToolResult, String> {
-            // Fail closed while the quote -> gate -> rebuild pipeline is being
-            // wired. The encoder (src/encode.rs) is verified; policy + HTTP land
-            // next. A build-only tool that cannot yet prove its safety
-            // properties must refuse, never emit an unchecked transaction.
-            emit(
-                PluginAction::Fail,
-                PluginOutcome::Failure,
-                "pipeline under construction: refusing to build until policy gate is wired",
-            );
-            Ok(ToolResult {
-                success: false,
-                output: String::new(),
-                error: Some(
-                    "jupiter-swap-guard is under construction: the encoder is verified but the \
-                     policy gate is not yet wired, so it refuses to build a transaction."
-                        .to_string(),
-                ),
-            })
+        fn execute(args: String) -> Result<ToolResult, String> {
+            match run(&args) {
+                Ok(output) => {
+                    emit(
+                        PluginAction::Complete,
+                        PluginOutcome::Success,
+                        "built an unsigned, policy-checked swap transaction",
+                    );
+                    Ok(ToolResult {
+                        success: true,
+                        output,
+                        error: None,
+                    })
+                }
+                Err(reason) => {
+                    // Every failure is a fail-closed refusal: no transaction emitted.
+                    emit(PluginAction::Fail, PluginOutcome::Failure, &reason);
+                    Ok(ToolResult {
+                        success: false,
+                        output: String::new(),
+                        error: Some(reason),
+                    })
+                }
+            }
         }
+    }
+
+    /// Parse args + config, run the guarded pipeline over the real Jupiter/RPC
+    /// endpoints, and shape the result. Returns a human-readable reason on refusal.
+    fn run(args: &str) -> Result<String, String> {
+        use crate::http::{WakiRpc, WakiSwapApi};
+        use crate::pipeline::{parse_request, run_swap};
+        use crate::policy::Policy;
+
+        let mut parsed: serde_json::Value =
+            serde_json::from_str(args).map_err(|e| format!("invalid arguments: {e}"))?;
+
+        // The host injects the plugin's own config under `__config` (only with the
+        // config_read grant). Absent/empty => refuse-all (fail closed).
+        let config: std::collections::HashMap<String, String> = parsed
+            .get("__config")
+            .and_then(|v| v.as_object())
+            .map(|o| {
+                o.iter()
+                    .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+                    .collect()
+            })
+            .unwrap_or_default();
+        if let Some(obj) = parsed.as_object_mut() {
+            obj.remove("__config");
+        }
+
+        let policy = Policy::parse(&config).map_err(|r| r.message())?;
+        let request = parse_request(&parsed).map_err(|r| r.message())?;
+
+        let out = run_swap(&policy, &request, &WakiSwapApi, &WakiRpc).map_err(|r| r.message())?;
+
+        Ok(serde_json::json!({
+            "summary": out.summary,
+            "unsigned_tx_b64": out.unsigned_tx_b64,
+            "guard": serde_json::from_str::<serde_json::Value>(&out.guard_json)
+                .unwrap_or(serde_json::Value::Null),
+        })
+        .to_string())
     }
 
     fn emit(action: PluginAction, outcome: PluginOutcome, message: &str) {
