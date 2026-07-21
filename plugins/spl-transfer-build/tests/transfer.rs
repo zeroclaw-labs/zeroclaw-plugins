@@ -169,6 +169,16 @@ fn builds_unsigned_usdc_transfer_wallets_can_decode() {
     assert!(built.summary.contains("25.5 USDC"));
     assert!(built.summary.contains(&recipient().to_base58()));
     assert!(built.summary.contains("block height 5000"));
+
+    // A read-only Explorer inspector link carrying the MESSAGE (not the wire
+    // tx): starts with the inspector path and carries a percent-encoded payload.
+    assert!(built
+        .review_url
+        .starts_with("https://explorer.solana.com/tx/inspector?message="));
+    let payload = built.review_url.split("message=").nth(1).unwrap();
+    assert!(payload.len() > 40, "review link must carry the encoded message");
+    // base64's +, /, = are all percent-encoded, so none appear raw in the value.
+    assert!(!payload.contains('+') && !payload.contains('/') && !payload.contains('='));
 }
 
 #[test]

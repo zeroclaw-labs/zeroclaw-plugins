@@ -44,6 +44,21 @@ pub fn explorer_token_url(mint: &str) -> String {
     format!("https://solscan.io/token/{mint}")
 }
 
+/// Solana Explorer transaction inspector, pre-loaded with a transaction's
+/// **message** for read-only review before signing. Pass base64 of the message
+/// bytes (`CompiledMessage::message_bytes()`) — NOT the full unsigned tx, whose
+/// leading signature-count byte would make the inspector misparse it. The value
+/// is percent-encoded so base58/base64's `+ / =` survive as a query value.
+/// This is a review link only: a transaction cannot be *signed* from a QR/URL
+/// (that needs a hosted Solana Pay transaction-request endpoint); the human
+/// still signs in their own wallet / Squads / CLI.
+pub fn explorer_inspector_url(message_base64: &str) -> String {
+    format!(
+        "https://explorer.solana.com/tx/inspector?message={}",
+        percent_encode(message_base64)
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -63,5 +78,15 @@ mod tests {
             "https://solscan.io/account/Fw1E"
         );
         assert_eq!(explorer_token_url("EPjF"), "https://solscan.io/token/EPjF");
+    }
+
+    #[test]
+    fn inspector_url_percent_encodes_base64() {
+        // base64's `+ / =` must be percent-encoded so the message survives as a
+        // query value (Explorer decodeURIComponent's it exactly once).
+        let u = explorer_inspector_url("AQAB+/xy==");
+        assert!(u.starts_with("https://explorer.solana.com/tx/inspector?message="));
+        assert!(u.contains("%2B") && u.contains("%2F") && u.contains("%3D"));
+        assert!(!u.ends_with('+') && !u.contains("xy=="));
     }
 }

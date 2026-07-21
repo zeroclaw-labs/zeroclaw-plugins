@@ -43,6 +43,11 @@ mod component {
             let response = waki::Client::new()
                 .post(url)
                 .header("content-type", "application/json")
+                // Bound TCP/TLS connect so a dead endpoint fails in seconds
+                // instead of hanging the agent for minutes. (waki 0.5 exposes
+                // only connect_timeout — a connected-but-slow node still needs a
+                // faster `rpc_url`, which the operator configures.)
+                .connect_timeout(std::time::Duration::from_secs(8))
                 .body(body.as_bytes().to_vec())
                 .send()
                 .map_err(|e| format!("rpc request failed: {e}"))?;
@@ -92,7 +97,11 @@ mod component {
              tool cannot sign or submit anything. The sending wallet, allowed tokens, \
              per-transfer cap, and (optionally) allowed recipients are fixed by operator \
              config; transfers outside that policy are refused. Handles recipient token \
-             account creation and an optional on-chain memo."
+             account creation and an optional on-chain memo. \
+             IMPORTANT: relay this tool's output to the user VERBATIM. Keep the \
+             [PHOTO:...] marker EXACTLY as written, on its own line, with the URL INSIDE \
+             the square brackets — do NOT rewrite it as a Markdown link like [PHOTO:](url) \
+             (that breaks the QR). Keep the base64 transaction intact."
                 .to_string()
         }
 
@@ -157,12 +166,20 @@ mod component {
                         PluginOutcome::Success,
                         "unsigned transfer built",
                     );
+                    // [PHOTO:<qr>] renders as a scannable image in the channel; it
+                    // encodes the read-only Explorer review link (NOT the tx — a
+                    // transaction can't be signed from a QR). The base64 below is
+                    // the artifact to actually sign (paste into Squads/CLI).
                     Ok(clamp(ToolResult {
                         success: true,
                         output: format!(
-                            "✍️ {}\nTo sign: paste the transaction below into the owner wallet \
-                             (e.g. Squads) or a CLI signer — nothing moves until you sign.\n\n{}",
-                            built.summary, built.transaction_base64
+                            "✍️ {}\n[PHOTO:{}]\nScan the QR (or open this link) to review the exact \
+                             transaction, read-only: {}\nThen sign the transaction below in your \
+                             wallet (Squads / CLI) — nothing moves until you sign.\n\n{}",
+                            built.summary,
+                            zeroclaw_solana_core::links::qr_image_url(&built.review_url),
+                            built.review_url,
+                            built.transaction_base64
                         ),
                         error: None,
                     }))

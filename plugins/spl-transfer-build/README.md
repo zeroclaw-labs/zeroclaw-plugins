@@ -4,18 +4,32 @@ Builds an **unsigned** Solana transaction moving SPL tokens (or native SOL)
 out of the operator's wallet: `TransferChecked` with on-chain-verified
 decimals, automatic recipient token-account creation, an optional on-chain
 memo for invoice reconciliation, and optional **durable-nonce** mode so the
-transaction survives sitting in an approval queue. Returns base64 plus a
-human-readable summary an approval gate can render.
+transaction survives sitting in an approval queue. Returns base64 to sign, a
+one-line summary, and a **read-only review link + QR** (Solana Explorer
+transaction inspector) so the human can eyeball the exact decoded instructions
+before signing.
 
 ```
 > pay the hosting invoice: 25 USDC to 4zMM…ncDU, memo "invoice #412"
 
-UNSIGNED transfer of 25 USDC from 7VHU…4BmE to
-4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU. Note: durable nonce: no
-blockhash expiry, sign whenever ready. Verify the recipient, then sign
-with the owner wallet.
-unsigned_transaction_base64: AQAAAAAAAAAA…
+✍️ UNSIGNED transfer of 25 USDC from 7VHU…4BmE to 4zMMC9srt5Ri5X14…DncDU.
+Note: durable nonce: no blockhash expiry, sign whenever ready. Verify the
+recipient, then sign with the owner wallet.
+[PHOTO:https://api.qrserver.com/v1/create-qr-code/?…data=…explorer.solana.com%2Ftx%2Finspector…]
+Scan the QR (or open this link) to review the exact transaction, read-only:
+https://explorer.solana.com/tx/inspector?message=gAEAAgWT…
+Then sign the transaction below in your wallet (Squads / CLI) — nothing moves
+until you sign.
+
+AQAAAAAAAAAA…
 ```
+
+The `[PHOTO:...]` line renders as a scannable QR in the channel; both it and the
+link open the **read-only** Solana Explorer inspector, which decodes and
+simulates the transaction. A transaction **cannot be signed from a QR or link** —
+that would need a hosted Solana Pay *transaction-request* endpoint, which a
+stateless T1 component can't provide — so signing always happens in the
+operator's own wallet / Squads / CLI, from the base64.
 
 ## Custody tier: T1 (Build)
 

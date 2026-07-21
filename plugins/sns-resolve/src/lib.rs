@@ -40,6 +40,7 @@ mod component {
             let response = waki::Client::new()
                 .post(url)
                 .header("content-type", "application/json")
+                .connect_timeout(std::time::Duration::from_secs(8))
                 .body(body.as_bytes().to_vec())
                 .send()
                 .map_err(|e| format!("rpc request failed: {e}"))?;

@@ -18,6 +18,8 @@
 use std::collections::HashMap;
 
 use zeroclaw_solana_core::amount::{format_base_units, parse_decimal_amount};
+use zeroclaw_solana_core::encoding::to_base64;
+use zeroclaw_solana_core::links::explorer_inspector_url;
 use zeroclaw_solana_core::instruction::{
     advance_nonce, create_ata_idempotent, memo as memo_ix, system_transfer, transfer_checked,
     Instruction,
@@ -156,6 +158,11 @@ pub struct TransferArgs {
 #[derive(Debug)]
 pub struct BuiltTransfer {
     pub transaction_base64: String,
+    /// Read-only Solana Explorer inspector link for this exact transaction — the
+    /// human taps it to review the decoded instructions/accounts (and simulate)
+    /// before signing. A transaction cannot be *signed* from a link or QR; this
+    /// is review only, then they sign in their wallet / Squads / CLI.
+    pub review_url: String,
     pub summary: String,
 }
 
@@ -343,8 +350,13 @@ pub fn build_transfer<T: HttpTransport>(
             .collect::<String>(),
     );
 
+    // Review link carries the MESSAGE bytes (not the full wire tx, whose
+    // leading signature-count byte would make the inspector misparse it).
+    let review_url = explorer_inspector_url(&to_base64(compiled.message_bytes()));
+
     Ok(BuiltTransfer {
         transaction_base64: compiled.unsigned_transaction_base64(),
+        review_url,
         summary,
     })
 }
