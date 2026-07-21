@@ -11,9 +11,31 @@ The config section is injected by ZeroClaw as `__config`; secrets are never hard
 
 If Helius is unavailable, the plugin still reads RugCheck's parsed `token_extensions` as a supplemental read-only source. A Token-2022 mint with neither source available is **amber**, never green.
 
+### Why use Helius and RugCheck?
+
+This is deliberate provider composition, not an allowlist or a claim that an off-chain label makes a token safe. RugCheck supplies parsed risk, liquidity, locker, and holder context; optional Helius supplies parsed `mint_extensions` for Token-2022. Missing, conflicting, or ambiguous provider data cannot produce green: it remains amber or red. `rugcheck_url` exists only as an operator/test-server override.
+
 ## Safety / T0 custody tier
 
 The plugin has only `http_client` and `config_read` permissions. It has no signer, wallet, transaction, socket, filesystem-write, or transfer capability. All provider calls are read-only HTTP GET/JSON-RPC POST. Provider failure returns an error; missing/ambiguous risk data is amber or red, never green. This is T0: it cannot custody, sign, or move funds.
+
+## Architecture and capability boundary
+
+```mermaid
+flowchart LR
+    U["User or scheduled watchlist"] --> T["Telegram / ZeroClaw agent"]
+    T --> S["sns-resolve\nread-only .sol → wallet"]
+    T --> R["token-risk-check\nread-only mint verdict"]
+    C["08:00 cron\nallowlist: token_risk_check only"] --> R
+    C --> T
+    R --> P["RugCheck + optional Helius\nread-only HTTPS"]
+    P --> R
+    S --> Q["SNS SDK proxy\nread-only HTTPS"]
+    Q --> S
+    R -. "No signer · no wallet · no transfer · no filesystem" .-> X["T0 boundary"]
+```
+
+`sns-resolve` prevents an agent from inventing a wallet address; `token-risk-check` evaluates a supplied token mint. The tools are complementary, but resolution does not silently turn a wallet address into a mint check. The production agent is locked to these two plugin tools; the scheduled job is narrower still and permits only `token_risk_check`.
 
 ## Prompt-injection test
 
