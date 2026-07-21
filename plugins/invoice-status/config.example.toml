@@ -1,7 +1,22 @@
-# Example operator config for invoice-status (T0 read-only).
+# Example operator config for invoice-status (custody tier T0, read-only).
+# In ZeroClaw this lands under the plugin's jailed section (name = invoice-status)
+# and is injected into `execute` as the flat `__config` map. All values are strings.
 
+# Solana JSON-RPC endpoint used for getSignaturesForAddress + getTransaction.
+# Prefer a dedicated RPC (Helius/Triton/etc.) in production: the public mainnet
+# endpoint rate-limits, and a throttled getTransaction makes the tool degrade to
+# "SIG OK (valor nao verificado)" rather than confirm payment.
+# There is no rpc_api_key key — put the token in the URL, or front it with a proxy.
 rpc_url = "https://api.mainnet-beta.solana.com"
-# Prefer a dedicated RPC (Helius/Triton/etc.) in production.
-# rpc_api_key is not read yet — put the key in the URL or proxy if needed.
+
+# Merchant receive pubkey. Used for two things:
+#   1. deriving the Solana Pay reference from invoice_id, and
+#   2. as the `owner` filter when summing the USDC actually received
+#      (meta.preTokenBalances / meta.postTokenBalances, delta = post - pre).
+# Without it the amount cannot be verified, and the tool reports SIG OK, never PAID.
 merchant_solana = "YourBase58MerchantPubkey1111111111111111111"
+
+# Mint whose balance delta counts as payment. Must match the mint the invoice was
+# issued in (see brl-usdc-invoice `usdc_mint`); a transfer of any other token
+# contributes zero to the settled amount.
 usdc_mint = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"

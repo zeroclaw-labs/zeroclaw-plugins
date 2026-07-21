@@ -1,3 +1,16 @@
+# Example operator config for pixzclaw-brief (custody tier T0, read-only).
+# In ZeroClaw this lands under the plugin's jailed section (name = pixzclaw-brief)
+# and is injected into `execute` as the flat `__config` map. All values are strings.
+
+# Solana JSON-RPC endpoint used for getBalance, getTokenAccountsByOwner and
+# getSignaturesForAddress. Prefer a dedicated RPC (Helius/Triton/etc.) in
+# production — the public mainnet endpoint rate-limits.
 rpc_url = "https://api.mainnet-beta.solana.com"
+
+# Merchant receive pubkey — the wallet the card reports on. Required: with no
+# value the tool returns an error instead of a card. When set here it always wins
+# over the tool-call `merchant` argument, so an agent cannot redirect the report.
 merchant_solana = "YourBase58MerchantPubkey1111111111111111111"
+
+# Mint reported as the USDC balance (summed across the owner's token accounts).
 usdc_mint = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
