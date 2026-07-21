@@ -1,0 +1,7 @@
+name = "pixzclaw-brief"
+version = "0.3.0"
+description = "PixZClaw caixa: saldo USDC/SOL + últimas movimentações on-chain + sparkline 7d (T0, no keys)"
+author = "PixZClaw"
+wasm_path = "pixzclaw_brief.wasm"
+capabilities = ["tool"]
+permissions = ["http_client", "config_read"]

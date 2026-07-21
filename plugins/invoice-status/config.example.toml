@@ -1,0 +1,7 @@
+# Example operator config for invoice-status (T0 read-only).
+
+rpc_url = "https://api.mainnet-beta.solana.com"
+# Prefer a dedicated RPC (Helius/Triton/etc.) in production.
+# rpc_api_key is not read yet — put the key in the URL or proxy if needed.
+merchant_solana = "YourBase58MerchantPubkey1111111111111111111"
+usdc_mint = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"

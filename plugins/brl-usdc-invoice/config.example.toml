@@ -1,0 +1,13 @@
+# Example operator config for brl-usdc-invoice (T1).
+# In ZeroClaw this lands under the plugin's jailed section (name = brl-usdc-invoice).
+
+pix_key = "loja@empresa.com.br"
+pix_name = "ACME LTDA"
+pix_city = "SAO PAULO"
+merchant_solana = "YourBase58MerchantPubkey1111111111111111111"
+usdc_mint = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+max_amount_brl = "1000"
+max_amount_usdc = "200"
+brl_per_usdc = "5.5"
+recipient_locked = "true"
+allowed_mints = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
