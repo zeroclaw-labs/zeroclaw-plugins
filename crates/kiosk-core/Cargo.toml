@@ -1,0 +1,17 @@
+[package]
+name = "kiosk-core"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Pure, wasm32-wasip2-friendly Solana substrate for the ProofKiosk plugins: base58, shortvec, Solana Pay URLs, output shaping. No solana-sdk, no wasm deps, host-testable."
+publish = false
+
+[lib]
+crate-type = ["rlib"]
+
+[dependencies]
+# Intentionally empty for the pure primitives. serde/waki live behind
+# features added only when the rpc module lands.
+
+# Standalone crate: not part of any parent workspace.
+[workspace]
