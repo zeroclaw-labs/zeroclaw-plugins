@@ -178,7 +178,7 @@ We deliberately **did not ship the claim tx yet.** Helium hotspots are **compres
 
 ```bash
 cd plugins/depin-rewards
-cargo test                              # 45 host tests over the pure core (MockHttp)
+cargo test                              # 55 host tests (52 core + 3 demo) over the pure core (MockHttp)
 cargo clippy --all-targets -- -D warnings
 cargo build --target wasm32-wasip2 --release   # the component
 ```

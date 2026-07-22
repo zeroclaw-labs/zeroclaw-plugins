@@ -85,22 +85,24 @@ The plugin returns (T2, memo-fallback path, ~200 tokens):
 
 ```
 ✓ attested + submitted → attestation PDA 9Kai…DL4u
-sig: 65UzT3h1vfrLVtrQWHsU4bDnWVikZt4D…  nonce: Ctnq…DqwS  expiry: 0
-explorer: https://explorer.solana.com/tx/65UzT3h1vfrLVtrQWHsU4bDnWVikZt4DL2vUaRPTDiGxfpCGZ9vK8LM2MQTj7mx3tHBX8BKjXptptRpZBVrxAPir?cluster=devnet
+sig: BsdBnMtJHFarDREDdA7hgbGp2hUe4mBMzw4erjM9jrVhQ…  nonce: Ctnq…DqwS  expiry: 0
+explorer: https://explorer.solana.com/tx/BsdBnMtJHFarDREDdA7hgbGp2hUe4mBMzw4erjM9jrVhQdRyS4yQxtTpCEtobrxjiCj5zKMHMuwVKPd2Pv2qGYo?cluster=devnet
 ```
 
 This is a **real, explorer-verifiable Solana transaction** — not a mock, not an
-unsigned draft. Confirmed on devnet: `err = None`, slot `477806741`, fee `5000`
+unsigned draft. Confirmed on devnet: `err = None`, slot `477808575`, fee `5000`
 lamports (within the 10k lamport cap), version `0` (versioned tx → durable nonce
-as `recent_blockhash`). The durable nonce **advanced** `F3tGxZwV… → HxmL2Nu7…`,
-so the replay guard is provably live: a replayed/stale attestation is rejected.
+as `recent_blockhash`). The durable nonce **advanced** on this run — the replay
+guard is provably live: a replayed/stale attestation is rejected. The sensor
+reading is carried on-chain as a memo: `palinurus: bme280-1=24.7celsius @ 1784621332`.
 
 The custody path enforced **before signing**: session-key identity (verifying
 key = authority = payer = nonce_authority — one scoped key wearing all four
 hats for the devnet demo), program allowlist `{System, SAS, Memo}` (the memo
 instruction is in the allowlist; a value-transfer instruction is not
-expressible), lamport cap, daily cap. The sensor reading is carried on-chain as
-a memo: `palinurus: bme280-1=24.7celsius @ 1784620660`.
+expressible), lamport cap, daily cap.
+
+> An earlier real run — [`65UzT3h1…APir`](https://explorer.solana.com/tx/65UzT3h1vfrLVtrQWHsU4bDnWVikZt4DL2vUaRPTDiGxfpCGZ9vK8LM2MQTj7mx3tHBX8BKjXptptRpZBVrxAPir?cluster=devnet) (slot `477806741`) — is also explorer-verifiable. Two real signed attestations, not one.
 
 > **SAS vs memo path.** The default is the **memo program** (cheap,
 > high-throughput, the landed proof above). The **Solana Attestation Service**
@@ -249,7 +251,7 @@ The bounty traps are real. Here's what we hit and how we solved each:
 
 ```bash
 cd plugins/depin-attest
-cargo test                                        # 68 host tests, no wasm needed
+cargo test                                        # 74 host tests (68 core + 6 demo), no wasm needed
 rustup target add wasm32-wasip2
 cargo build --target wasm32-wasip2 --release      # the component
 cargo clippy --all-targets -- -D warnings         # zero warnings
