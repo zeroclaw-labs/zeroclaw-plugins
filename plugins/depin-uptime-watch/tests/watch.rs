@@ -46,13 +46,24 @@ fn config() -> HashMap<String, String> {
 }
 
 fn signatures_body(limit: usize) -> Value {
+    signatures_body_before(limit, None)
+}
+
+fn signatures_body_before(limit: usize, before: Option<&str>) -> Value {
+    let mut options = json!({ "limit": limit });
+    if let Some(before) = before {
+        options
+            .as_object_mut()
+            .unwrap()
+            .insert("before".to_string(), json!(before));
+    }
     json!({
         "jsonrpc": "2.0",
         "id": 1,
         "method": "getSignaturesForAddress",
         "params": [
             payer().to_base58(),
-            { "limit": limit }
+            options
         ]
     })
 }
@@ -124,8 +135,9 @@ fn returns_ok_for_matching_recent_attestation() {
 
     assert_eq!(output.verdict, Verdict::Ok);
     assert_eq!(output.age_secs, Some(60));
-    assert!(output.summary.contains("DEPIN uptime OK"));
-    assert!(output.summary.contains("device: device-7"));
+    assert!(output.summary.contains("Uptime OK"));
+    assert!(output.summary.contains("device-7"));
+    assert!(output.summary.contains("🟢"));
 }
 
 #[test]
@@ -155,7 +167,7 @@ fn returns_stale_for_matching_old_attestation() {
 
     assert_eq!(output.verdict, Verdict::Stale);
     assert_eq!(output.age_secs, Some(60));
-    assert!(output.summary.contains("DEPIN uptime STALE"));
+    assert!(output.summary.contains("Uptime STALE"));
 }
 
 #[test]
@@ -186,7 +198,7 @@ fn returns_missing_when_no_matching_memo_is_found() {
 
     assert_eq!(output.verdict, Verdict::Missing);
     assert_eq!(output.age_secs, None);
-    assert!(output.summary.contains("DEPIN uptime MISSING"));
+    assert!(output.summary.contains("Uptime MISSING"));
 }
 
 #[test]
@@ -195,22 +207,22 @@ fn prefers_newest_matching_attestation_by_block_time() {
         .with_response(
             signatures_body(25),
             signatures_response(json!([
-                {"signature": "sig-older", "blockTime": 1_720_000_000, "err": null},
-                {"signature": "sig-newer", "blockTime": 1_720_000_050, "err": null}
+                {"signature": "sig-newer", "blockTime": 1_720_000_050, "err": null},
+                {"signature": "sig-older", "blockTime": 1_720_000_000, "err": null}
             ])),
-        )
-        .with_response(
-            transaction_body("sig-older"),
-            transaction_response(
-                1_720_000_000,
-                "ZCDEPIN|device-7|uptime|1|seconds|5733333|oldoldoldold",
-            ),
         )
         .with_response(
             transaction_body("sig-newer"),
             transaction_response(
                 1_720_000_050,
                 "ZCDEPIN|device-7|uptime|2|seconds|5733333|newnewnewnew",
+            ),
+        )
+        .with_response(
+            transaction_body("sig-older"),
+            transaction_response(
+                1_720_000_000,
+                "ZCDEPIN|device-7|uptime|1|seconds|5733333|oldoldoldold",
             ),
         );
 
@@ -224,7 +236,7 @@ fn prefers_newest_matching_attestation_by_block_time() {
 
     assert_eq!(output.verdict, Verdict::Ok);
     assert_eq!(output.age_secs, Some(10));
-    assert!(output.summary.contains("signature: sig-newer"));
+    assert!(output.summary.contains("sig-newer"));
 }
 
 #[test]
@@ -249,7 +261,7 @@ fn returns_missing_when_device_id_is_only_a_substring() {
     let output = execute(r#"{"device_id":"7"}"#, &config(), &http, 1_720_000_060).expect("watch");
 
     assert_eq!(output.verdict, Verdict::Missing);
-    assert!(output.summary.contains("DEPIN uptime MISSING"));
+    assert!(output.summary.contains("Uptime MISSING"));
 }
 
 #[test]
@@ -300,4 +312,140 @@ fn keeps_output_within_budget() {
     let output = execute(&args, &config(), &http, 1_720_000_060).expect("watch execute");
 
     assert!(output.summary.chars().count() <= 800);
+}
+
+#[test]
+fn paginates_until_matching_memo_is_found() {
+    let http = MapHttp::default()
+        .with_response(
+            signatures_body(2),
+            signatures_response(json!([
+                {"signature": "sig-a", "blockTime": 1_720_000_050, "err": null},
+                {"signature": "sig-b", "blockTime": 1_720_000_040, "err": null}
+            ])),
+        )
+        .with_response(
+            transaction_body("sig-a"),
+            transaction_response(
+                1_720_000_050,
+                "ZCDEPIN|other|uptime|1|seconds|5733333|aaaaaaaaaaaa",
+            ),
+        )
+        .with_response(
+            transaction_body("sig-b"),
+            transaction_response(
+                1_720_000_040,
+                "ZCDEPIN|other|uptime|1|seconds|5733333|bbbbbbbbbbbb",
+            ),
+        )
+        .with_response(
+            signatures_body_before(2, Some("sig-b")),
+            signatures_response(json!([
+                {"signature": "sig-hit", "blockTime": 1_720_000_000, "err": null}
+            ])),
+        )
+        .with_response(
+            transaction_body("sig-hit"),
+            transaction_response(
+                1_720_000_000,
+                "ZCDEPIN|device-7|uptime|42|seconds|5733333|abc123def456",
+            ),
+        );
+
+    let mut cfg = config();
+    cfg.insert("scan_limit".to_string(), "2".to_string());
+
+    let output = execute(
+        r#"{"device_id":"device-7","max_age_secs":3600}"#,
+        &cfg,
+        &http,
+        1_720_000_060,
+    )
+    .expect("watch paginate");
+
+    assert_eq!(output.verdict, Verdict::Ok);
+    assert!(output.summary.contains("sig-hit"));
+}
+
+#[test]
+fn reads_memo_from_inner_instructions() {
+    let http = MapHttp::default()
+        .with_response(
+            signatures_body(25),
+            signatures_response(json!([
+                {"signature": "sig-cpi", "blockTime": 1_720_000_000, "err": null}
+            ])),
+        )
+        .with_response(
+            transaction_body("sig-cpi"),
+            json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "result": {
+                    "blockTime": 1_720_000_000,
+                    "transaction": {
+                        "message": {
+                            "instructions": [
+                                { "programId": "11111111111111111111111111111111" }
+                            ]
+                        }
+                    },
+                    "meta": {
+                        "innerInstructions": [
+                            {
+                                "index": 0,
+                                "instructions": [
+                                    {
+                                        "programId": MEMO_PROGRAM,
+                                        "parsed": "ZCDEPIN|device-7|uptime|42|seconds|5733333|abc123def456"
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                }
+            }),
+        );
+
+    let output = execute(
+        r#"{"device_id":"device-7","max_age_secs":120}"#,
+        &config(),
+        &http,
+        1_720_000_060,
+    )
+    .expect("inner memo");
+
+    assert_eq!(output.verdict, Verdict::Ok);
+    assert!(output.summary.contains("Uptime OK"));
+}
+
+#[test]
+fn skips_failed_get_transaction_and_continues() {
+    let http = MapHttp::default()
+        .with_response(
+            signatures_body(25),
+            signatures_response(json!([
+                {"signature": "sig-bad", "blockTime": 1_720_000_050, "err": null},
+                {"signature": "sig-good", "blockTime": 1_720_000_000, "err": null}
+            ])),
+        )
+        // no mock for sig-bad → transport error → skip
+        .with_response(
+            transaction_body("sig-good"),
+            transaction_response(
+                1_720_000_000,
+                "ZCDEPIN|device-7|uptime|42|seconds|5733333|abc123def456",
+            ),
+        );
+
+    let output = execute(
+        r#"{"device_id":"device-7","max_age_secs":120}"#,
+        &config(),
+        &http,
+        1_720_000_060,
+    )
+    .expect("skip bad tx");
+
+    assert_eq!(output.verdict, Verdict::Ok);
+    assert!(output.summary.contains("sig-good"));
 }

@@ -35,6 +35,7 @@ impl MapHttp {
             "id": 1,
             "result": {
                 "value": {
+                    "owner": "11111111111111111111111111111111",
                     "data": [nonce_b64, "base64"]
                 }
             }
@@ -222,6 +223,10 @@ fn rejects_delimiters_and_control_characters_in_memo_fields() {
             "unit",
             "{\"device_id\":\"device-7\",\"reading\":12.5,\"unit\":\"uptime\\nseconds\",\"metric\":\"temperature\"}",
         ),
+        (
+            "memo_prefix",
+            r#"{"device_id":"device-7","reading":12.5,"unit":"celsius","metric":"temperature","memo_prefix":"ZC|DEPIN"}"#,
+        ),
     ] {
         let args = parse_args_strict(json).unwrap();
         let err = validate_policy(&cfg, &args).unwrap_err();
@@ -255,15 +260,17 @@ fn execute_builds_durable_unsigned_memo_tx_summary() {
         "162751dec7d2299ebf6a032862b6a5fe59aa3f1abe5ece3b70a0c9b3da8f682a"
     );
     assert!(!output.unsigned_tx_base64.is_empty());
-    assert!(output.summary.chars().count() <= 900);
-    assert_eq!(
-        output.summary,
-        format!(
-            "DEPIN attest OK\ndevice: device-7\nmetric: temperature=21.234568 celsius\nperiod: 5733333\nhash: 162751dec7d2…\nnonce: {}\ndurability: durable-nonce\nunsigned_tx_base64: {}",
-            nonce_account.to_base58(),
-            output.unsigned_tx_base64
-        )
-    );
+    assert!(output.summary.chars().count() <= 1200);
+    assert!(output.summary.contains("✅ DePIN attestation ready (T1)"));
+    assert!(output.summary.contains("📱 Device    device-7"));
+    assert!(output.summary.contains("🌡 Reading   temperature = 21.234568 celsius"));
+    assert!(output.summary.contains("⏱ Period    5733333"));
+    assert!(output.summary.contains("🔗 Hash      162751dec7d2…"));
+    assert!(output.summary.contains(&format!("🔐 Nonce     {}", nonce_account.to_base58())));
+    assert!(output.summary.contains("🛡 Custody   unsigned — sign with payer wallet, then broadcast"));
+    assert!(output.summary.contains("📦 unsigned_tx_base64"));
+    assert!(output.summary.contains(&output.unsigned_tx_base64));
+    assert!(output.summary.contains("fp        07070707")); // durable_nonce = [7u8; 32]
 
     let tx = base64::engine::general_purpose::STANDARD
         .decode(&output.unsigned_tx_base64)

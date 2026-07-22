@@ -80,6 +80,7 @@ fn get_account_data_decodes_base64_and_get_nonce_parses_it() {
             "id": 1,
             "result": {
                 "value": {
+                    "owner": "11111111111111111111111111111111",
                     "data": [nonce_b64, "base64"]
                 }
             }
@@ -127,7 +128,7 @@ fn get_signatures_for_address_returns_signature_metadata() {
         http: &http,
     };
 
-    let signatures = rpc.get_signatures_for_address(&address, 2).unwrap();
+    let signatures = rpc.get_signatures_for_address(&address, 2, None).unwrap();
 
     assert_eq!(signatures.len(), 2);
     assert_eq!(signatures[0].signature, "sig-one");
@@ -313,7 +314,7 @@ fn empty_url_is_rejected_before_http_call() {
         http: &http,
     };
 
-    let err = rpc.get_signatures_for_address(&address, 1).unwrap_err();
+    let err = rpc.get_signatures_for_address(&address, 1, None).unwrap_err();
 
     assert!(err.to_string().contains("rpc url is empty"));
     assert!(http.requests.borrow().is_empty());
@@ -349,7 +350,143 @@ fn rpc_error_object_maps_to_core_error() {
         http: &http,
     };
 
-    let err = rpc.get_signatures_for_address(&address, 1).unwrap_err();
+    let err = rpc.get_signatures_for_address(&address, 1, None).unwrap_err();
 
     assert_eq!(err.to_string(), "rpc error -32000: node is unhealthy");
+}
+
+#[test]
+fn retries_once_on_retryable_transport_error() {
+    use std::cell::Cell;
+
+    struct FlakyHttp {
+        attempts: Cell<u32>,
+        ok: Value,
+    }
+
+    impl HttpClient for FlakyHttp {
+        fn post_json(&self, _url: &str, _body: &Value) -> CoreResult<Value> {
+            let n = self.attempts.get();
+            self.attempts.set(n + 1);
+            if n == 0 {
+                return Err(CoreError::msg("connection reset by peer"));
+            }
+            Ok(self.ok.clone())
+        }
+    }
+
+    let address = Pubkey::new([4u8; 32]);
+    let http = FlakyHttp {
+        attempts: Cell::new(0),
+        ok: json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": [
+                { "signature": "sig-retry", "blockTime": 1, "err": null }
+            ]
+        }),
+    };
+    let rpc = Rpc {
+        url: RPC_URL,
+        http: &http,
+    };
+
+    let sigs = rpc.get_signatures_for_address(&address, 1, None).unwrap();
+    assert_eq!(sigs.len(), 1);
+    assert_eq!(sigs[0].signature, "sig-retry");
+    assert_eq!(http.attempts.get(), 2);
+}
+
+#[test]
+fn get_nonce_rejects_non_system_owner_when_present() {
+    let nonce_account = Pubkey::new([2u8; 32]);
+    let authority = Pubkey::new([3u8; 32]);
+    let durable_nonce = [9u8; 32];
+    let nonce_data = initialized_nonce_fixture(&authority, &durable_nonce, 5_000);
+    let nonce_b64 = base64::engine::general_purpose::STANDARD.encode(&nonce_data);
+    let body = json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "getAccountInfo",
+        "params": [
+            nonce_account.to_base58(),
+            { "encoding": "base64" }
+        ]
+    });
+    let http = MapHttp::with_response(
+        RPC_URL,
+        body,
+        json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {
+                "value": {
+                    "owner": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
+                    "data": [nonce_b64, "base64"]
+                }
+            }
+        }),
+    );
+    let rpc = Rpc {
+        url: RPC_URL,
+        http: &http,
+    };
+
+    let err = rpc.get_nonce(&nonce_account).unwrap_err();
+    assert!(err
+        .to_string()
+        .contains("nonce account owner must be system program"));
+}
+
+#[test]
+fn get_transaction_memo_reads_inner_instructions() {
+    let signature = "tx-inner";
+    let body = json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "getTransaction",
+        "params": [
+            signature,
+            { "encoding": "jsonParsed", "maxSupportedTransactionVersion": 0 }
+        ]
+    });
+    let http = MapHttp::with_response(
+        RPC_URL,
+        body,
+        json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {
+                "blockTime": 111,
+                "transaction": {
+                    "message": {
+                        "instructions": [
+                            { "programId": "11111111111111111111111111111111" }
+                        ]
+                    }
+                },
+                "meta": {
+                    "innerInstructions": [
+                        {
+                            "index": 0,
+                            "instructions": [
+                                {
+                                    "programId": "MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr",
+                                    "parsed": "ZCDEPIN|cpi memo"
+                                }
+                            ]
+                        }
+                    ]
+                }
+            }
+        }),
+    );
+    let rpc = Rpc {
+        url: RPC_URL,
+        http: &http,
+    };
+
+    let memo = rpc.get_transaction_memo(signature).unwrap().unwrap();
+    assert_eq!(memo.memo, "ZCDEPIN|cpi memo");
+    assert_eq!(memo.block_time, Some(111));
 }

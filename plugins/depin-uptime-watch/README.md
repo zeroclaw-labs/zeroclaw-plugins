@@ -98,16 +98,21 @@ ZCDEPIN|device-7|uptime|42|seconds|5733333|abc123def456
 and the watcher runs at Unix time `1720000060`, the output verdict is `OK` with age `60`:
 
 ```text
-DEPIN uptime OK
-device: device-7
-age_secs: 60
-max_age_secs: 120
-block_time: 1720000000
-signature: sig-new
-memo: ZCDEPIN|device-7|uptime|42|seconds|5733333|abc123def456
+🟢 Uptime OK · device-7
+⏱ Age     60s (max 120s)
+🔗 Sig     sig-new
+📝 Memo    ZCDEPIN|device-7|uptime|42|seconds|5733333|abc123def456
 ```
 
-If the threshold is `30`, the same attestation is `STALE`. If no successful matching memo is found in the scanned signatures, the output is `MISSING`.
+If the threshold is `30`, the same attestation is `🟡 STALE`. If no successful matching memo is found in the scanned signatures, the output is `🔴 MISSING`.
+
+## Production notes
+
+- **Pagination**: scans up to `max_pages` (default 4, cap 8) × `scan_limit` (≤50) signature pages via `before` cursors to reduce false `MISSING` on busy payers.
+- **CPI memos**: reads memo instructions from top-level and `meta.innerInstructions`.
+- **RPC resilience**: per-tx `getTransaction` failures are skipped; signature-list failures surface as `🔌` errors. Wasm HTTP uses a 15s connect timeout with one retry on transient errors.
+- **Clock skew**: unknown `blockTime` → STALE; far-future `blockTime` treated as age 0 with a skew note.
+- **Custody**: T0 read-only.
 
 ## Prompt-Injection Transcript
 

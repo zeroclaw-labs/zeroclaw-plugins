@@ -10,9 +10,9 @@ use sha2::{Digest, Sha256};
 const DEFAULT_MEMO_PREFIX: &str = "ZCDEPIN";
 const DEFAULT_MAX_ABS_READING: f64 = 1_000_000.0;
 const MEMO_MAX_BYTES: usize = 566;
-/// Chat-safe tool output budget (~200–300 model tokens). The only bulky field
-/// is `unsigned_tx_base64`, required for the T1 human approval / signing path.
-const SUMMARY_MAX_CHARS: usize = 900;
+/// Chat-safe tool output budget. Telegram allows 4096; keep headroom for the
+/// required `unsigned_tx_base64` while remaining LLM-context friendly.
+const SUMMARY_MAX_CHARS: usize = 1200;
 const DEFAULT_ALLOWED_METRICS: [&str; 5] = [
     "temperature",
     "humidity",
@@ -154,10 +154,10 @@ pub fn execute<H: HttpClient>(
     let rpc = Rpc { url: rpc_url, http };
     let nonce = rpc
         .get_nonce(&nonce_account)
-        .map_err(|e| format!("get nonce failed: {e}"))?;
+        .map_err(|e| format!("🔌 get nonce failed: {e}"))?;
 
     if nonce.authority != payer {
-        return Err("nonce authority must match payer".to_string());
+        return Err("⚠️ nonce authority must match payer".to_string());
     }
 
     let reading_str = format_reading(args.reading);
@@ -189,23 +189,17 @@ pub fn execute<H: HttpClient>(
     .map_err(|e| format!("build transaction failed: {e}"))?;
     let unsigned_tx_base64 = to_base64(&unsigned_tx);
     let nonce_account_str = nonce_account.to_base58();
-    let summary = format!(
-        "DEPIN attest OK\n\
-device: {}\n\
-metric: {}={} {}\n\
-period: {}\n\
-hash: {}…\n\
-nonce: {}\n\
-durability: durable-nonce\n\
-unsigned_tx_base64: {}",
-        args.device_id,
-        args.metric,
-        reading_str,
-        args.unit,
+    let nonce_fp = hex_lower(&nonce.durable_nonce[..4]);
+    let summary = format_success_card(
+        &args.device_id,
+        &args.metric,
+        &reading_str,
+        &args.unit,
         period,
         hash12,
-        nonce_account_str,
-        unsigned_tx_base64
+        &nonce_account_str,
+        &nonce_fp,
+        &unsigned_tx_base64,
     );
     assert_budget(&summary, SUMMARY_MAX_CHARS).map_err(|e| e.to_string())?;
 
@@ -216,6 +210,34 @@ unsigned_tx_base64: {}",
         nonce_account: nonce_account_str,
         durability: "durable-nonce",
     })
+}
+
+fn format_success_card(
+    device_id: &str,
+    metric: &str,
+    reading_str: &str,
+    unit: &str,
+    period: u64,
+    hash12: &str,
+    nonce_account: &str,
+    nonce_fp: &str,
+    unsigned_tx_base64: &str,
+) -> String {
+    let b64_len = unsigned_tx_base64.chars().count();
+    format!(
+        "✅ DePIN attestation ready (T1)\n\
+📱 Device    {device_id}\n\
+🌡 Reading   {metric} = {reading_str} {unit}\n\
+⏱ Period    {period}\n\
+🔗 Hash      {hash12}…\n\
+🔐 Nonce     {nonce_account}\n\
+   fp        {nonce_fp}\n\
+🛡 Custody   unsigned — sign with payer wallet, then broadcast\n\
+   (this plugin never submits)\n\
+\n\
+📦 unsigned_tx_base64 ({b64_len} chars) — copy all of it:\n\
+{unsigned_tx_base64}"
+    )
 }
 
 pub fn format_reading(v: f64) -> String {
@@ -272,6 +294,7 @@ pub fn validate_policy(cfg: &AttestConfig, args: &AttestArgs) -> Result<(), Stri
     validate_memo_field("device_id", &args.device_id)?;
     validate_memo_field("metric", &args.metric)?;
     validate_memo_field("unit", &args.unit)?;
+    validate_memo_field("memo_prefix", memo_prefix(args))?;
     if !cfg
         .allowed_metrics
         .iter()
@@ -312,11 +335,14 @@ fn validate_memo_field(label: &str, value: &str) -> Result<(), String> {
 }
 
 fn required_string(object: &serde_json::Map<String, Value>, key: &str) -> Result<String, String> {
-    object
-        .get(key)
-        .and_then(Value::as_str)
-        .map(ToString::to_string)
-        .ok_or_else(|| format!("{key} must be a string"))
+    match object.get(key) {
+        None | Some(Value::Null) => Err(format!(
+            "{key} is required (string). Example metric: \"temperature\""
+        )),
+        Some(Value::String(s)) if !s.trim().is_empty() => Ok(s.clone()),
+        Some(Value::String(_)) => Err(format!("{key} must be a non-empty string")),
+        Some(_) => Err(format!("{key} must be a string")),
+    }
 }
 
 fn required_config<'a>(config: &'a HashMap<String, String>, key: &str) -> Result<&'a str, String> {

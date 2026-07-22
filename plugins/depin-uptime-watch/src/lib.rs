@@ -51,8 +51,10 @@ mod component {
 
     impl HttpClient for WakiHttp {
         fn post_json(&self, url: &str, body: &Value) -> CoreResult<Value> {
+            const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
             waki::Client::new()
                 .post(url)
+                .connect_timeout(CONNECT_TIMEOUT)
                 .json(body)
                 .send()
                 .map_err(|e| CoreError::msg(e.to_string()))?

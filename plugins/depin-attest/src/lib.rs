@@ -51,8 +51,10 @@ mod component {
 
     impl HttpClient for WakiHttp {
         fn post_json(&self, url: &str, body: &Value) -> CoreResult<Value> {
+            const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
             waki::Client::new()
                 .post(url)
+                .connect_timeout(CONNECT_TIMEOUT)
                 .json(body)
                 .send()
                 .map_err(|e| CoreError::msg(e.to_string()))?
@@ -77,33 +79,35 @@ mod component {
         }
 
         fn description() -> String {
-            "Build an unsigned durable-nonce Solana memo attestation from a device sensor reading (T1)."
+            "Build an unsigned durable-nonce Solana memo attestation from a device sensor reading (T1). Always call with native tool args — never paste JSON in chat. Example: device_id=\"pi-greenhouse-7\", metric=\"temperature\", reading=21.4, unit=\"celsius\". Do not omit metric; do not truncate decimals."
                 .to_string()
         }
 
         fn parameters_schema() -> String {
             serde_json::json!({
                 "type": "object",
+                "additionalProperties": false,
                 "properties": {
                     "device_id": {
                         "type": "string",
-                        "description": "Stable device identifier to attest."
+                        "description": "Stable device identifier to attest (e.g. pi-greenhouse-7)."
                     },
                     "reading": {
-                        "type": "number",
-                        "description": "Finite sensor reading value."
+                        "type": ["number", "string"],
+                        "description": "Finite sensor reading. Preserve full precision (use 21.4, not 21)."
                     },
                     "unit": {
                         "type": "string",
-                        "description": "Unit for the sensor reading."
+                        "description": "Unit for the sensor reading (e.g. celsius)."
                     },
                     "metric": {
                         "type": "string",
-                        "description": "Sensor metric name, constrained by plugin config."
+                        "enum": ["temperature", "humidity", "uptime", "pressure", "air_quality"],
+                        "description": "Required sensor metric name. Map 'temperature reading' → temperature."
                     },
                     "memo_prefix": {
                         "type": "string",
-                        "description": "Optional memo prefix; defaults to ZCDEPIN."
+                        "description": "Optional memo prefix; defaults to ZCDEPIN. Usually omit."
                     }
                 },
                 "required": ["device_id", "reading", "unit", "metric"]

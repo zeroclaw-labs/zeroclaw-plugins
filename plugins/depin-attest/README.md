@@ -110,15 +110,26 @@ ZCDEPIN|device-7|temperature|21.234568|celsius|5733333|162751dec7d2
 Expected summary shape:
 
 ```text
-DEPIN attest OK
-device: device-7
-metric: temperature=21.234568 celsius
-period: 5733333
-hash: 162751dec7d2...
-nonce: <configured nonce account>
-durability: durable-nonce
-unsigned_tx_base64: <unsigned durable-nonce transaction>
+✅ DePIN attestation ready (T1)
+📱 Device    device-7
+🌡 Reading   temperature = 21.234568 celsius
+⏱ Period    5733333
+🔗 Hash      162751dec7d2…
+🔐 Nonce     <full nonce account pubkey>
+   fp        <durable-nonce fingerprint>
+🛡 Custody   unsigned — sign with payer wallet, then broadcast
+   (this plugin never submits)
+
+📦 unsigned_tx_base64 (N chars) — copy all of it:
+<full unsigned durable-nonce transaction>
 ```
+
+## Production notes
+
+- **RPC**: 15s connect timeout on wasm HTTP; one automatic retry on transient transport / rate-limit errors.
+- **Nonce single-flight**: one durable-nonce account supports one in-flight unsigned tx at a time. After the human signs and submits, rebuild before signing another. The summary includes a nonce fingerprint (`fp`) so operators can spot stale builds.
+- **memo_prefix**: validated like other memo fields (no `|` / control characters).
+- **Custody**: still T1 — plugin never signs or submits.
 
 ## Prompt-Injection Transcript
 
