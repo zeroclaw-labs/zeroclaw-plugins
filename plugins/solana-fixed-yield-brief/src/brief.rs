@@ -1,10 +1,9 @@
 //! Pure fixed-yield selection, quote-request, scoring, and rendering core.
 //!
 //! There is no wasm, HTTP, wallet, or signing dependency here. Host tests pass
-//! fixture data through [`MarketDataSource`], exercising the same path used by
+//! fixture data through [`ExponentDataSource`], exercising the same path used by
 //! the component while guaranteeing that tests never touch a live endpoint.
 
-use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 
 use serde::Deserialize;
@@ -15,32 +14,45 @@ const SECONDS_PER_YEAR: f64 = 31_557_600.0;
 const SOL_MINT: &str = "So11111111111111111111111111111111111111112";
 const BULKSOL_MINT: &str = "BULKoNSGzxtCqzwTvg5hFJg8fx6dqZRScyXe5LYMfxrn";
 const MAX_MARKETS_TO_QUOTE: usize = 8;
+const QUOTES_PER_RESULT: usize = 3;
 const MAX_VAULTS: usize = 256;
 const MAX_SY_TOKENS: usize = 256;
 const MAX_VENUES_PER_TYPE: usize = 16;
-const MIN_HURDLE_APY_BPS: u32 = 100;
-const MIN_EXECUTION_COST_LAMPORTS: u64 = 100_000;
+const MIN_SOL_NOTIONAL_LAMPORTS: u64 = 1_000_000;
+const MAX_SOL_NOTIONAL_LAMPORTS: u64 = 10_000_000_000_000;
+const MIN_HURDLE_APY_BPS: u32 = 550;
+const MAX_HURDLE_APY_BPS: u32 = 100_000;
+const MIN_EXECUTION_COST_LAMPORTS: u64 = 1_000_000;
 const MIN_EXCESS_LAMPORTS: u64 = 1_000_000;
 const MIN_TVL_MULTIPLE: u32 = 20;
+const MAX_TVL_MULTIPLE: u32 = 1_000;
+const MIN_RESULTS: u8 = 1;
+const MAX_RESULTS: u8 = 3;
+const MAX_MATURITY_DRIFT_YEARS: f64 = 3.0 / 365.25;
+const MAX_APY_DRIFT: f64 = 0.05;
+const MAX_QUOTE_RELATIVE_DRIFT: f64 = 0.05;
+const MAX_ROUTE_PERCENTAGE_DRIFT_POINTS: f64 = 0.01;
+const REQUIRED_NORMALIZED_EXCHANGE_RATE: f64 = 1.0;
+const MAX_EXCHANGE_RATE_DRIFT: f64 = 1e-9;
 
 fn default_hurdle_apy_bps() -> u32 {
-    550
+    MIN_HURDLE_APY_BPS
 }
 
 fn default_execution_cost_lamports() -> u64 {
-    1_000_000
+    MIN_EXECUTION_COST_LAMPORTS
 }
 
 fn default_minimum_excess_lamports() -> u64 {
-    1_000_000
+    MIN_EXCESS_LAMPORTS
 }
 
 fn default_minimum_tvl_multiple() -> u32 {
-    20
+    MIN_TVL_MULTIPLE
 }
 
 fn default_max_results() -> u8 {
-    1
+    MIN_RESULTS
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -63,17 +75,19 @@ pub struct BriefArgs {
 
 impl BriefArgs {
     fn validate(&self) -> Result<(), String> {
-        if !(1_000_000..=10_000_000_000_000).contains(&self.sol_notional_lamports) {
+        if !(MIN_SOL_NOTIONAL_LAMPORTS..=MAX_SOL_NOTIONAL_LAMPORTS)
+            .contains(&self.sol_notional_lamports)
+        {
             return Err("sol_notional_lamports must be between 0.001 and 10,000 SOL".to_string());
         }
-        if !(MIN_HURDLE_APY_BPS..=100_000).contains(&self.hurdle_apy_bps) {
-            return Err("hurdle_apy_bps must be between 100 and 100000".to_string());
+        if !(MIN_HURDLE_APY_BPS..=MAX_HURDLE_APY_BPS).contains(&self.hurdle_apy_bps) {
+            return Err("hurdle_apy_bps must be between 550 and 100000".to_string());
         }
         if !(MIN_EXECUTION_COST_LAMPORTS..=self.sol_notional_lamports)
             .contains(&self.execution_cost_lamports)
         {
             return Err(
-                "execution_cost_lamports must be at least 100000 and not exceed sol_notional_lamports"
+                "execution_cost_lamports must be at least 1000000 and not exceed sol_notional_lamports"
                     .to_string(),
             );
         }
@@ -85,19 +99,68 @@ impl BriefArgs {
                     .to_string(),
             );
         }
-        if !(MIN_TVL_MULTIPLE..=1_000).contains(&self.minimum_tvl_multiple) {
+        if !(MIN_TVL_MULTIPLE..=MAX_TVL_MULTIPLE).contains(&self.minimum_tvl_multiple) {
             return Err("minimum_tvl_multiple must be between 20 and 1000".to_string());
         }
-        if !(1..=3).contains(&self.max_results) {
+        if !(MIN_RESULTS..=MAX_RESULTS).contains(&self.max_results) {
             return Err("max_results must be between 1 and 3".to_string());
         }
         Ok(())
     }
+
+    /// One source of truth for tool discovery defaults and runtime bounds.
+    pub fn parameters_schema() -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "sol_notional_lamports": {
+                    "type": "integer",
+                    "minimum": MIN_SOL_NOTIONAL_LAMPORTS,
+                    "maximum": MAX_SOL_NOTIONAL_LAMPORTS,
+                    "description": "SOL-denominated normalized quote notional in lamports; not proof that the underlying base-token leg is funded."
+                },
+                "hurdle_apy_bps": {
+                    "type": "integer",
+                    "minimum": MIN_HURDLE_APY_BPS,
+                    "maximum": MAX_HURDLE_APY_BPS,
+                    "default": default_hurdle_apy_bps(),
+                    "description": "Alternative annual yield in basis points; the conservative floor is 550 (5.50%)."
+                },
+                "execution_cost_lamports": {
+                    "type": "integer",
+                    "minimum": MIN_EXECUTION_COST_LAMPORTS,
+                    "default": default_execution_cost_lamports(),
+                    "description": "Estimated total of base-token acquisition/redemption, entry, priority, tip, and other non-market costs."
+                },
+                "minimum_excess_lamports": {
+                    "type": "integer",
+                    "minimum": MIN_EXCESS_LAMPORTS,
+                    "default": default_minimum_excess_lamports(),
+                    "description": "Minimum projected normalized term advantage required for the floor-met label."
+                },
+                "minimum_tvl_multiple": {
+                    "type": "integer",
+                    "minimum": MIN_TVL_MULTIPLE,
+                    "maximum": MAX_TVL_MULTIPLE,
+                    "default": default_minimum_tvl_multiple(),
+                    "description": "Require reported normalized TVL to be at least this multiple of quote notional."
+                },
+                "max_results": {
+                    "type": "integer",
+                    "minimum": MIN_RESULTS,
+                    "maximum": MAX_RESULTS,
+                    "default": default_max_results()
+                }
+            },
+            "required": ["sol_notional_lamports"],
+            "additionalProperties": false
+        })
+    }
 }
 
-/// Fixed market-data boundary. The wasm shim implements it with fixed HTTPS
-/// endpoints; host tests implement it with in-memory fixtures.
-pub trait MarketDataSource {
+/// Exponent-specific data boundary. The wasm shim implements it with fixed
+/// HTTPS endpoints; host tests implement it with in-memory fixtures.
+pub trait ExponentDataSource {
     fn now_unix_seconds(&self) -> Result<u64, String>;
     fn vaults(&self) -> Result<Value, String>;
     fn sy_tokens(&self) -> Result<Value, String>;
@@ -107,9 +170,36 @@ pub trait MarketDataSource {
 #[derive(Debug, Clone)]
 pub struct BriefReport {
     pub output: String,
+    pub candidates: Vec<BriefCandidate>,
     pub markets_eligible: usize,
     pub quotes_attempted: usize,
     pub quotes_succeeded: usize,
+    pub diagnostics: QuoteDiagnostics,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct QuoteDiagnostics {
+    pub fetch_failed: usize,
+    pub schema_rejected: usize,
+    pub upstream_rejected: usize,
+    pub integrity_rejected: usize,
+    pub clock_rejected: usize,
+}
+
+#[derive(Debug, Clone)]
+pub struct BriefCandidate {
+    pub label: String,
+    pub underlying_mint: String,
+    pub maturity: String,
+    pub pt_mint: String,
+    pub projected_profit_lamports: i128,
+    pub excess_lamports: i128,
+    pub quote_apy_bps: u32,
+    pub underlying_apy_bps: Option<u32>,
+    pub tvl_multiple: u64,
+    pub fee_pt_atoms: u64,
+    pub route: &'static str,
+    pub meets_excess_floor: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -138,6 +228,7 @@ struct AddressRecord {
 #[derive(Debug, Deserialize)]
 struct SyToken {
     mint: String,
+    decimals: u8,
     quote_asset: Asset,
     underlying_asset: Asset,
 }
@@ -160,9 +251,10 @@ struct MarketRequest {
     sy_exchange_rate: f64,
     pt_price: f64,
     implied_apy: f64,
-    underlying_apy: f64,
+    underlying_apy: Option<f64>,
+    end_unix_seconds: u64,
     years_to_maturity: f64,
-    tvl_lamports: u64,
+    base_tvl_atoms: u64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -192,23 +284,16 @@ struct QuoteRoute {
     percentage: f64,
 }
 
-#[derive(Debug, Clone)]
-struct ScoredCandidate {
-    label: String,
-    underlying_mint: String,
-    maturity: String,
-    pt_mint: String,
-    projected_profit_lamports: i128,
-    excess_lamports: i128,
-    quote_apy_bps: u32,
-    underlying_apy_bps: u32,
-    tvl_multiple: u64,
-    fee_out_lamports: u64,
-    route: &'static str,
-    meets_excess_floor: bool,
-}
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct NormalizedSolLamports(u64);
 
-pub fn generate_brief<S: MarketDataSource>(
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct BaseAtoms(u64);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PtAtoms(u64);
+
+pub fn generate_brief<S: ExponentDataSource>(
     source: &S,
     args: &BriefArgs,
 ) -> Result<BriefReport, String> {
@@ -240,30 +325,60 @@ pub fn generate_brief<S: MarketDataSource>(
         ));
     }
 
-    let mut markets = eligible_markets(vaults, sy_tokens, args, now_unix_seconds);
+    let catalog_rows = vaults.len();
+    let mut markets = eligible_markets(vaults, sy_tokens, args, now_unix_seconds)?;
     let markets_eligible = markets.len();
-    markets.truncate(MAX_MARKETS_TO_QUOTE);
+    if markets_eligible == 0 {
+        return Err(format!(
+            "UNPROVEN: 0/{catalog_rows} Exponent vault rows passed bounded quote eligibility"
+        ));
+    }
+    let quote_budget = usize::from(args.max_results)
+        .saturating_mul(QUOTES_PER_RESULT)
+        .min(MAX_MARKETS_TO_QUOTE);
+    markets.truncate(quote_budget);
     let quotes_attempted = markets.len();
 
     let mut scored = Vec::new();
     let mut quotes_succeeded = 0usize;
+    let mut diagnostics = QuoteDiagnostics::default();
     for market in markets {
-        let request = quote_request(&market, args.sol_notional_lamports);
+        let normalized_notional = NormalizedSolLamports(args.sol_notional_lamports);
+        let Some(base_notional) = normalized_to_base_atoms(&market, normalized_notional) else {
+            diagnostics.integrity_rejected += 1;
+            continue;
+        };
+        let request = quote_request(&market, base_notional);
         let Ok(value) = source.quote(&request) else {
+            diagnostics.fetch_failed += 1;
             continue;
         };
         let Ok(envelope) = serde_json::from_value::<QuoteEnvelope>(value) else {
+            diagnostics.schema_rejected += 1;
             continue;
         };
         if !envelope.success {
+            diagnostics.upstream_rejected += 1;
             continue;
         }
         let Some(data) = envelope.data else {
+            diagnostics.schema_rejected += 1;
             continue;
         };
-        if let Some(candidate) = score_quote(&market, data, args) {
+        let Ok(scored_at) = source.now_unix_seconds() else {
+            diagnostics.clock_rejected += 1;
+            continue;
+        };
+        if scored_at < now_unix_seconds || scored_at >= market.end_unix_seconds {
+            diagnostics.clock_rejected += 1;
+            continue;
+        }
+        let current_years = (market.end_unix_seconds - scored_at) as f64 / SECONDS_PER_YEAR;
+        if let Some(candidate) = score_quote(&market, data, args, base_notional, current_years) {
             quotes_succeeded += 1;
             scored.push(candidate);
+        } else {
+            diagnostics.integrity_rejected += 1;
         }
     }
 
@@ -271,27 +386,31 @@ pub fn generate_brief<S: MarketDataSource>(
         b.excess_lamports
             .cmp(&a.excess_lamports)
             .then_with(|| b.quote_apy_bps.cmp(&a.quote_apy_bps))
+            .then_with(|| a.pt_mint.cmp(&b.pt_mint))
     });
     scored.truncate(args.max_results as usize);
 
     if quotes_attempted > 0 && quotes_succeeded == 0 {
         return Err(format!(
-            "UNPROVEN: 0/{quotes_attempted} attempted quotes were coherent across {markets_eligible} eligible catalog markets"
+            "UNPROVEN: 0/{quotes_attempted} coherent Exponent quotes across {markets_eligible} eligible markets (fetch {}, schema {}, upstream {}, integrity {}, clock {})",
+            diagnostics.fetch_failed,
+            diagnostics.schema_rejected,
+            diagnostics.upstream_rejected,
+            diagnostics.integrity_rejected,
+            diagnostics.clock_rejected,
         ));
     }
 
-    Ok(BriefReport {
-        output: render_brief(
-            &scored,
-            args,
-            markets_eligible,
-            quotes_succeeded,
-            quotes_attempted,
-        ),
+    let mut report = BriefReport {
+        output: String::new(),
+        candidates: scored,
         markets_eligible,
         quotes_attempted,
         quotes_succeeded,
-    })
+        diagnostics,
+    };
+    report.output = render_brief(&report, args);
+    Ok(report)
 }
 
 fn eligible_markets(
@@ -299,32 +418,43 @@ fn eligible_markets(
     sy_tokens: Vec<SyToken>,
     args: &BriefArgs,
     now_unix_seconds: u64,
-) -> Vec<MarketRequest> {
-    let sy_by_mint: HashMap<String, SyToken> = sy_tokens
-        .into_iter()
-        .filter(|sy| is_base58_address(&sy.mint))
-        .map(|sy| (sy.mint.clone(), sy))
-        .collect();
+) -> Result<Vec<MarketRequest>, String> {
+    let mut sy_by_mint = HashMap::new();
+    for sy in sy_tokens {
+        if !is_solana_pubkey(&sy.mint) {
+            continue;
+        }
+        if sy_by_mint.insert(sy.mint.clone(), sy).is_some() {
+            return Err("UNPROVEN: duplicate Exponent SY mint identity".to_string());
+        }
+    }
 
     let minimum_tvl = args
         .sol_notional_lamports
         .saturating_mul(args.minimum_tvl_multiple as u64);
-    let hurdle = args.hurdle_apy_bps as f64 / 10_000.0;
-
-    let mut markets: Vec<MarketRequest> = vaults
-        .into_iter()
-        .filter_map(|vault| {
-            let sy = sy_by_mint.get(&vault.sy_token)?;
-            if sy.quote_asset.mint != SOL_MINT || sy.quote_asset.decimals != 9 {
-                return None;
-            }
-            if sy.underlying_asset.decimals != 9 || !is_base58_address(&sy.underlying_asset.mint) {
-                return None;
-            }
-            if !is_base58_address(&vault.address)
-                || !is_base58_address(&vault.pt_mint)
-                || !is_base58_address(&vault.sy_token)
+    let mut seen_vaults = HashSet::new();
+    let mut seen_pt_mints = HashSet::new();
+    let mut markets = Vec::new();
+    for vault in vaults {
+        let maybe_market = (|| {
+            if !is_solana_pubkey(&vault.address)
+                || !is_solana_pubkey(&vault.pt_mint)
+                || !is_solana_pubkey(&vault.sy_token)
             {
+                return None;
+            }
+            if !seen_vaults.insert(vault.address.clone())
+                || !seen_pt_mints.insert(vault.pt_mint.clone())
+            {
+                return Some(Err(
+                    "UNPROVEN: duplicate Exponent vault or PT mint identity".to_string(),
+                ));
+            }
+            let sy = sy_by_mint.get(&vault.sy_token)?;
+            if sy.decimals != 9 || sy.quote_asset.mint != SOL_MINT || sy.quote_asset.decimals != 9 {
+                return None;
+            }
+            if sy.underlying_asset.decimals != 9 || !is_solana_pubkey(&sy.underlying_asset.mint) {
                 return None;
             }
             let end_unix_seconds = parse_utc_timestamp(&vault.end_timestamp)?;
@@ -333,33 +463,43 @@ fn eligible_markets(
             }
             let maturity = vault.end_timestamp.get(..10)?.to_string();
             let implied_apy = finite_range(vault.implied_apy?, 0.0, 1.0)?;
-            let underlying_apy = finite_range(vault.underlying_apy.unwrap_or(0.0), 0.0, 1.0)?;
+            let underlying_apy = match vault.underlying_apy {
+                Some(value) => Some(finite_inclusive_range(value, 0.0, 1.0)?),
+                None => None,
+            };
             let years_to_maturity = (end_unix_seconds - now_unix_seconds) as f64 / SECONDS_PER_YEAR;
             let reported_years = finite_range(vault.years_to_maturity?, 0.0, 1.0)?;
             if !(0.0..=1.0).contains(&years_to_maturity)
-                || (years_to_maturity - reported_years).abs() > 3.0 / 365.25
+                || (years_to_maturity - reported_years).abs() > MAX_MATURITY_DRIFT_YEARS
             {
                 return None;
             }
             let pt_price = finite_range(vault.pt_price?, 0.5, 1.5)?;
-            if pt_price >= 1.0 || implied_apy <= hurdle {
+            if pt_price >= 1.0 {
                 return None;
             }
-            let tvl_lamports = vault.tvl_in_base_token?;
-            if tvl_lamports < minimum_tvl {
+            let price_implied_apy = (1.0 / pt_price).powf(1.0 / years_to_maturity) - 1.0;
+            if !price_implied_apy.is_finite()
+                || (price_implied_apy - implied_apy).abs() > MAX_APY_DRIFT
+            {
                 return None;
             }
-            let sy_exchange_rate = finite_range(
-                vault.sy_exchange_rate.unwrap_or(1.0),
-                0.000_001,
-                1_000_000.0,
-            )?;
+            let base_tvl_atoms = vault.tvl_in_base_token?;
+            if base_tvl_atoms < minimum_tvl {
+                return None;
+            }
+            let sy_exchange_rate = finite_range(vault.sy_exchange_rate?, 0.000_001, 1_000_000.0)?;
+            if (sy_exchange_rate - REQUIRED_NORMALIZED_EXCHANGE_RATE).abs()
+                > MAX_EXCHANGE_RATE_DRIFT
+            {
+                return None;
+            }
             let orderbook_addresses = bounded_venue_addresses(vault.orderbooks)?;
             let clmm_addresses = bounded_venue_addresses(vault.clmm_markets)?;
             if orderbook_addresses.is_empty() && clmm_addresses.is_empty() {
                 return None;
             }
-            Some(MarketRequest {
+            Some(Ok(MarketRequest {
                 label: safe_asset_label(&sy.underlying_asset.mint),
                 underlying_mint: sy.underlying_asset.mint.clone(),
                 maturity,
@@ -371,26 +511,40 @@ fn eligible_markets(
                 pt_price,
                 implied_apy,
                 underlying_apy,
+                end_unix_seconds,
                 years_to_maturity,
-                tvl_lamports,
-            })
-        })
-        .collect();
+                base_tvl_atoms,
+            }))
+        })();
+        match maybe_market {
+            Some(Ok(market)) => markets.push(market),
+            Some(Err(error)) => return Err(error),
+            None => {}
+        }
+    }
 
     markets.sort_by(|a, b| {
-        (b.implied_apy - hurdle)
-            .partial_cmp(&(a.implied_apy - hurdle))
-            .unwrap_or(Ordering::Equal)
-            .then_with(|| b.tvl_lamports.cmp(&a.tvl_lamports))
+        estimated_catalog_excess(b, args)
+            .cmp(&estimated_catalog_excess(a, args))
+            .then_with(|| b.base_tvl_atoms.cmp(&a.base_tvl_atoms))
+            .then_with(|| a.pt_mint.cmp(&b.pt_mint))
     });
-    markets
+    Ok(markets)
 }
 
-fn quote_request(market: &MarketRequest, sol_notional_lamports: u64) -> Value {
+fn normalized_to_base_atoms(
+    market: &MarketRequest,
+    normalized: NormalizedSolLamports,
+) -> Option<BaseAtoms> {
+    ((market.sy_exchange_rate - REQUIRED_NORMALIZED_EXCHANGE_RATE).abs() <= MAX_EXCHANGE_RATE_DRIFT)
+        .then_some(BaseAtoms(normalized.0))
+}
+
+fn quote_request(market: &MarketRequest, base_notional: BaseAtoms) -> Value {
     json!({
         "vaultAddress": market.vault_address,
         "direction": "BASE_TO_PT",
-        "inAmount": sol_notional_lamports,
+        "inAmount": base_notional.0,
         "syExchangeRate": market.sy_exchange_rate,
         "orderbookAddresses": market.orderbook_addresses,
         "clmmAddresses": market.clmm_addresses,
@@ -404,38 +558,41 @@ fn score_quote(
     market: &MarketRequest,
     data: QuoteData,
     args: &BriefArgs,
-) -> Option<ScoredCandidate> {
+    base_notional: BaseAtoms,
+    years_to_maturity: f64,
+) -> Option<BriefCandidate> {
     if data.is_legacy_market
         || data.total_out_amount == 0
         || data.total_fees > data.total_out_amount
     {
         return None;
     }
-    let expected_out = args.sol_notional_lamports as f64 / market.pt_price;
+    let expected_out = base_notional.0 as f64 / market.pt_price;
     let quoted_out = data.total_out_amount as f64;
     if !expected_out.is_finite()
-        || quoted_out < expected_out * 0.95
-        || quoted_out > expected_out * 1.05
+        || quoted_out < expected_out * (1.0 - MAX_QUOTE_RELATIVE_DRIFT)
+        || quoted_out > expected_out * (1.0 + MAX_QUOTE_RELATIVE_DRIFT)
     {
         return None;
     }
-    let quote_growth = quoted_out / args.sol_notional_lamports as f64;
-    let quote_apy = quote_growth.powf(1.0 / market.years_to_maturity) - 1.0;
-    if !quote_apy.is_finite() || (quote_apy - market.implied_apy).abs() > 0.05 {
+    let quote_growth = quoted_out / base_notional.0 as f64;
+    let quote_apy = quote_growth.powf(1.0 / years_to_maturity) - 1.0;
+    if !quote_apy.is_finite() || (quote_apy - market.implied_apy).abs() > MAX_APY_DRIFT {
         return None;
     }
-    let route = validate_routes(market, &data, args.sol_notional_lamports)?;
-    let annual_hurdle = args.hurdle_apy_bps as f64 / 10_000.0;
-    let hurdle_growth = (1.0 + annual_hurdle).powf(market.years_to_maturity) - 1.0;
-    if !hurdle_growth.is_finite() || hurdle_growth < 0.0 {
-        return None;
-    }
-    let hurdle_profit = (args.sol_notional_lamports as f64 * hurdle_growth).round() as i128;
-    let gross_profit = data.total_out_amount as i128 - args.sol_notional_lamports as i128;
+    let route = validate_routes(market, &data, base_notional)?;
+    let hurdle_profit = hurdle_profit_lamports(
+        NormalizedSolLamports(args.sol_notional_lamports),
+        args.hurdle_apy_bps,
+        years_to_maturity,
+    )?;
+    let pt_at_maturity = PtAtoms(data.total_out_amount);
+    let normalized_at_maturity = pt_redemption_to_normalized(market, pt_at_maturity)?;
+    let gross_profit = normalized_at_maturity.0 as i128 - args.sol_notional_lamports as i128;
     let projected_profit = gross_profit - args.execution_cost_lamports as i128;
     let excess = projected_profit - hurdle_profit;
 
-    Some(ScoredCandidate {
+    Some(BriefCandidate {
         label: market.label.clone(),
         underlying_mint: market.underlying_mint.clone(),
         maturity: market.maturity.clone(),
@@ -443,9 +600,9 @@ fn score_quote(
         projected_profit_lamports: projected_profit,
         excess_lamports: excess,
         quote_apy_bps: apy_to_bps(quote_apy),
-        underlying_apy_bps: apy_to_bps(market.underlying_apy),
-        tvl_multiple: market.tvl_lamports / args.sol_notional_lamports,
-        fee_out_lamports: data.total_fees,
+        underlying_apy_bps: market.underlying_apy.map(apy_to_bps),
+        tvl_multiple: market.base_tvl_atoms / base_notional.0,
+        fee_pt_atoms: data.total_fees,
         route,
         meets_excess_floor: excess >= args.minimum_excess_lamports as i128,
     })
@@ -454,7 +611,7 @@ fn score_quote(
 fn validate_routes(
     market: &MarketRequest,
     data: &QuoteData,
-    sol_notional_lamports: u64,
+    base_notional: BaseAtoms,
 ) -> Option<&'static str> {
     if data.routes.is_empty() || data.routes.len() > 3 {
         return None;
@@ -463,7 +620,7 @@ fn validate_routes(
     let mut output_sum = 0_u64;
     let mut fee_sum = 0_u64;
     let mut percentage_sum = 0.0_f64;
-    let mut dominant = (0.0_f64, "router");
+    let mut dominant = (0_u64, "router");
 
     for route in &data.routes {
         let source = match route.source.as_str() {
@@ -473,7 +630,7 @@ fn validate_routes(
             }
             _ => return None,
         };
-        if !is_base58_address(&route.source_address)
+        if !is_solana_pubkey(&route.source_address)
             || route.in_amount == 0
             || route.out_amount == 0
             || route.fees > route.out_amount
@@ -487,53 +644,50 @@ fn validate_routes(
         output_sum = output_sum.checked_add(route.out_amount)?;
         fee_sum = fee_sum.checked_add(route.fees)?;
         percentage_sum += route.percentage;
-        if route.percentage > dominant.0 {
-            dominant = (route.percentage, source);
+        let expected_percentage = route.in_amount as f64 * 100.0 / base_notional.0 as f64;
+        if (route.percentage - expected_percentage).abs() > MAX_ROUTE_PERCENTAGE_DRIFT_POINTS {
+            return None;
+        }
+        if route.in_amount > dominant.0 {
+            dominant = (route.in_amount, source);
         }
     }
 
-    if input_sum != sol_notional_lamports
+    if input_sum != base_notional.0
         || output_sum != data.total_out_amount
         || fee_sum != data.total_fees
-        || (percentage_sum - 100.0).abs() > 0.01
+        || (percentage_sum - 100.0).abs() > MAX_ROUTE_PERCENTAGE_DRIFT_POINTS
     {
         return None;
     }
     Some(dominant.1)
 }
 
-fn render_brief(
-    candidates: &[ScoredCandidate],
-    args: &BriefArgs,
-    markets_eligible: usize,
-    quotes_succeeded: usize,
-    quotes_attempted: usize,
-) -> String {
+fn render_brief(report: &BriefReport, args: &BriefArgs) -> String {
     let mut output = format!(
-        "T0 fixed-yield brief — normalized SOL notional {:.6}; hurdle {:.2}%; estimated other costs {:.6} SOL; excess floor {:.6} SOL; TVL floor {}x; quote coverage {}/{} attempted; {} eligible.\n",
+        "T0 Exponent | normalized {:.6} SOL; hurdle {:.2}%; costs/floor {:.6}/{:.6} SOL; TVL >= {}x; coverage {}/{} quotes ({} eligible).\n",
         args.sol_notional_lamports as f64 / LAMPORTS_PER_SOL,
         args.hurdle_apy_bps as f64 / 100.0,
         args.execution_cost_lamports as f64 / LAMPORTS_PER_SOL,
         args.minimum_excess_lamports as f64 / LAMPORTS_PER_SOL,
         args.minimum_tvl_multiple,
-        quotes_succeeded,
-        quotes_attempted,
-        markets_eligible,
+        report.quotes_succeeded,
+        report.quotes_attempted,
+        report.markets_eligible,
     );
 
-    if candidates.is_empty() {
-        output.push_str(
-            "No catalog market cleared the prequote SOL-normalization, maturity, APY, and depth gates.\n",
-        );
-    } else {
-        for (index, candidate) in candidates.iter().enumerate() {
-            let floor = if candidate.meets_excess_floor {
-                "floor met"
-            } else {
-                "below floor"
-            };
-            output.push_str(&format!(
-                "{}. {} {}: projected normalized term {} SOL; excess {} vs hurdle ({}); quote APY {:.2}% (underlying {:.2}%); TVL {}x; fee {:.6} PT; {}; base mint {}; PT mint {}.\n",
+    for (index, candidate) in report.candidates.iter().enumerate() {
+        let floor = if candidate.meets_excess_floor {
+            "met"
+        } else {
+            "below"
+        };
+        let underlying = candidate
+            .underlying_apy_bps
+            .map(|bps| format!("{:.2}%", bps as f64 / 100.0))
+            .unwrap_or_else(|| "n/a".to_string());
+        output.push_str(&format!(
+                "{} {} {} | term {} SOL; excess {} ({}); APY {:.2}%/underlying {}; TVL {}x; fee {:.6} PT; {}.\nIDs base={} PT={}.\n",
                 index + 1,
                 candidate.label,
                 candidate.maturity,
@@ -541,22 +695,21 @@ fn render_brief(
                 signed_sol(candidate.excess_lamports),
                 floor,
                 candidate.quote_apy_bps as f64 / 100.0,
-                candidate.underlying_apy_bps as f64 / 100.0,
+                underlying,
                 candidate.tvl_multiple,
-                candidate.fee_out_lamports as f64 / LAMPORTS_PER_SOL,
+                candidate.fee_pt_atoms as f64 / LAMPORTS_PER_SOL,
                 candidate.route,
                 candidate.underlying_mint,
                 candidate.pt_mint,
             ));
-        }
     }
-    if quotes_succeeded < quotes_attempted || quotes_attempted < markets_eligible {
-        output.push_str(
-            "Coverage is partial; failed or unattempted markets are unproven, not negative.\n",
-        );
+    if report.quotes_succeeded < report.quotes_attempted
+        || report.quotes_attempted < report.markets_eligible
+    {
+        output.push_str("Partial coverage is unproven. ");
     }
     output.push_str(
-        "Projection assumes successful normalized-par redemption at maturity; market fee is already in PT output. Underlying base-token acquisition/redemption is not quoted and must be verified independently. Quote is not transaction simulation or execution approval. Protocol and underlying-asset risk remain.",
+        "Assumes normalized-par redemption. Base acquisition/redemption is unquoted; not simulation or approval. Exponent, underlying, depeg, and liquidity risks remain.",
     );
     output
 }
@@ -567,6 +720,38 @@ fn signed_sol(lamports: i128) -> String {
     format!("{sign}{magnitude:.6}")
 }
 
+fn estimated_catalog_excess(market: &MarketRequest, args: &BriefArgs) -> i128 {
+    let expected_pt_atoms = (args.sol_notional_lamports as f64 / market.pt_price).round() as i128;
+    let gross = expected_pt_atoms - args.sol_notional_lamports as i128;
+    let Some(hurdle) = hurdle_profit_lamports(
+        NormalizedSolLamports(args.sol_notional_lamports),
+        args.hurdle_apy_bps,
+        market.years_to_maturity,
+    ) else {
+        return i128::MIN;
+    };
+    gross - args.execution_cost_lamports as i128 - hurdle
+}
+
+fn pt_redemption_to_normalized(
+    market: &MarketRequest,
+    pt_at_maturity: PtAtoms,
+) -> Option<NormalizedSolLamports> {
+    ((market.sy_exchange_rate - REQUIRED_NORMALIZED_EXCHANGE_RATE).abs() <= MAX_EXCHANGE_RATE_DRIFT)
+        .then_some(NormalizedSolLamports(pt_at_maturity.0))
+}
+
+fn hurdle_profit_lamports(
+    notional: NormalizedSolLamports,
+    hurdle_apy_bps: u32,
+    years_to_maturity: f64,
+) -> Option<i128> {
+    let annual_hurdle = hurdle_apy_bps as f64 / 10_000.0;
+    let hurdle_growth = (1.0 + annual_hurdle).powf(years_to_maturity) - 1.0;
+    (hurdle_growth.is_finite() && hurdle_growth >= 0.0)
+        .then_some((notional.0 as f64 * hurdle_growth).round() as i128)
+}
+
 fn apy_to_bps(apy: f64) -> u32 {
     (apy * 10_000.0).round().clamp(0.0, u32::MAX as f64) as u32
 }
@@ -575,11 +760,15 @@ fn finite_range(value: f64, minimum_exclusive: f64, maximum_inclusive: f64) -> O
     (value.is_finite() && value > minimum_exclusive && value <= maximum_inclusive).then_some(value)
 }
 
+fn finite_inclusive_range(value: f64, minimum: f64, maximum: f64) -> Option<f64> {
+    (value.is_finite() && value >= minimum && value <= maximum).then_some(value)
+}
+
 fn bounded_venue_addresses(records: Vec<AddressRecord>) -> Option<Vec<String>> {
     let mut seen = HashSet::new();
     let mut addresses = Vec::new();
     for record in records {
-        if !is_base58_address(&record.address) {
+        if !is_solana_pubkey(&record.address) {
             return None;
         }
         if seen.insert(record.address.clone()) {
@@ -595,7 +784,7 @@ fn bounded_venue_addresses(records: Vec<AddressRecord>) -> Option<Vec<String>> {
 fn safe_asset_label(mint: &str) -> String {
     match mint {
         BULKSOL_MINT => "PT-BulkSOL".to_string(),
-        _ => format!("PT-mint:{mint}"),
+        _ => "PT".to_string(),
     }
 }
 
@@ -674,17 +863,9 @@ fn days_from_civil(year: i32, month: u32, day: u32) -> i64 {
     era as i64 * 146_097 + day_of_era as i64 - 719_468
 }
 
-fn is_base58_address(value: &str) -> bool {
+fn is_solana_pubkey(value: &str) -> bool {
     (32..=44).contains(&value.len())
-        && value.bytes().all(|byte| {
-            matches!(
-                byte,
-                b'1'..=b'9'
-                    | b'A'..=b'H'
-                    | b'J'..=b'N'
-                    | b'P'..=b'Z'
-                    | b'a'..=b'k'
-                    | b'm'..=b'z'
-            )
-        })
+        && bs58::decode(value)
+            .into_vec()
+            .is_ok_and(|bytes| bytes.len() == 32)
 }

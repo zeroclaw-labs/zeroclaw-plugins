@@ -18,7 +18,7 @@ mod component {
     use serde_json::Value;
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-    use crate::brief::{generate_brief, BriefArgs, MarketDataSource};
+    use crate::brief::{generate_brief, BriefArgs, BriefReport, ExponentDataSource};
     use exports::zeroclaw::plugin::plugin_info::Guest as PluginInfo;
     use exports::zeroclaw::plugin::tool::{Guest as Tool, ToolResult};
     use zeroclaw::plugin::logging::{
@@ -38,7 +38,7 @@ mod component {
 
     struct ExponentSource;
 
-    impl MarketDataSource for ExponentSource {
+    impl ExponentDataSource for ExponentSource {
         fn now_unix_seconds(&self) -> Result<u64, String> {
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)
@@ -127,52 +127,7 @@ mod component {
         }
 
         fn parameters_schema() -> String {
-            serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "sol_notional_lamports": {
-                        "type": "integer",
-                        "minimum": 1_000_000,
-                        "maximum": 10_000_000_000_000_u64,
-                        "description": "SOL-denominated normalized quote notional in lamports; not proof that the underlying base-token leg is funded."
-                    },
-                    "hurdle_apy_bps": {
-                        "type": "integer",
-                        "minimum": 100,
-                        "maximum": 100_000,
-                        "default": 550,
-                        "description": "Alternative annual yield in basis points; for example 550 means 5.50%."
-                    },
-                    "execution_cost_lamports": {
-                        "type": "integer",
-                        "minimum": 100_000,
-                        "default": 1_000_000,
-                        "description": "Estimated total of base-token acquisition/redemption, entry, priority, tip, and other non-market costs."
-                    },
-                    "minimum_excess_lamports": {
-                        "type": "integer",
-                        "minimum": 1_000_000,
-                        "default": 1_000_000,
-                        "description": "Minimum projected normalized term advantage required for the floor-met label."
-                    },
-                    "minimum_tvl_multiple": {
-                        "type": "integer",
-                        "minimum": 20,
-                        "maximum": 1_000,
-                        "default": 20,
-                        "description": "Require reported SOL-denominated TVL to be at least this multiple of quote notional."
-                    },
-                    "max_results": {
-                        "type": "integer",
-                        "minimum": 1,
-                        "maximum": 3,
-                        "default": 1
-                    }
-                },
-                "required": ["sol_notional_lamports"],
-                "additionalProperties": false
-            })
-            .to_string()
+            BriefArgs::parameters_schema().to_string()
         }
 
         fn execute(args: String) -> Result<ToolResult, String> {
@@ -193,11 +148,11 @@ mod component {
 
             match generate_brief(&ExponentSource, &parsed) {
                 Ok(report) => {
-                    emit(
+                    emit_success(
                         PluginAction::Query,
                         PluginOutcome::Success,
                         "fixed-yield brief generated",
-                        Some(report.quotes_succeeded),
+                        &report,
                     );
                     Ok(ToolResult {
                         success: true,
@@ -241,6 +196,37 @@ mod component {
                 outcome: Some(outcome),
                 duration_ms: None,
                 attrs,
+                message: message.to_string(),
+            },
+        );
+    }
+
+    fn emit_success(
+        action: PluginAction,
+        outcome: PluginOutcome,
+        message: &str,
+        report: &BriefReport,
+    ) {
+        let diagnostics = &report.diagnostics;
+        let attrs = format!(
+            "{{\"markets_eligible\":{},\"quotes_attempted\":{},\"quotes_succeeded\":{},\"fetch_failed\":{},\"schema_rejected\":{},\"upstream_rejected\":{},\"integrity_rejected\":{},\"clock_rejected\":{}}}",
+            report.markets_eligible,
+            report.quotes_attempted,
+            report.quotes_succeeded,
+            diagnostics.fetch_failed,
+            diagnostics.schema_rejected,
+            diagnostics.upstream_rejected,
+            diagnostics.integrity_rejected,
+            diagnostics.clock_rejected,
+        );
+        log_record(
+            LogLevel::Info,
+            &PluginEvent {
+                function_name: "solana_fixed_yield_brief::tool::execute".to_string(),
+                action,
+                outcome: Some(outcome),
+                duration_ms: None,
+                attrs: Some(attrs),
                 message: message.to_string(),
             },
         );

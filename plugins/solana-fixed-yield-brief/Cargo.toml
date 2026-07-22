@@ -13,6 +13,7 @@ crate-type = ["cdylib", "rlib"]
 wit-bindgen = "0.46"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+bs58 = "0.5"
 
 [target.'cfg(target_family = "wasm")'.dependencies]
 waki = { version = "0.5.1", features = ["json"] }
@@ -22,5 +23,6 @@ opt-level = "s"
 lto = true
 strip = true
 codegen-units = 1
+overflow-checks = true
 
 [workspace]
