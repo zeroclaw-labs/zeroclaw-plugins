@@ -556,6 +556,11 @@ pub fn execute_t1(
         ))
     })?;
 
+    if acct.owner != Pubkey::SYSTEM {
+        return Err(AttestError::NonceAccount(
+            "nonce account owner is not the System program — refusing to use a non-System account as durable nonce".to_string(),
+        ));
+    }
     let nonce_acct = parse_nonce_account(&acct.data).map_err(|e| {
         AttestError::NonceAccount(format!("failed to parse nonce account: {e:?}"))
     })?;
@@ -680,6 +685,11 @@ fn execute_memo_fallback(
         AttestError::NonceAccount(format!("nonce account not found: {}", cfg.nonce_account))
     })?;
 
+    if acct.owner != Pubkey::SYSTEM {
+        return Err(AttestError::NonceAccount(
+            "nonce account owner is not the System program — refusing to use a non-System account as durable nonce".to_string(),
+        ));
+    }
     let nonce_acct = parse_nonce_account(&acct.data)
         .map_err(|e| AttestError::NonceAccount(format!("failed to parse nonce account: {e:?}")))?;
 
@@ -922,6 +932,11 @@ pub fn execute_t2(
         AttestError::NonceAccount(format!("nonce account not found: {}", cfg.nonce_account))
     })?;
 
+    if acct.owner != Pubkey::SYSTEM {
+        return Err(AttestError::NonceAccount(
+            "nonce account owner is not the System program — refusing to use a non-System account as durable nonce".to_string(),
+        ));
+    }
     let nonce_acct = parse_nonce_account(&acct.data)
         .map_err(|e| AttestError::NonceAccount(format!("failed to parse nonce account: {e:?}")))?;
 

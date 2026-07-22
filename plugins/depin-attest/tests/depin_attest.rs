@@ -539,6 +539,27 @@ fn nonce_account_response(authority: &Pubkey, durable_nonce: [u8; 32]) -> serde_
     })
 }
 
+/// Like `nonce_account_response` but the account owner is SPL Token (not the
+/// System program) → the F6 owner check must reject it before parsing.
+fn nonce_account_response_wrong_owner(authority: &Pubkey, durable_nonce: [u8; 32]) -> serde_json::Value {
+    let mut data = vec![0u8; 80];
+    data[0..4].copy_from_slice(&1u32.to_le_bytes());
+    data[4..8].copy_from_slice(&1u32.to_le_bytes());
+    data[8..40].copy_from_slice(authority.as_bytes());
+    data[40..72].copy_from_slice(&durable_nonce);
+    data[72..80].copy_from_slice(&5000u64.to_le_bytes());
+    json!({
+        "result": {
+            "value": {
+                "data": [BASE64_STANDARD.encode(&data), "base64"],
+                "owner": TOKEN,
+                "lamports": 100000000,
+                "executable": false
+            }
+        }
+    })
+}
+
 /// A MockRpc with a single initialized nonce account (authority = TOKEN, matching test_config).
 fn mock_rpc_with_nonce() -> MockRpc {
     let auth = Pubkey::from_str(TOKEN).unwrap();
@@ -629,6 +650,18 @@ fn execute_t1_rejects_oversized_memo() {
     let huge = "x".repeat(MEMO_MAX_BYTES + 34);
     let err = execute_t1(&test_reading(), Some(&huge), &cfg, &rpc).unwrap_err();
     assert!(matches!(err, AttestError::InvalidReading(m) if m.contains("memo too long")));
+}
+
+/// F6: a nonce account whose on-chain owner is not the System program is
+/// rejected before it is parsed/used (defense-in-depth: the configured
+/// nonce_account is operator-trusted, but verify the owner anyway).
+#[test]
+fn execute_t1_rejects_non_system_nonce_owner() {
+    let cfg = test_config();
+    let auth = Pubkey::from_str(SYSTEM).unwrap();
+    let rpc = MockRpc::new(vec![nonce_account_response_wrong_owner(&auth, [0xBB; 32])]);
+    let err = execute_t1(&test_reading(), None, &cfg, &rpc).unwrap_err();
+    assert!(matches!(err, AttestError::NonceAccount(m) if m.contains("not the System program")));
 }
 
 #[test]
