@@ -1,0 +1,15 @@
+name = "spl-transfer-build"
+version = "0.1.0"
+description = "Build an unsigned SOL or SPL transfer for a human or a Squads multisig to approve, with spend caps enforced inside the plugin"
+author = "OxToF"
+wasm_path = "spl_transfer_build.wasm"
+capabilities = ["tool"]
+# http_client: JSON-RPC to the operator's Solana endpoint. Nothing else is
+# contacted; TLS is performed host-side.
+# config_read: the RPC URL, the sender's PUBLIC key, the per-mint spend caps,
+# and the optional durable nonce account. The caps are the security boundary and
+# they live here, out of the model's reach.
+#
+# No key material. Custody tier T1: this plugin returns bytes that only become
+# a transaction once somebody else signs them.
+permissions = ["http_client", "config_read"]
