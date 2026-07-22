@@ -1,0 +1,11 @@
+name = "token-risk-check"
+version = "0.1.0"
+description = "Score a Solana mint for rug risk: mint/freeze authority, Token-2022 permanent delegate, transfer hook and fee, holder concentration"
+author = "Iktiar Shovo"
+wasm_path = "token_risk_check.wasm"
+capabilities = ["tool"]
+# http_client: outbound HTTPS to a Solana JSON-RPC endpoint (TLS is host-side).
+# config_read: the host injects this plugin's own config section into execute
+# args as `__config`, which is where the operator's `solana_rpc_url` comes from.
+# An RPC URL often carries an API key, so it must never be hardcoded here.
+permissions = ["http_client", "config_read"]
