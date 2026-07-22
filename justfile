@@ -1,6 +1,8 @@
-# Safe Hands — one command to prove everything, offline.
-# `just prove-safety` → unit tests, the 20-fixture attack arena, clippy on both
-# targets, and clean wasm32-wasip2 release builds of all three components.
+# Safe Hands — one command to prove everything, no live network.
+# `just prove-safety` → unit tests (RPC is mocked; zero live network), the
+# 20-fixture attack arena, clippy on both targets, and clean wasm32-wasip2
+# release builds of all three components. `--locked` throughout for
+# reproducibility, matching upstream CI (tools/ci/validate_components.sh).
 
 default: prove-safety
 
@@ -13,25 +15,25 @@ prove-safety: test conformance clippy wasm
 
 # Host tests for every crate (mocked RPC, zero network).
 test:
-    cargo test --manifest-path libs/safe-hands-core/Cargo.toml
-    cargo test --manifest-path plugins/solana-tx-authorize/Cargo.toml
-    cargo test --manifest-path plugins/spl-transfer-build/Cargo.toml
-    cargo test --manifest-path plugins/squads-proposal-build/Cargo.toml
+    cargo test --locked --manifest-path libs/safe-hands-core/Cargo.toml
+    cargo test --locked --manifest-path plugins/solana-tx-authorize/Cargo.toml
+    cargo test --locked --manifest-path plugins/spl-transfer-build/Cargo.toml
+    cargo test --locked --manifest-path plugins/squads-proposal-build/Cargo.toml
 
 # The 20-fixture attack arena.
 conformance:
-    cargo run --release --manifest-path conformance/Cargo.toml
+    cargo run --locked --release --manifest-path conformance/Cargo.toml
 
 # clippy -D warnings on host and wasm targets, matching upstream CI.
 clippy:
-    cargo clippy --manifest-path libs/safe-hands-core/Cargo.toml --all-targets -- -D warnings
-    cargo clippy --manifest-path plugins/solana-tx-authorize/Cargo.toml --all-targets -- -D warnings
-    cargo clippy --manifest-path plugins/spl-transfer-build/Cargo.toml --all-targets -- -D warnings
-    cargo clippy --manifest-path plugins/squads-proposal-build/Cargo.toml --all-targets -- -D warnings
-    cargo clippy --manifest-path libs/safe-hands-core/Cargo.toml --target wasm32-wasip2 -- -D warnings
-    cargo clippy --manifest-path plugins/solana-tx-authorize/Cargo.toml --target wasm32-wasip2 -- -D warnings
-    cargo clippy --manifest-path plugins/spl-transfer-build/Cargo.toml --target wasm32-wasip2 -- -D warnings
-    cargo clippy --manifest-path plugins/squads-proposal-build/Cargo.toml --target wasm32-wasip2 -- -D warnings
+    cargo clippy --locked --manifest-path libs/safe-hands-core/Cargo.toml --all-targets -- -D warnings
+    cargo clippy --locked --manifest-path plugins/solana-tx-authorize/Cargo.toml --all-targets -- -D warnings
+    cargo clippy --locked --manifest-path plugins/spl-transfer-build/Cargo.toml --all-targets -- -D warnings
+    cargo clippy --locked --manifest-path plugins/squads-proposal-build/Cargo.toml --all-targets -- -D warnings
+    cargo clippy --locked --manifest-path libs/safe-hands-core/Cargo.toml --target wasm32-wasip2 -- -D warnings
+    cargo clippy --locked --manifest-path plugins/solana-tx-authorize/Cargo.toml --target wasm32-wasip2 -- -D warnings
+    cargo clippy --locked --manifest-path plugins/spl-transfer-build/Cargo.toml --target wasm32-wasip2 -- -D warnings
+    cargo clippy --locked --manifest-path plugins/squads-proposal-build/Cargo.toml --target wasm32-wasip2 -- -D warnings
 
 # wasm32-wasip2 release components for all three plugins.
 wasm:
