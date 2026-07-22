@@ -10,7 +10,7 @@
 | --- | --- |
 | **PR (primary)** | https://github.com/zeroclaw-labs/zeroclaw-plugins/pull/126 |
 | **Public fork / branch** | https://github.com/darkty0x/zeroclaw-plugins/tree/feat/solana-depin-core |
-| **Demo video (≤3 min)** | `~/Desktop/zeroclaw-depin-demo.mp4` — upload to Drive/YouTube/Streamable, then paste URL |
+| **Demo video (≤3 min)** | `~/Desktop/zeroclaw-depin-demo.mp4` (~2:25 — terminal attest/sign/submit + Telegram channel scenes + explorer). Upload to Drive/YouTube/Streamable, then paste URL |
 | **Telegram bot (live channel)** | https://t.me/zeroclaw_plugin_bot |
 | **On-chain proof (devnet)** | https://explorer.solana.com/tx/3vY2Q2aEn9YWy7T9H4JaD1VBdCPhmkn16W9Ukf3wSWZsRwmPnV2WFd3A762yiH7N3NPE7wQ8j3QrvjKs5NGoP5CE?cluster=devnet |
 
@@ -45,11 +45,20 @@ Pi SOP pack (BME280 → attest → Telegram approve → session-key sign), memo 
 
 ### Demo script (≤3 min, no slides)
 
-1. Terminal: `zeroclaw-plugins plugin list` → both DePIN plugins installed.  
-2. Phone Telegram `@zeroclaw_plugin_bot`: “attest temperature 21.4 for pi-greenhouse-7”.  
-3. Terminal: show unsigned durable-nonce tx / human sign+submit / explorer Success.  
-4. Agent or cron: `depin_uptime_watch` → `OK`.  
-5. Say on camera: “T0/T1 only — plugin never held a key.”
+1. Title + plugin discovery (terminal).  
+2. Terminal: durable-nonce `depin_attest` → human sign/submit → explorer Success.  
+3. **Telegram `@zeroclaw_plugin_bot`:** user asks to attest `pi-greenhouse-7` → agent returns `✅` T1 card (incl. `unsigned_tx_base64`) → uptime watch `🟢 OK`.  
+4. On-chain explorer still.  
+5. Custody close: “T0/T1 only — plugin never held a key.”
+
+Render locally:
+
+```bash
+demo/recording/.venv/bin/python demo/scripts/render-long-demo-video.py \
+  --log demo/recording/depin-demo.txt \
+  --explorer demo/recording/explorer.png \
+  --out demo/recording/zeroclaw-depin-demo-2min.mp4
+```
 
 ## Discord / X (tiebreak)
 
