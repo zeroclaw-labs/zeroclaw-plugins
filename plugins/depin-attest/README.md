@@ -256,7 +256,7 @@ The bounty traps are real. Here's what we hit and how we solved each:
 
 ```bash
 cd plugins/depin-attest
-cargo test                                        # 78 host tests (72 core + 6 demo), no wasm needed
+cargo test                                        # 83 host tests (77 core + 6 demo), no wasm needed
 rustup target add wasm32-wasip2
 cargo build --target wasm32-wasip2 --release      # the component
 cargo clippy --all-targets -- -D warnings         # zero warnings
