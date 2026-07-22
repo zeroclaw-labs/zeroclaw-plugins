@@ -256,6 +256,11 @@ fn parse_legacy(bytes: &[u8]) -> Result<ParsedParts, String> {
     let ro_signed = msg.header.num_readonly_signed_accounts as usize;
     let ro_unsigned = msg.header.num_readonly_unsigned_accounts as usize;
     let key_count = msg.account_keys.len();
+    // Same header-partition invariant as v0: a malformed legacy header would
+    // underflow the writable computation. Fail closed on inconsistency.
+    if ro_signed > num_signers || num_signers.saturating_add(ro_unsigned) > key_count {
+        return Err("invalid legacy header: readonly counts exceed key partition".to_string());
+    }
     let is_signer = |i: usize| i < num_signers;
     let is_writable = |i: usize| {
         (i < num_signers - ro_signed) || (i >= num_signers && i < key_count - ro_unsigned)
@@ -267,18 +272,19 @@ fn parse_legacy(bytes: &[u8]) -> Result<ParsedParts, String> {
         let program_index = ci.program_id_index;
         keys.get(program_index as usize)
             .ok_or("program id index out of range")?;
-        let metas: Vec<solana_instruction::AccountMeta> = ci
-            .accounts
-            .iter()
-            .map(|idx| {
-                let key = keys[*idx as usize];
-                solana_instruction::AccountMeta {
-                    pubkey: key,
-                    is_signer: is_signer(*idx as usize),
-                    is_writable: is_writable(*idx as usize),
-                }
-            })
-            .collect();
+        // Bounds-check every account index rather than indexing directly — an
+        // out-of-range index in hostile input must be an error, never a panic.
+        let mut metas: Vec<solana_instruction::AccountMeta> =
+            Vec::with_capacity(ci.accounts.len());
+        for idx in &ci.accounts {
+            let i = *idx as usize;
+            let key = *keys.get(i).ok_or("account index out of range")?;
+            metas.push(solana_instruction::AccountMeta {
+                pubkey: key,
+                is_signer: is_signer(i),
+                is_writable: is_writable(i),
+            });
+        }
         ixs.push((program_index, ci.accounts.clone(), ci.data.clone()));
         metas_per_ix.push(metas);
     }
@@ -301,6 +307,15 @@ fn parse_v0(bytes: &[u8]) -> Result<ParsedParts, String> {
     let key_count = cur.shortvec()?;
     if key_count > MAX_ACCOUNTS {
         return Err("account vector exceeds bound".to_string());
+    }
+    // The header partition must be internally consistent: readonly-signed
+    // cannot exceed the signers, and signers + readonly-unsigned cannot exceed
+    // the static key count. Hostile input that violates this would otherwise
+    // underflow the writable/signer computation below — fail closed instead.
+    if (readonly_signed as usize) > (num_signers as usize)
+        || (num_signers as usize).saturating_add(readonly_unsigned as usize) > key_count
+    {
+        return Err("invalid v0 header: readonly counts exceed key partition".to_string());
     }
     let mut keys = Vec::with_capacity(key_count);
     for _ in 0..key_count {

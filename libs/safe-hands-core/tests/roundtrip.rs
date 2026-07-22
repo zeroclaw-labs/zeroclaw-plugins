@@ -8,6 +8,7 @@ use safe_hands_core::ix;
 use solana_hash::Hash;
 use solana_message::Message;
 use solana_pubkey::Pubkey;
+use proptest::prelude::*;
 
 const USDC: &str = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 
@@ -215,4 +216,20 @@ fn garbage_fails_closed() {
     assert!(decode(&[]).is_err());
     assert!(decode(&[0xff, 0xff, 0xff]).is_err());
     assert!(decode(b"hello world this is not a transaction").is_err());
+}
+
+
+// --- Property: the decoder is a total function (never panics) ---------------
+// Untrusted wire bytes are the primary attack surface. This asserts that any
+// input within the canonical size bound returns Ok or Err — never a panic,
+// arithmetic overflow, or hang. Fuzz-style coverage inside plain `cargo test`.
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(1024))]
+
+    #[test]
+    fn decoder_never_panics_on_arbitrary_bytes(bytes in prop::collection::vec(any::<u8>(), 0..1300)) {
+        // The verdict is irrelevant here; we assert only that the call returns
+        // (Ok or Err) without unwinding.
+        let _ = decode(&bytes);
+    }
 }

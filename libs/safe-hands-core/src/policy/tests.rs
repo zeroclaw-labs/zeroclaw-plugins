@@ -1,6 +1,7 @@
 //! Boundary matrix for the policy engine. Every rule, every edge, offline.
 
 use super::*;
+use proptest::prelude::*;
 
 const USDC: &str = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 const RECIP: &str = "9hSR6S7WPtxmTojgo6GG3k4yDPecgJY292j7xrsUGWBu";
@@ -333,4 +334,105 @@ fn same_recipient_transfers_are_aggregated_for_cap_and_intent() {
         "aggregate spend must exactly match declared intent: {:?}",
         report.reason_codes
     );
+}
+
+
+// --- Property-based security invariants -------------------------------------
+// These assert the engine's guarantees hold across *ranges* of inputs, not just
+// hand-picked cases: no combination of amounts, splits, or flags can coax an
+// ALLOW out of a policy-violating transaction. This is the machine-checked
+// backbone of the deny-by-default, fail-closed claim.
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(512))]
+
+    /// A single transfer at or under the per-tx cap, to the allowed recipient,
+    /// with a matching intent and passing simulation, is always ALLOW.
+    #[test]
+    fn under_cap_matching_intent_allows(amount in 1u128..=25_000_000u128) {
+        let r = evaluate(&policy(), &usdc_transfer(amount, RECIP));
+        prop_assert_eq!(r.verdict, Verdict::Allow);
+    }
+
+    /// Split-transfer bypass is impossible: however a spend is fragmented across
+    /// 1..8 transfers to the allowed recipient, if the aggregate exceeds the
+    /// per-tx cap the verdict is never ALLOW — and the cap code is always cited.
+    #[test]
+    fn split_aggregate_over_cap_never_allows(
+        amounts in prop::collection::vec(1u128..=25_000_000u128, 1..8)
+    ) {
+        let sum: u128 = amounts.iter().sum();
+        prop_assume!(sum > 25_000_000u128);
+        let mut f = usdc_transfer(amounts[0], RECIP);
+        f.transfers = amounts
+            .iter()
+            .map(|a| TransferFact {
+                mint: Some(USDC.into()),
+                amount_raw: *a,
+                recipient: RECIP.into(),
+            })
+            .collect();
+        // Declare the true aggregate so the intent check passes and CAP is the
+        // sole reason the transaction cannot be ALLOW.
+        f.intent = Some(Intent {
+            action: "spl_transfer".into(),
+            mint: Some(USDC.into()),
+            amount_raw: sum.to_string(),
+            recipient: RECIP.into(),
+        });
+        let r = evaluate(&policy(), &f);
+        prop_assert_ne!(r.verdict, Verdict::Allow);
+        prop_assert!(r.reason_codes.iter().any(|c| c == "SH-DENY-CAP-001"));
+    }
+
+    /// A recipient outside the allowlist can never be ALLOW, at any amount.
+    #[test]
+    fn disallowed_recipient_never_allows(amount in 1u128..=25_000_000u128) {
+        let r = evaluate(&policy(), &usdc_transfer(amount, OTHER));
+        prop_assert_ne!(r.verdict, Verdict::Allow);
+    }
+
+    /// An authority change dominates every other signal: always DENY, whatever
+    /// the amount, signed flag, nonce flag, or simulation state.
+    #[test]
+    fn authority_change_always_denies(
+        amount in 0u128..50_000_000u128,
+        signed in any::<bool>(),
+        nonce in any::<bool>(),
+        sim_ok in any::<bool>(),
+    ) {
+        let mut f = usdc_transfer(amount, RECIP);
+        f.authority_change = true;
+        f.signed = signed;
+        f.durable_nonce_used = nonce;
+        f.simulation_ok = sim_ok;
+        prop_assert_eq!(evaluate(&policy(), &f).verdict, Verdict::Deny);
+    }
+
+    /// A signed (non-zeroed) payload can never be ALLOW under the unsigned
+    /// invariant, regardless of amount.
+    #[test]
+    fn signed_input_never_allows(amount in 1u128..=25_000_000u128) {
+        let mut f = usdc_transfer(amount, RECIP);
+        f.signed = true;
+        prop_assert_ne!(evaluate(&policy(), &f).verdict, Verdict::Allow);
+    }
+
+    /// The engine is a pure function: identical inputs yield an identical
+    /// verdict and identical reason codes on every call (receipt determinism).
+    #[test]
+    fn evaluation_is_deterministic(
+        amount in 0u128..60_000_000u128,
+        signed in any::<bool>(),
+        nonce in any::<bool>(),
+    ) {
+        let mut f = usdc_transfer(amount, RECIP);
+        f.signed = signed;
+        f.durable_nonce_used = nonce;
+        let p = policy();
+        let a = evaluate(&p, &f);
+        let b = evaluate(&p, &f);
+        prop_assert_eq!(a.verdict, b.verdict);
+        prop_assert_eq!(a.reason_codes, b.reason_codes);
+    }
 }
