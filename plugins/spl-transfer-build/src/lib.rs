@@ -20,7 +20,7 @@ mod component {
     use serde::Deserialize;
 
     use crate::core::{
-        build_transfer, CoreError, Pubkey, RpcClient, TransferArgs, TransferPolicy,
+        build_transfer, CoreError, Pubkey, RpcClient, TransferArgs, TransferConfig,
         PARAMETERS_SCHEMA,
     };
     use exports::zeroclaw::plugin::plugin_info::Guest as PluginInfo;
@@ -51,6 +51,8 @@ mod component {
         memo: Option<String>,
         #[serde(default)]
         token_2022: bool,
+        nonce_account: Option<String>,
+        nonce_authority: Option<String>,
         #[serde(rename = "__config", default)]
         config: HashMap<String, String>,
     }
@@ -65,6 +67,8 @@ mod component {
                 decimals: self.decimals,
                 memo: self.memo.clone(),
                 token_2022: self.token_2022,
+                nonce_account: self.nonce_account.clone(),
+                nonce_authority: self.nonce_authority.clone(),
             }
         }
 
@@ -76,8 +80,13 @@ mod component {
                 .unwrap_or_else(|| DEFAULT_RPC_URL.to_string())
         }
 
-        fn policy(&self) -> Result<TransferPolicy, CoreError> {
-            TransferPolicy::from_config(self.config.get("allowed_recipients").map(String::as_str))
+        fn transfer_config(&self) -> Result<TransferConfig, CoreError> {
+            TransferConfig::from_config(
+                self.config.get("allowed_recipients").map(String::as_str),
+                self.config.get("allowed_mints").map(String::as_str),
+                self.config.get("max_amount").map(String::as_str),
+                self.decimals,
+            )
         }
     }
 
@@ -120,12 +129,12 @@ mod component {
                 Err(error) => return failure(format!("invalid arguments: {error}")),
             };
 
-            let policy = match parsed.policy() {
-                Ok(policy) => policy,
+            let config = match parsed.transfer_config() {
+                Ok(config) => config,
                 Err(error) => return failure(error.to_string()),
             };
             let rpc = HostRpcClient::new(parsed.rpc_url());
-            let result = match build_transfer(&parsed.transfer_args(), &rpc, &policy) {
+            let result = match build_transfer(&parsed.transfer_args(), &rpc, &config) {
                 Ok(result) => result,
                 Err(error) => return failure(error.to_string()),
             };
@@ -254,6 +263,35 @@ mod component {
                 .pointer("/result/value")
                 .map(|account| !account.is_null())
                 .ok_or_else(|| CoreError::Rpc("missing account value in RPC response".to_string()))
+        }
+
+        fn get_account_data(&self, pubkey: &Pubkey) -> Result<Option<Vec<u8>>, CoreError> {
+            let value = self.call(
+                "getAccountInfo",
+                serde_json::json!([pubkey.to_base58(), {"encoding": "base64"}]),
+            )?;
+            let account = value.pointer("/result/value");
+            match account {
+                Some(v) if v.is_null() => Ok(None),
+                Some(v) => {
+                    let data = v
+                        .get("data")
+                        .and_then(|d| d.get(0))
+                        .and_then(serde_json::Value::as_str)
+                        .ok_or_else(|| {
+                            CoreError::Rpc("missing data in account response".to_string())
+                        })?;
+                    let decoded = base64::Engine::decode(
+                        &base64::engine::general_purpose::STANDARD,
+                        data,
+                    )
+                    .map_err(|e| CoreError::Rpc(format!("base64 decode failed: {e}")))?;
+                    Ok(Some(decoded))
+                }
+                None => Err(CoreError::Rpc(
+                    "missing account value in RPC response".to_string(),
+                )),
+            }
         }
     }
 

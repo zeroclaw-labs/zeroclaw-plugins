@@ -25,6 +25,9 @@ wit-bindgen = "0.46"
 # Used only for the ed25519 off-curve check inside find_program_address.
 curve25519-dalek = { version = "4", default-features = false, features = ["alloc"] }
 
+[dev-dependencies]
+proptest = "1"
+
 # Only pulled in for the wasm target. Keep the core dependency-free of these.
 [target.'cfg(target_family = "wasm")'.dependencies]
 waki = { version = "0.5.1", features = ["json"] }

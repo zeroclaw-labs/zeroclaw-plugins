@@ -13,6 +13,48 @@ pub const TOKEN_PROGRAM_ID: &str = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
 pub const TOKEN_2022_PROGRAM_ID: &str = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb";
 pub const ATA_PROGRAM_ID: &str = "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL";
 
+// ---------------------------------------------------------------------
+// Structured watch status
+// ---------------------------------------------------------------------
+
+/// Detailed match status for downstream SOP consumers. Replaces the plain
+/// `"paid"` / `"waiting"` string in `WatchResult.status` so callers get a
+/// structured reason when a transaction doesn't match.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WatchStatus {
+    Pending,
+    Matched,
+    Overpaid,
+    Underpaid,
+    WrongMint,
+}
+
+impl fmt::Display for WatchStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            WatchStatus::Pending => write!(f, "pending"),
+            WatchStatus::Matched => write!(f, "matched"),
+            WatchStatus::Overpaid => write!(f, "overpaid"),
+            WatchStatus::Underpaid => write!(f, "underpaid"),
+            WatchStatus::WrongMint => write!(f, "wrong_mint"),
+        }
+    }
+}
+
+/// Returns true if `s` is a valid base58-encoded 32-byte Solana address.
+pub fn is_solana_address(s: &str) -> bool {
+    Pubkey::from_base58(s).is_ok()
+}
+
+/// Short address formatter for chat-friendly output: `"7xKX...osgAsU"`.
+pub fn short_addr(addr: &str) -> String {
+    if addr.len() <= 12 {
+        return addr.to_string();
+    }
+    format!("{}...{}", &addr[..4], &addr[addr.len() - 4..])
+}
+
 pub const PARAMETERS_SCHEMA: &str = r#"{
   "type": "object",
   "additionalProperties": false,
@@ -215,6 +257,8 @@ pub struct PaymentEvent {
 #[derive(Debug, Serialize, PartialEq)]
 pub struct WatchResult {
     pub status: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub watch_status: Option<WatchStatus>,
     pub checked_transactions: usize,
     pub event: Option<PaymentEvent>,
 }
@@ -233,6 +277,7 @@ pub fn match_payment(expected: &ExpectedPayment, observed: &[ObservedPayment]) -
             );
             return WatchResult {
                 status: "paid",
+                watch_status: Some(WatchStatus::Matched),
                 checked_transactions: observed.len(),
                 event: Some(PaymentEvent {
                     event: "payment-received",
@@ -250,6 +295,7 @@ pub fn match_payment(expected: &ExpectedPayment, observed: &[ObservedPayment]) -
     }
     WatchResult {
         status: "waiting",
+        watch_status: None,
         checked_transactions: observed.len(),
         event: None,
     }

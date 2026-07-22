@@ -4,4 +4,9 @@ description = "Create a Solana Pay URL and QR-ready payload for an unsigned SPL-
 author = "Adarsh"
 wasm_path = "solana_pay_request.wasm"
 capabilities = ["tool"]
-permissions = []
+permissions = ["config_read"]
+
+[config]
+max_amount = ""
+allowed_mints = ""
+decimals = "6"

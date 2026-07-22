@@ -15,3 +15,9 @@ rpc_url = "https://api.devnet.solana.com/"
 # Comma-separated base58 wallet owners this build-only tool may target. An
 # empty value allows no recipients, so deployment fails closed by default.
 allowed_recipients = ""
+# Comma-separated base58 SPL mint addresses this tool may build transfers for.
+# Empty = refuses to build (fails closed).
+allowed_mints = ""
+# Maximum transfer amount as a decimal string in base units (e.g. "1000000"
+# for 1 USDC at 6 decimals). Empty = no cap.
+max_amount = ""

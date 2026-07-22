@@ -29,6 +29,10 @@ pub enum PayError {
     InvalidAmount,
     #[error("memo exceeds {MAX_MEMO_BYTES} bytes")]
     MemoTooLong,
+    #[error("amount exceeds configured max_amount {max} — request refused")]
+    AmountOverCap { max: u64 },
+    #[error("mint not in allowlist")]
+    MintNotAllowed,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -42,6 +46,53 @@ pub struct PayRequestArgs {
     pub reference: String,
 }
 
+/// Operator-controlled configuration. When caps are set, the tool enforces
+/// them before building the URL. When empty/unset, the tool operates
+/// zero-config with no caps (fail-open for caps, not for validity).
+#[derive(Debug, Clone)]
+pub struct PayConfig {
+    pub max_amount_base_units: Option<u64>,
+    pub allowed_mints: Vec<[u8; 32]>,
+    pub decimals: u8,
+}
+
+impl PayConfig {
+    pub fn from_config(
+        max_amount: Option<&str>,
+        allowed_mints: Option<&str>,
+        decimals: u8,
+    ) -> Result<Self, PayError> {
+        let max_amount_base_units = match max_amount {
+            Some(s) if !s.trim().is_empty() => {
+                Some(parse_amount_to_base_units(s, decimals).map_err(|_| {
+                    PayError::InvalidAmount
+                })?)
+            }
+            _ => None,
+        };
+        let allowed_mints = allowed_mints
+            .unwrap_or_default()
+            .split(',')
+            .map(str::trim)
+            .filter(|m| !m.is_empty())
+            .map(|s| {
+                let bytes = bs58::decode(s)
+                    .into_vec()
+                    .map_err(|_| PayError::InvalidPubkey { field: "mint" })?;
+                let arr: [u8; 32] = bytes
+                    .try_into()
+                    .map_err(|_| PayError::InvalidPubkey { field: "mint" })?;
+                Ok(arr)
+            })
+            .collect::<Result<Vec<_>, PayError>>()?;
+        Ok(Self {
+            max_amount_base_units,
+            allowed_mints,
+            decimals,
+        })
+    }
+}
+
 #[derive(Debug, Serialize, PartialEq)]
 pub struct PayRequestResult {
     pub solana_pay_url: String,
@@ -51,6 +102,17 @@ pub struct PayRequestResult {
 }
 
 pub fn build_solana_pay_request(args: &PayRequestArgs) -> Result<PayRequestResult, PayError> {
+    build_solana_pay_request_with_config(args, &PayConfig {
+        max_amount_base_units: None,
+        allowed_mints: vec![],
+        decimals: 6,
+    })
+}
+
+pub fn build_solana_pay_request_with_config(
+    args: &PayRequestArgs,
+    config: &PayConfig,
+) -> Result<PayRequestResult, PayError> {
     validate_pubkey(&args.recipient, "recipient")?;
     validate_pubkey(&args.mint, "mint")?;
     validate_pubkey(&args.reference, "reference")?;
@@ -58,6 +120,27 @@ pub fn build_solana_pay_request(args: &PayRequestArgs) -> Result<PayRequestResul
     if let Some(memo) = &args.memo {
         if memo.len() > MAX_MEMO_BYTES {
             return Err(PayError::MemoTooLong);
+        }
+    }
+
+    // Enforce caps only if configured (fail-open on caps, fail-closed on validity)
+    if let Some(max) = config.max_amount_base_units {
+        let raw = parse_amount_to_base_units(&args.amount, config.decimals)?;
+        if raw > max {
+            return Err(PayError::AmountOverCap { max });
+        }
+    }
+    let mint_bytes = bs58::decode(&args.mint)
+        .into_vec()
+        .ok()
+        .and_then(|v| {
+            let arr: [u8; 32] = v.try_into().ok()?;
+            Some(arr)
+        });
+    if !config.allowed_mints.is_empty() {
+        match mint_bytes {
+            Some(m) if config.allowed_mints.contains(&m) => {}
+            _ => return Err(PayError::MintNotAllowed),
         }
     }
 
@@ -127,4 +210,50 @@ fn percent_encode(value: &str) -> String {
             }
         })
         .collect()
+}
+
+/// Convert a human-readable decimal amount to base units without using binary
+/// floating point.
+pub fn parse_amount_to_base_units(amount: &str, decimals: u8) -> Result<u64, PayError> {
+    if amount.is_empty() || amount.trim() != amount {
+        return Err(PayError::InvalidAmount);
+    }
+    let mut parts = amount.split('.');
+    let whole = parts.next().expect("split returns one element");
+    let fractional = parts.next();
+    if parts.next().is_some()
+        || whole.is_empty()
+        || !whole.bytes().all(|b| b.is_ascii_digit())
+        || fractional.is_some_and(|part| part.is_empty() || !part.bytes().all(|b| b.is_ascii_digit()))
+    {
+        return Err(PayError::InvalidAmount);
+    }
+    let fraction = fractional.unwrap_or("");
+    if fraction.len() > decimals as usize {
+        return Err(PayError::InvalidAmount);
+    }
+    let scale = 10u64
+        .checked_pow(decimals as u32)
+        .ok_or(PayError::InvalidAmount)?;
+    let whole_units = whole
+        .parse::<u64>()
+        .map_err(|_| PayError::InvalidAmount)?
+        .checked_mul(scale)
+        .ok_or(PayError::InvalidAmount)?;
+    let fraction_units = if fraction.is_empty() {
+        0
+    } else {
+        fraction
+            .parse::<u64>()
+            .map_err(|_| PayError::InvalidAmount)?
+            .checked_mul(10u64.pow((decimals as usize - fraction.len()) as u32))
+            .ok_or(PayError::InvalidAmount)?
+    };
+    let units = whole_units
+        .checked_add(fraction_units)
+        .ok_or(PayError::InvalidAmount)?;
+    if units == 0 {
+        return Err(PayError::InvalidAmount);
+    }
+    Ok(units)
 }

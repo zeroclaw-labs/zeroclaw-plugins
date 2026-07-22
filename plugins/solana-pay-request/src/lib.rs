@@ -8,7 +8,11 @@ mod component {
         features: ["plugins-wit-v0"],
     });
 
-    use crate::core::{build_solana_pay_request, PayRequestArgs, PARAMETERS_SCHEMA};
+    use std::collections::HashMap;
+
+    use crate::core::{
+        build_solana_pay_request_with_config, PayConfig, PayRequestArgs, PARAMETERS_SCHEMA,
+    };
     use exports::zeroclaw::plugin::plugin_info::Guest as PluginInfo;
     use exports::zeroclaw::plugin::tool::{Guest as Tool, ToolResult};
     use zeroclaw::plugin::logging::{
@@ -16,6 +20,36 @@ mod component {
     };
 
     struct SolanaPayRequest;
+
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct ExecuteArgs {
+        recipient: String,
+        amount: String,
+        mint: String,
+        memo: Option<String>,
+        reference: String,
+        #[serde(rename = "__config", default)]
+        config: HashMap<String, String>,
+    }
+
+    impl ExecuteArgs {
+        fn pay_config(&self) -> Result<PayConfig, String> {
+            let decimals: u8 = self
+                .config
+                .get("decimals")
+                .filter(|s| !s.trim().is_empty())
+                .map(|s| s.parse::<u8>().map_err(|e| format!("invalid decimals: {e}")))
+                .transpose()?
+                .unwrap_or(6);
+            PayConfig::from_config(
+                self.config.get("max_amount").map(String::as_str),
+                self.config.get("allowed_mints").map(String::as_str),
+                decimals,
+            )
+            .map_err(|e| e.to_string())
+        }
+    }
 
     impl PluginInfo for SolanaPayRequest {
         fn plugin_name() -> String {
@@ -38,11 +72,22 @@ mod component {
         }
         fn execute(args: String) -> Result<ToolResult, String> {
             log(PluginAction::Start, None, "creating Solana Pay request");
-            let request: PayRequestArgs = match serde_json::from_str(&args) {
+            let request: ExecuteArgs = match serde_json::from_str(&args) {
                 Ok(value) => value,
                 Err(error) => return failure(format!("invalid arguments: {error}")),
             };
-            let result = match build_solana_pay_request(&request) {
+            let config = match request.pay_config() {
+                Ok(config) => config,
+                Err(error) => return failure(error),
+            };
+            let pay_args = PayRequestArgs {
+                recipient: request.recipient,
+                amount: request.amount,
+                mint: request.mint,
+                memo: request.memo,
+                reference: request.reference,
+            };
+            let result = match build_solana_pay_request_with_config(&pay_args, &config) {
                 Ok(value) => value,
                 Err(error) => return failure(error.to_string()),
             };

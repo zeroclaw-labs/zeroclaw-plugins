@@ -112,6 +112,50 @@ pub fn derive_ata(
 }
 
 // ---------------------------------------------------------------------
+// Durable nonce
+// ---------------------------------------------------------------------
+
+/// Layout: 4 version + 4 state + 32 authority + 32 stored blockhash.
+pub fn nonce_blockhash_from_data(data: &[u8]) -> Result<[u8; 32], CoreError> {
+    if data.len() < 72 {
+        return Err(CoreError::InvalidInput(
+            "nonce account data too short".into(),
+        ));
+    }
+    let mut h = [0u8; 32];
+    h.copy_from_slice(&data[40..72]);
+    Ok(h)
+}
+
+pub fn ix_advance_nonce(nonce_account: Pubkey, nonce_authority: Pubkey) -> Instruction {
+    let system_program = Pubkey::from_base58(SYSTEM_PROGRAM_ID).unwrap();
+    let recent_blockhashes_sysvar =
+        Pubkey::from_base58("SysvarRecentB1ockHashes11111111111111111111").unwrap();
+    Instruction {
+        program_id: system_program,
+        accounts: vec![
+            AccountMeta {
+                pubkey: nonce_account,
+                is_signer: false,
+                is_writable: true,
+            },
+            AccountMeta {
+                pubkey: recent_blockhashes_sysvar,
+                is_signer: false,
+                is_writable: false,
+            },
+            AccountMeta {
+                pubkey: nonce_authority,
+                is_signer: true,
+                is_writable: false,
+            },
+        ],
+        // SystemInstruction is a borsh enum; AdvanceNonceAccount = variant 4, u32 LE tag, no payload
+        data: vec![4, 0, 0, 0],
+    }
+}
+
+// ---------------------------------------------------------------------
 // Instructions
 // ---------------------------------------------------------------------
 
@@ -373,6 +417,7 @@ pub fn serialize_unsigned_versioned_tx(message: &CompiledMessage) -> Vec<u8> {
 pub trait RpcClient {
     fn get_latest_blockhash(&self) -> Result<[u8; 32], CoreError>;
     fn account_exists(&self, pubkey: &Pubkey) -> Result<bool, CoreError>;
+    fn get_account_data(&self, pubkey: &Pubkey) -> Result<Option<Vec<u8>>, CoreError>;
 }
 
 // ---------------------------------------------------------------------
@@ -393,6 +438,8 @@ pub struct TransferArgs {
     pub memo: Option<String>,
     #[serde(default)]
     pub token_2022: bool,
+    pub nonce_account: Option<String>,
+    pub nonce_authority: Option<String>,
 }
 
 /// Operator-controlled destination policy. An empty allowlist intentionally
@@ -430,6 +477,79 @@ impl TransferPolicy {
     }
 }
 
+/// Operator-controlled transfer configuration. Mint allowlist and amount cap
+/// are optional guardrails that narrow what this build-only tool will construct.
+/// An empty `allowed_mints` fails closed: the tool refuses to build if no mints
+/// are configured.
+#[derive(Debug, Clone)]
+pub struct TransferConfig {
+    pub allowed_recipients: Vec<Pubkey>,
+    pub allowed_mints: Vec<Pubkey>,
+    pub max_amount_base_units: Option<u64>,
+}
+
+impl TransferConfig {
+    pub fn from_config(
+        allowed_recipients: Option<&str>,
+        allowed_mints: Option<&str>,
+        max_amount: Option<&str>,
+        decimals: u8,
+    ) -> Result<Self, CoreError> {
+        let policy = TransferPolicy::from_config(allowed_recipients)?;
+        let allowed_mints = allowed_mints
+            .unwrap_or_default()
+            .split(',')
+            .map(str::trim)
+            .filter(|m| !m.is_empty())
+            .map(Pubkey::from_base58)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|_| CoreError::InvalidInput("allowed_mints contains invalid pubkeys".into()))?;
+        let max_amount_base_units = match max_amount {
+            Some(s) if !s.trim().is_empty() => {
+                Some(parse_amount_to_base_units(s, decimals)?)
+            }
+            _ => None,
+        };
+        Ok(Self {
+            allowed_recipients: policy.allowed_recipients,
+            allowed_mints,
+            max_amount_base_units,
+        })
+    }
+
+    pub fn authorize_recipient(&self, recipient: &str) -> Result<(), CoreError> {
+        let recipient = Pubkey::from_base58(recipient)?;
+        if self.allowed_recipients.contains(&recipient) {
+            Ok(())
+        } else {
+            Err(CoreError::RecipientNotApproved)
+        }
+    }
+}
+
+fn check_mint_allowed(cfg: &TransferConfig, mint: &Pubkey) -> Result<(), CoreError> {
+    if cfg.allowed_mints.is_empty() {
+        return Err(CoreError::InvalidInput(
+            "no mints configured — deployment fails closed".into(),
+        ));
+    }
+    if !cfg.allowed_mints.contains(mint) {
+        return Err(CoreError::InvalidInput("mint not in allowlist".into()));
+    }
+    Ok(())
+}
+
+fn check_amount_cap(cfg: &TransferConfig, raw_amount: u64) -> Result<(), CoreError> {
+    if let Some(max) = cfg.max_amount_base_units {
+        if raw_amount > max {
+            return Err(CoreError::InvalidInput(format!(
+                "amount {raw_amount} exceeds configured cap {max} — refused"
+            )));
+        }
+    }
+    Ok(())
+}
+
 #[derive(Debug, Serialize, PartialEq)]
 pub struct TransferResult {
     pub transaction_base64: String,
@@ -437,12 +557,14 @@ pub struct TransferResult {
     pub source_ata: String,
     pub destination_ata: String,
     pub destination_ata_will_be_created: bool,
+    pub recent_blockhash: String,
+    pub durable_nonce: bool,
 }
 
 pub fn build_transfer(
     args: &TransferArgs,
     rpc: &dyn RpcClient,
-    policy: &TransferPolicy,
+    config: &TransferConfig,
 ) -> Result<TransferResult, CoreError> {
     if let Some(memo) = &args.memo {
         if memo.len() > MAX_MEMO_LEN {
@@ -452,7 +574,7 @@ pub fn build_transfer(
         }
     }
 
-    policy.authorize_recipient(&args.recipient)?;
+    config.authorize_recipient(&args.recipient)?;
 
     let sender = Pubkey::from_base58(&args.sender)?;
     let recipient = Pubkey::from_base58(&args.recipient)?;
@@ -469,13 +591,35 @@ pub fn build_transfer(
 
     let raw_amount = parse_amount_to_base_units(&args.amount, args.decimals)?;
 
-    let mut instructions = vec![build_create_ata_idempotent_instruction(
+    check_mint_allowed(config, &mint)?;
+    check_amount_cap(config, raw_amount)?;
+
+    let (recent_blockhash, durable_nonce, mut instructions) =
+        match (&args.nonce_account, &args.nonce_authority) {
+            (Some(acc), Some(auth)) => {
+                let nonce_pk = Pubkey::from_base58(acc)?;
+                let auth_pk = Pubkey::from_base58(auth)?;
+                let data = rpc.get_account_data(&nonce_pk)?.ok_or_else(|| {
+                    CoreError::InvalidInput("nonce account not found".into())
+                })?;
+                let bh = nonce_blockhash_from_data(&data)?;
+                (bh, true, vec![ix_advance_nonce(nonce_pk, auth_pk)])
+            }
+            (None, None) => (rpc.get_latest_blockhash()?, false, Vec::new()),
+            _ => {
+                return Err(CoreError::InvalidInput(
+                    "nonce_account and nonce_authority must both be set or both omitted".into(),
+                ))
+            }
+        };
+
+    instructions.push(build_create_ata_idempotent_instruction(
         &sender,
         &recipient,
         &mint,
         &dest_ata,
         &token_program,
-    )?];
+    )?);
     instructions.push(build_transfer_checked_instruction(
         &source_ata,
         &mint,
@@ -489,8 +633,7 @@ pub fn build_transfer(
         instructions.push(build_memo_instruction(memo, Some(&sender))?);
     }
 
-    let blockhash = rpc.get_latest_blockhash()?;
-    let message = compile_message(&sender, &instructions, blockhash);
+    let message = compile_message(&sender, &instructions, recent_blockhash);
     let tx_bytes = serialize_unsigned_versioned_tx(&message);
     let transaction_base64 =
         base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &tx_bytes);
@@ -515,13 +658,15 @@ pub fn build_transfer(
         source_ata: source_ata.to_base58(),
         destination_ata: dest_ata.to_base58(),
         destination_ata_will_be_created: !dest_exists,
+        recent_blockhash: bs58::encode(recent_blockhash).into_string(),
+        durable_nonce,
     })
 }
 
 /// Convert a human-readable decimal amount to base units without using binary
 /// floating point. Values with more fractional digits than the mint supports
 /// are rejected rather than rounded into a different transfer amount.
-fn parse_amount_to_base_units(amount: &str, decimals: u8) -> Result<u64, CoreError> {
+pub fn parse_amount_to_base_units(amount: &str, decimals: u8) -> Result<u64, CoreError> {
     if amount.is_empty() || amount.trim() != amount {
         return Err(CoreError::InvalidInput(
             "amount must be a non-empty decimal string without whitespace".into(),
@@ -588,7 +733,9 @@ pub const PARAMETERS_SCHEMA: &str = r#"{
     "amount": { "type": "string", "pattern": "^[0-9]+(\\.[0-9]+)?$", "description": "Exact positive human-readable decimal amount, e.g. \"25.0\". Must not have more fractional digits than decimals." },
     "decimals": { "type": "integer", "minimum": 0, "maximum": 255, "description": "Mint decimals" },
     "memo": { "type": "string", "maxLength": 500, "description": "Optional invoice/reconciliation memo" },
-    "token_2022": { "type": "boolean", "default": false }
+    "token_2022": { "type": "boolean", "default": false },
+    "nonce_account": { "type": "string", "description": "Base58 pubkey of a durable-nonce account. When set, nonce_authority must also be set." },
+    "nonce_authority": { "type": "string", "description": "Base58 pubkey of the nonce authority. Must be set together with nonce_account." }
   },
   "required": ["sender", "recipient", "mint", "amount", "decimals"]
 }"#;
