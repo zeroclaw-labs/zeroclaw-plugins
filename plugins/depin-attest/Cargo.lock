@@ -431,6 +431,7 @@ dependencies = [
  "sha2 0.10.9",
  "solana-program",
  "wit-bindgen 0.46.0",
+ "zeroize",
 ]
 
 [[package]]
