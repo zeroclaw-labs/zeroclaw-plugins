@@ -37,6 +37,9 @@ base64 = "0.22"
 # config, never generated on-device. No `rand_core` feature needed.
 ed25519-dalek = "2"
 bs58 = "0.5"  # base58 decode for the T2 session key (32-byte Ed25519 secret)
+# Zeroize the raw session-key bytes after SigningKey::from_bytes so the seed
+# doesn't linger on the stack/heap (defense-in-depth; F4).
+zeroize = "1"
 # Host-only demo driver (`--features demo`): a reqwest-backed Rpc impl that
 # runs execute_t1 against a real devnet durable-nonce account on camera. NOT
 # part of the wasm component — excluded by the `optional` gate + the feature.

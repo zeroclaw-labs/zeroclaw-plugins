@@ -10,6 +10,7 @@ use std::str::FromStr;
 
 use borsh::BorshSerialize;
 use ed25519_dalek::{Signer, SigningKey};
+use zeroize::Zeroize;
 use palinurus_core::{find_program_address, AccountMeta, CreateAttestationIxData, Instruction, Pubkey};
 use sha2::{Digest, Sha256};
 
@@ -189,7 +190,7 @@ impl AttestConfig {
             CustodyMode::T1 => (None, 0, 0),
             CustodyMode::T2 => {
                 let key_b58 = required(section, "session_key")?;
-                let key_bytes = bs58::decode(&key_b58)
+                let mut key_bytes = bs58::decode(&key_b58)
                     .into_vec()
                     .map_err(|e| {
                         AttestError::Config(format!("session_key is not valid base58: {e}"))
@@ -203,6 +204,10 @@ impl AttestConfig {
                 let mut arr = [0u8; 32];
                 arr.copy_from_slice(&key_bytes);
                 let sk = SigningKey::from_bytes(&arr);
+                // F4: zeroize the raw key material so it doesn't linger on the
+                // stack/heap beyond the SigningKey (defense-in-depth).
+                arr.zeroize();
+                key_bytes.zeroize();
                 (
                     Some(sk),
                     parse_u64(section, "max_lamports_per_tx")?.unwrap_or(10_000),
