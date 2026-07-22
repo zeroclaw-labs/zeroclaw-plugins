@@ -5,3 +5,18 @@ __pycache__/
 *.pyc
 target/
 *.wasm
+
+# Local environment & secrets — never commit (keypairs, seeds, RPC keys)
+.env
+.env.*
+*.pem
+*.key
+id.json
+*keypair.json
+*-keypair.json
+
+# Local scratch / experiments
+scratch/
+
+# JS tooling for demos
+node_modules/
