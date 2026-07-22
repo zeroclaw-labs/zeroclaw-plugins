@@ -79,30 +79,37 @@ Agent calls `execute` with a BME280 temperature reading:
 }
 ```
 
-### T2 — real on-chain attestation (verified live on devnet)
+### T2 — real on-chain attestation (verified live on mainnet)
 
 The plugin returns (T2, memo-fallback path, ~200 tokens):
 
 ```
-✓ attested + submitted → attestation PDA 9Kai…DL4u
-sig: BsdBnMtJHFarDREDdA7hgbGp2hUe4mBMzw4erjM9jrVhQ…  nonce: Ctnq…DqwS  expiry: 0
-explorer: https://explorer.solana.com/tx/BsdBnMtJHFarDREDdA7hgbGp2hUe4mBMzw4erjM9jrVhQdRyS4yQxtTpCEtobrxjiCj5zKMHMuwVKPd2Pv2qGYo?cluster=devnet
+✓ attested + submitted → attestation PDA 41ZC…4GRh
+sig: YZTS16nNNrDhLhFHCtSMhcYTYAkcYQvPn2QUWfWvkw4bJxi…  nonce: 2kSt…99As  expiry: 0
+explorer: https://explorer.solana.com/tx/YZTS16nNNrDhLhFHCtSMhcYTYAkcYQvPn2QUWfWvkw4bJxif77d1Ww36o3c4LYe6r69NAzYNJLDpz93DjR3G9TC
 ```
 
-This is a **real, explorer-verifiable Solana transaction** — not a mock, not an
-unsigned draft. Confirmed on devnet: `err = None`, slot `477808575`, fee `5000`
-lamports (within the 10k lamport cap), version `0` (versioned tx → durable nonce
-as `recent_blockhash`). The durable nonce **advanced** on this run — the replay
-guard is provably live: a replayed/stale attestation is rejected. The sensor
-reading is carried on-chain as a memo: `palinurus: bme280-1=24.7celsius @ 1784621332`.
+This is a **real, explorer-verifiable Solana mainnet transaction** — not a mock, not an
+unsigned draft, not devnet play-money. Confirmed on **Mainnet Beta**: `err = None`, slot
+`434472270`, fee `5000` lamports (within the 10k lamport cap), version `0` (versioned tx →
+durable nonce as `recent_blockhash`). The durable nonce **advanced** on this run
+(`BXANchUJ…rbsP` → `HyV7X374…bCMZf`) — the replay guard is provably live: a replayed/stale
+attestation is rejected. The sensor reading is carried on-chain as a memo:
+`palinurus: bme280-1=24.7celsius @ 1784707747`. No `?cluster=devnet` in the URL — a judge
+verifies it directly.
 
 The custody path enforced **before signing**: session-key identity (verifying
 key = authority = payer = nonce_authority — one scoped key wearing all four
-hats for the devnet demo), program allowlist `{System, SAS, Memo}` (the memo
-instruction is in the allowlist; a value-transfer instruction is not
-expressible), lamport cap, daily cap.
+hats, on a dedicated mainnet wallet `DZdeez…7RRC`), program allowlist `{System, SAS, Memo}`
+(the only System ix is `AdvanceNonceAccount` — value transfer is not expressible), lamport
+cap, daily cap.
 
-> An earlier real run — [`65UzT3h1…APir`](https://explorer.solana.com/tx/65UzT3h1vfrLVtrQWHsU4bDnWVikZt4DL2vUaRPTDiGxfpCGZ9vK8LM2MQTj7mx3tHBX8BKjXptptRpZBVrxAPir?cluster=devnet) (slot `477806741`) — is also explorer-verifiable. Two real signed attestations, not one.
+> **Devnet worked-example + on-camera demo.** The same T2 path also landed on devnet —
+> [`BsdBnMtJ…2qGYo`](https://explorer.solana.com/tx/BsdBnMtJHFarDREDdA7hgbGp2hUe4mBMzw4erjM9jrVhQdRyS4yQxtTpCEtobrxjiCj5zKMHMuwVKPd2Pv2qGYo?cluster=devnet)
+> (slot `477808575`, memo `palinurus: bme280-1=24.7celsius @ 1784621332`) + an earlier run
+> [`65UzT3h1…APir`](https://explorer.solana.com/tx/65UzT3h1vfrLVtrQWHsU4bDnWVikZt4DL2vUaRPTDiGxfpCGZ9vK8LM2MQTj7mx3tHBX8BKjXptptRpZBVrxAPir?cluster=devnet)
+> (slot `477806741`) — also explorer-verifiable. The recording's chunk-6 demo runs this T2
+> driver live on devnet against the shared devnet wallet; the mainnet tx above is the proof.
 
 > **SAS vs memo path.** The default is the **memo program** (cheap,
 > high-throughput, the landed proof above). The **Solana Attestation Service**
