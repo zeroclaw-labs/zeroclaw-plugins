@@ -15,14 +15,15 @@ mod component {
         features: ["plugins-wit-v0"],
     });
 
-    use std::collections::HashMap;
+    use std::{collections::HashMap, time::Duration};
 
     use serde::Deserialize;
     use serde_json::{json, Value};
 
     use crate::risk::{
-        assess, parse_holder_accounts, parse_largest_token_accounts, parse_market_pairs,
-        parse_mint_account, render_report, validate_mint, RiskConfig, RiskEvidence,
+        append_bounded_body, assess, parse_holder_accounts, parse_largest_token_accounts,
+        parse_lp_security, parse_market_pairs, parse_mint_account, render_report, validate_mint,
+        RiskConfig, RiskEvidence, MAX_HTTP_BODY_BYTES,
     };
     use exports::zeroclaw::plugin::plugin_info::Guest as PluginInfo;
     use exports::zeroclaw::plugin::tool::{Guest as Tool, ToolResult};
@@ -33,6 +34,7 @@ mod component {
     const PLUGIN_NAME: &str = "token-risk-check";
     const PLUGIN_VERSION: &str = env!("CARGO_PKG_VERSION");
     const TOOL_NAME: &str = "token-risk-check";
+    const HTTP_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
     #[derive(Deserialize)]
     #[serde(deny_unknown_fields)]
@@ -114,12 +116,19 @@ mod component {
             } else {
                 (None, None)
             };
+            let (lp_security, lp_security_error) = if cfg.require_lp_status {
+                gather_lp_security(&cfg, &parsed.mint)
+            } else {
+                (None, None)
+            };
             let evidence = RiskEvidence {
                 mint,
                 holders,
                 holders_error,
                 market,
                 market_error,
+                lp_security,
+                lp_security_error,
             };
             let report = assess(&parsed.mint, &evidence, &cfg);
             let output = match render_report(&report) {
@@ -156,12 +165,13 @@ mod component {
                 json!([mint, {"commitment":"confirmed"}]),
             )?;
             let addresses = parse_largest_token_accounts(&largest)?;
+            let expected_accounts = addresses.len();
             let accounts = rpc_with_fallback(
                 cfg,
                 "getMultipleAccounts",
                 json!([addresses, {"encoding":"jsonParsed","commitment":"confirmed"}]),
             )?;
-            parse_holder_accounts(&accounts)
+            parse_holder_accounts(&accounts, expected_accounts, mint)
         })();
         match result {
             Ok(value) => (Some(value), None),
@@ -178,16 +188,48 @@ mod component {
             let response = waki::Client::new()
                 .get(&url)
                 .header("Accept", "application/json")
+                .connect_timeout(HTTP_CONNECT_TIMEOUT)
                 .send()
-                .map_err(|error| format!("market request failed: {error}"))?;
+                .map_err(|_| "market request failed".to_string())?;
             let status = response.status_code();
             if !(200..300).contains(&status) {
                 return Err(format!("market endpoint returned HTTP {status}"));
             }
-            let body = response
-                .json::<Value>()
-                .map_err(|error| format!("market JSON failed: {error}"))?;
-            parse_market_pairs(&body)
+            let body = bounded_json(&response, "market")?;
+            parse_market_pairs(&body, mint)
+        })();
+        match result {
+            Ok(value) => (Some(value), None),
+            Err(error) => (None, Some(error)),
+        }
+    }
+
+    fn gather_lp_security(
+        cfg: &RiskConfig,
+        mint: &str,
+    ) -> (Option<crate::risk::LpEvidence>, Option<String>) {
+        let result = (|| {
+            let separator = if cfg.security_base_url.contains('?') {
+                '&'
+            } else {
+                '?'
+            };
+            let url = format!(
+                "{}{separator}contract_addresses={mint}",
+                cfg.security_base_url
+            );
+            let response = waki::Client::new()
+                .get(&url)
+                .header("Accept", "application/json")
+                .connect_timeout(HTTP_CONNECT_TIMEOUT)
+                .send()
+                .map_err(|_| "LP-security request failed".to_string())?;
+            let status = response.status_code();
+            if !(200..300).contains(&status) {
+                return Err(format!("LP-security endpoint returned HTTP {status}"));
+            }
+            let body = bounded_json(&response, "LP-security")?;
+            parse_lp_security(&body, mint)
         })();
         match result {
             Ok(value) => (Some(value), None),
@@ -201,30 +243,40 @@ mod component {
             .post(url)
             .header("Content-Type", "application/json")
             .json(&body)
+            .connect_timeout(HTTP_CONNECT_TIMEOUT)
             .send()
-            .map_err(|error| format!("{method} request failed: {error}"))?;
+            .map_err(|_| format!("{method} request failed"))?;
         let status = response.status_code();
         if !(200..300).contains(&status) {
             return Err(format!("{method} returned HTTP {status}"));
         }
-        let value = response
-            .json::<Value>()
-            .map_err(|error| format!("{method} JSON failed: {error}"))?;
+        let value = bounded_json(&response, method)?;
         if let Some(error) = value.get("error") {
             let code = error
                 .get("code")
                 .and_then(Value::as_i64)
                 .unwrap_or_default();
-            let message = error
-                .get("message")
-                .and_then(Value::as_str)
-                .unwrap_or("unknown RPC error")
-                .chars()
-                .take(120)
-                .collect::<String>();
-            return Err(format!("{method} RPC error {code}: {message}"));
+            return Err(format!("{method} RPC error {code}"));
         }
         Ok(value)
+    }
+
+    fn bounded_json(response: &waki::Response, label: &str) -> Result<Value, String> {
+        let mut body = Vec::new();
+        loop {
+            let chunk = response
+                .chunk(64 * 1024)
+                .map_err(|_| format!("{label} body read failed"))?;
+            let Some(chunk) = chunk else {
+                break;
+            };
+            if chunk.is_empty() {
+                break;
+            }
+            append_bounded_body(&mut body, &chunk, MAX_HTTP_BODY_BYTES)
+                .map_err(|_| format!("{label} response exceeded the 1 MiB limit"))?;
+        }
+        serde_json::from_slice(&body).map_err(|_| format!("{label} returned invalid JSON"))
     }
 
     fn rpc_with_fallback(cfg: &RiskConfig, method: &str, params: Value) -> Result<Value, String> {

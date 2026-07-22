@@ -2,7 +2,8 @@
 //! No wallet, key, RPC, or network access is involved.
 
 use token_risk_check::risk::{
-    assess, HolderEvidence, MarketEvidence, MintEvidence, RiskConfig, RiskEvidence, TokenProgram,
+    assess, HolderEvidence, LpEvidence, LpStatus, MarketEvidence, MintEvidence, RiskConfig,
+    RiskEvidence, TokenProgram,
 };
 
 const DEMO_MINT: &str = "So11111111111111111111111111111111111111112";
@@ -22,6 +23,11 @@ fn safe_mint() -> MintEvidence {
         default_frozen: false,
         non_transferable: false,
         confidential_transfer: false,
+        pausable_authority: false,
+        paused: false,
+        permissioned_burn_authority: false,
+        scaled_ui_amount_authority: false,
+        unassessed_extensions: Vec::new(),
     }
 }
 
@@ -45,6 +51,14 @@ fn complete_evidence(mint: MintEvidence) -> RiskEvidence {
             pair_address: Some("demo-pair".into()),
         }),
         market_error: None,
+        lp_security: Some(LpEvidence {
+            status: LpStatus::Locked,
+            burned_pct: Some(0.0),
+            locked_pct: Some(100.0),
+            pool_type: Some("standard".into()),
+            provider: "fixture",
+        }),
+        lp_security_error: None,
     }
 }
 
@@ -67,6 +81,8 @@ fn main() {
             holders_error: Some("demo RPC timeout".into()),
             market: None,
             market_error: Some("demo market timeout".into()),
+            lp_security: None,
+            lp_security_error: Some("demo LP-security timeout".into()),
         },
         _ => {
             eprintln!("usage: cargo run --example demo -- [green|red|incomplete]");

@@ -4,7 +4,7 @@
 //! read-only JSON evidence and passes it here, while host tests exercise the
 //! same parsing, owner aggregation, scoring, and compact report rendering.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use serde::Serialize;
 use serde_json::Value;
@@ -13,13 +13,30 @@ pub const LEGACY_TOKEN_PROGRAM: &str = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ
 pub const TOKEN_2022_PROGRAM: &str = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb";
 pub const DEFAULT_RPC_URL: &str = "https://api.mainnet-beta.solana.com";
 pub const DEFAULT_MARKET_BASE_URL: &str = "https://api.dexscreener.com/token-pairs/v1/solana";
+pub const DEFAULT_SECURITY_BASE_URL: &str =
+    "https://api.gopluslabs.io/api/v1/solana/token_security";
+pub const MAX_HTTP_BODY_BYTES: usize = 1024 * 1024;
+
+pub fn append_bounded_body(
+    body: &mut Vec<u8>,
+    chunk: &[u8],
+    max_bytes: usize,
+) -> Result<(), String> {
+    if chunk.len() > max_bytes.saturating_sub(body.len()) {
+        return Err("HTTP response exceeds the configured limit".to_string());
+    }
+    body.extend_from_slice(chunk);
+    Ok(())
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct RiskConfig {
     pub rpc_url: String,
     pub rpc_fallback_url: Option<String>,
     pub market_base_url: String,
+    pub security_base_url: String,
     pub require_market_data: bool,
+    pub require_lp_status: bool,
     pub min_liquidity_usd: f64,
     pub top1_amber_pct: f64,
     pub top1_red_pct: f64,
@@ -33,7 +50,9 @@ impl Default for RiskConfig {
             rpc_url: DEFAULT_RPC_URL.to_string(),
             rpc_fallback_url: None,
             market_base_url: DEFAULT_MARKET_BASE_URL.to_string(),
+            security_base_url: DEFAULT_SECURITY_BASE_URL.to_string(),
             require_market_data: true,
+            require_lp_status: true,
             min_liquidity_usd: 25_000.0,
             top1_amber_pct: 20.0,
             top1_red_pct: 50.0,
@@ -61,10 +80,21 @@ impl RiskConfig {
         {
             cfg.market_base_url = value.trim_end_matches('/').to_string();
         }
+        if let Some(value) = section
+            .get("security_base_url")
+            .filter(|v| !v.trim().is_empty())
+        {
+            cfg.security_base_url = value.trim_end_matches('/').to_string();
+        }
         cfg.require_market_data = parse_bool(
             section.get("require_market_data"),
             cfg.require_market_data,
             "require_market_data",
+        )?;
+        cfg.require_lp_status = parse_bool(
+            section.get("require_lp_status"),
+            cfg.require_lp_status,
+            "require_lp_status",
         )?;
         cfg.min_liquidity_usd = parse_number(
             section.get("min_liquidity_usd"),
@@ -113,6 +143,7 @@ impl RiskConfig {
             validate_endpoint(url, "rpc_fallback_url")?;
         }
         validate_endpoint(&cfg.market_base_url, "market_base_url")?;
+        validate_endpoint(&cfg.security_base_url, "security_base_url")?;
         Ok(cfg)
     }
 }
@@ -247,6 +278,11 @@ pub struct MintEvidence {
     pub default_frozen: bool,
     pub non_transferable: bool,
     pub confidential_transfer: bool,
+    pub pausable_authority: bool,
+    pub paused: bool,
+    pub permissioned_burn_authority: bool,
+    pub scaled_ui_amount_authority: bool,
+    pub unassessed_extensions: Vec<String>,
 }
 
 pub fn parse_mint_account(response: &Value) -> Result<MintEvidence, String> {
@@ -290,68 +326,186 @@ pub fn parse_mint_account(response: &Value) -> Result<MintEvidence, String> {
         default_frozen: false,
         non_transferable: false,
         confidential_transfer: false,
+        pausable_authority: false,
+        paused: false,
+        permissioned_burn_authority: false,
+        scaled_ui_amount_authority: false,
+        unassessed_extensions: Vec::new(),
     };
 
-    if let Some(extensions) = info.get("extensions").and_then(Value::as_array) {
-        for ext in extensions {
-            parse_extension(ext, &mut evidence);
+    match info.get("extensions") {
+        Some(Value::Array(extensions)) => {
+            for ext in extensions {
+                parse_extension(ext, &mut evidence)?;
+            }
         }
+        Some(_) => return Err("mint extensions must be an array".to_string()),
+        None if evidence.program == TokenProgram::Token2022 => {
+            return Err("Token-2022 mint extensions are missing".to_string());
+        }
+        None => {}
     }
     evidence.extension_names.sort();
     evidence.extension_names.dedup();
+    evidence.unassessed_extensions.sort();
+    evidence.unassessed_extensions.dedup();
     Ok(evidence)
 }
 
-fn parse_extension(extension: &Value, evidence: &mut MintEvidence) {
+fn parse_extension(extension: &Value, evidence: &mut MintEvidence) -> Result<(), String> {
     let raw_name = extension
         .get("extension")
         .or_else(|| extension.get("type"))
         .or_else(|| extension.get("kind"))
         .and_then(Value::as_str)
-        .unwrap_or("unknown");
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| "mint extension name is missing or invalid".to_string())?;
     let normalized: String = raw_name
         .chars()
         .filter(|c| c.is_ascii_alphanumeric())
         .flat_map(char::to_lowercase)
         .collect();
-    if raw_name != "unknown" {
-        let safe_name = raw_name
-            .chars()
-            .filter(|ch| ch.is_ascii_alphanumeric() || matches!(*ch, '-' | '_'))
-            .take(40)
-            .collect::<String>();
-        if !safe_name.is_empty() {
-            evidence.extension_names.push(safe_name);
-        }
+    let safe_name = raw_name
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric() || matches!(*ch, '-' | '_'))
+        .take(40)
+        .collect::<String>();
+    if normalized.is_empty() || safe_name.is_empty() {
+        return Err("mint extension name is missing or invalid".to_string());
     }
-    let state = extension.get("state").unwrap_or(extension);
-    match normalized.as_str() {
+    evidence.extension_names.push(safe_name.clone());
+    let assessed = match normalized.as_str() {
         "transferfeeconfig" => {
-            evidence.transfer_fee_authority = authority_is_set(
-                state
-                    .get("transferFeeConfigAuthority")
-                    .or_else(|| state.get("withdrawWithheldAuthority")),
-            );
-            evidence.transfer_fee_bps = ["newerTransferFee", "olderTransferFee"]
-                .iter()
-                .filter_map(|name| state.get(*name))
-                .filter_map(|fee| fee.get("transferFeeBasisPoints").and_then(value_to_u64))
-                .max()
-                .or_else(|| state.get("transferFeeBasisPoints").and_then(value_to_u64));
+            let state = required_extension_state(extension, "transfer fee")?;
+            let config_authority = required_nullable_string(
+                state,
+                &["transferFeeConfigAuthority"],
+                "transfer fee config authority",
+            )?;
+            let withdraw_authority = required_nullable_string(
+                state,
+                &["withdrawWithheldAuthority"],
+                "withdraw-withheld authority",
+            )?;
+            evidence.transfer_fee_authority = config_authority || withdraw_authority;
+
+            let mut fee_bps = Vec::new();
+            for name in ["newerTransferFee", "olderTransferFee"] {
+                if let Some(fee) = state.get(name) {
+                    let fee = fee
+                        .as_object()
+                        .ok_or_else(|| format!("{name} is invalid"))?;
+                    let value = fee
+                        .get("transferFeeBasisPoints")
+                        .and_then(value_to_u64)
+                        .filter(|value| *value <= 10_000)
+                        .ok_or_else(|| format!("{name} basis points are invalid"))?;
+                    fee_bps.push(value);
+                }
+            }
+            if let Some(value) = state.get("transferFeeBasisPoints") {
+                fee_bps.push(
+                    value_to_u64(value)
+                        .filter(|value| *value <= 10_000)
+                        .ok_or_else(|| "transfer fee basis points are invalid".to_string())?,
+                );
+            }
+            evidence.transfer_fee_bps = fee_bps.into_iter().max();
+            if evidence.transfer_fee_bps.is_none() {
+                return Err("transfer fee schedule is missing".to_string());
+            }
+            true
         }
-        "transferhook" => evidence.transfer_hook = true,
-        "permanentdelegate" => evidence.permanent_delegate = true,
+        "transferhook" => {
+            let state = required_extension_state(extension, "transfer hook")?;
+            evidence.transfer_hook = required_nullable_string(
+                state,
+                &["programId", "program_id"],
+                "transfer hook program id",
+            )?;
+            true
+        }
+        "permanentdelegate" => {
+            let state = required_extension_state(extension, "permanent delegate")?;
+            evidence.permanent_delegate =
+                required_nullable_string(state, &["delegate"], "permanent delegate")?;
+            true
+        }
         "defaultaccountstate" => {
-            evidence.default_frozen = state
+            let state = required_extension_state(extension, "default account state")?;
+            let account_state = state
                 .get("accountState")
                 .and_then(Value::as_str)
-                .is_some_and(|v| v.eq_ignore_ascii_case("frozen"));
+                .ok_or_else(|| "default account state is missing or invalid".to_string())?;
+            evidence.default_frozen = if account_state.eq_ignore_ascii_case("frozen") {
+                true
+            } else if account_state.eq_ignore_ascii_case("initialized") {
+                false
+            } else {
+                return Err("default account state is unsupported".to_string());
+            };
+            true
         }
-        "nontransferable" | "nontransferableaccount" => evidence.non_transferable = true,
+        "nontransferable" | "nontransferableaccount" => {
+            evidence.non_transferable = true;
+            true
+        }
         "confidentialtransfermint" | "confidentialtransferfeeconfig" => {
-            evidence.confidential_transfer = true
+            evidence.confidential_transfer = true;
+            true
         }
-        _ => {}
+        "pausableconfig" | "pausable" => {
+            let state = required_extension_state(extension, "pausable")?;
+            evidence.pausable_authority =
+                required_nullable_string(state, &["authority"], "pausable authority")?;
+            evidence.paused = state
+                .get("paused")
+                .and_then(Value::as_bool)
+                .ok_or_else(|| "pausable state is missing or invalid".to_string())?;
+            true
+        }
+        "permissionedburnconfig" | "permissionedburn" => {
+            let state = required_extension_state(extension, "permissioned burn")?;
+            evidence.permissioned_burn_authority = required_nullable_string(
+                state,
+                &["authority", "burnAuthority"],
+                "permissioned burn authority",
+            )?;
+            true
+        }
+        "scaleduiamountconfig" | "scaleduiamount" => {
+            let state = required_extension_state(extension, "scaled UI amount")?;
+            evidence.scaled_ui_amount_authority = required_nullable_string(
+                state,
+                &["authority", "updateAuthority"],
+                "scaled UI amount authority",
+            )?;
+            true
+        }
+        _ => false,
+    };
+    if !assessed {
+        evidence.unassessed_extensions.push(safe_name);
+    }
+    Ok(())
+}
+
+fn required_extension_state<'a>(extension: &'a Value, label: &str) -> Result<&'a Value, String> {
+    extension
+        .get("state")
+        .filter(|state| state.is_object())
+        .ok_or_else(|| format!("{label} extension state is missing or invalid"))
+}
+
+fn required_nullable_string(state: &Value, names: &[&str], label: &str) -> Result<bool, String> {
+    let value = names
+        .iter()
+        .find_map(|name| state.get(*name))
+        .ok_or_else(|| format!("{label} is missing"))?;
+    match value {
+        Value::Null => Ok(false),
+        Value::String(value) if !value.trim().is_empty() => Ok(true),
+        _ => Err(format!("{label} is invalid")),
     }
 }
 
@@ -390,14 +544,22 @@ pub fn parse_largest_token_accounts(response: &Value) -> Result<Vec<String>, Str
         .pointer("/result/value")
         .and_then(Value::as_array)
         .ok_or_else(|| "largest token accounts are missing".to_string())?;
-    let addresses = values
-        .iter()
-        .filter_map(|item| item.get("address").and_then(Value::as_str))
-        .take(20)
-        .map(str::to_string)
-        .collect::<Vec<_>>();
-    if addresses.is_empty() {
+    if values.is_empty() || values.len() > 20 {
         return Err("largest token accounts are empty".to_string());
+    }
+    let mut seen = BTreeSet::new();
+    let mut addresses = Vec::with_capacity(values.len());
+    for item in values {
+        let address = item
+            .get("address")
+            .and_then(Value::as_str)
+            .ok_or_else(|| "largest token account address is missing".to_string())?;
+        validate_mint(address)
+            .map_err(|_| "largest token account address is invalid".to_string())?;
+        if !seen.insert(address) {
+            return Err("largest token account addresses contain a duplicate".to_string());
+        }
+        addresses.push(address.to_string());
     }
     Ok(addresses)
 }
@@ -408,12 +570,19 @@ pub struct HolderEvidence {
     pub unresolved_accounts: usize,
 }
 
-pub fn parse_holder_accounts(response: &Value) -> Result<HolderEvidence, String> {
+pub fn parse_holder_accounts(
+    response: &Value,
+    expected_accounts: usize,
+    requested_mint: &str,
+) -> Result<HolderEvidence, String> {
     reject_rpc_error(response)?;
     let values = response
         .pointer("/result/value")
         .and_then(Value::as_array)
         .ok_or_else(|| "holder account data are missing".to_string())?;
+    if expected_accounts == 0 || values.len() != expected_accounts {
+        return Err("holder account response count does not match the request".to_string());
+    }
     let mut owners = BTreeMap::<String, u128>::new();
     let mut unresolved = 0usize;
     for account in values {
@@ -428,6 +597,13 @@ pub fn parse_holder_accounts(response: &Value) -> Result<HolderEvidence, String>
                 continue;
             }
         };
+        let account_mint = info
+            .get("mint")
+            .and_then(Value::as_str)
+            .ok_or_else(|| "holder account mint is missing".to_string())?;
+        if account_mint != requested_mint {
+            return Err("holder account mint does not match the request".to_string());
+        }
         let owner = match info.get("owner").and_then(Value::as_str) {
             Some(v) if !v.is_empty() => v,
             _ => {
@@ -468,7 +644,167 @@ pub struct MarketEvidence {
     pub pair_address: Option<String>,
 }
 
-pub fn parse_market_pairs(response: &Value) -> Result<MarketEvidence, String> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LpStatus {
+    Locked,
+    Burned,
+    PartiallyLocked,
+    Unlocked,
+    Concentrated,
+    Unknown,
+}
+
+impl LpStatus {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Locked => "locked",
+            Self::Burned => "burned",
+            Self::PartiallyLocked => "partially_locked",
+            Self::Unlocked => "unlocked",
+            Self::Concentrated => "concentrated_position",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct LpEvidence {
+    pub status: LpStatus,
+    pub burned_pct: Option<f64>,
+    pub locked_pct: Option<f64>,
+    pub pool_type: Option<String>,
+    pub provider: &'static str,
+}
+
+pub fn parse_lp_security(response: &Value, requested_mint: &str) -> Result<LpEvidence, String> {
+    let code_ok = response
+        .get("code")
+        .is_some_and(|value| value_to_u64(value) == Some(1));
+    if !code_ok {
+        return Err("LP-security provider returned an error".to_string());
+    }
+    let token = response
+        .get("result")
+        .and_then(|result| result.get(requested_mint))
+        .ok_or_else(|| "LP-security response is not bound to the requested mint".to_string())?;
+    let pools = token
+        .get("dex")
+        .and_then(Value::as_array)
+        .ok_or_else(|| "LP-security response has no pool array".to_string())?;
+    let best_pool = pools.iter().max_by(|left, right| {
+        let left_tvl = left.get("tvl").and_then(value_to_f64).unwrap_or(0.0);
+        let right_tvl = right.get("tvl").and_then(value_to_f64).unwrap_or(0.0);
+        left_tvl.total_cmp(&right_tvl)
+    });
+    let Some(best_pool) = best_pool else {
+        return Ok(LpEvidence {
+            status: LpStatus::Unknown,
+            burned_pct: None,
+            locked_pct: None,
+            pool_type: None,
+            provider: "goplus",
+        });
+    };
+    let raw_pool_type = best_pool
+        .get("type")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty());
+    let pool_type = raw_pool_type.map(|value| compact_label(value, 32));
+    let burned_pct = parse_optional_percentage(best_pool.get("burn_percent"), "LP burn percent")?;
+    let pool_kind = raw_pool_type.map(|value| value.to_ascii_lowercase());
+    let locked_pct = if pool_kind.as_deref() == Some("standard") {
+        parse_pool_bound_locked_percentage(token, best_pool, pools.len())?
+    } else {
+        None
+    };
+    let status = match pool_kind.as_deref() {
+        Some("concentrated") => LpStatus::Concentrated,
+        Some("standard") if burned_pct.is_some_and(|value| value >= 95.0) => LpStatus::Burned,
+        Some("standard") if locked_pct.is_some_and(|value| value >= 95.0) => LpStatus::Locked,
+        Some("standard")
+            if burned_pct.is_some_and(|value| value > 0.0)
+                || locked_pct.is_some_and(|value| value > 0.0) =>
+        {
+            LpStatus::PartiallyLocked
+        }
+        Some("standard") if burned_pct == Some(0.0) && locked_pct == Some(0.0) => {
+            LpStatus::Unlocked
+        }
+        _ => LpStatus::Unknown,
+    };
+    Ok(LpEvidence {
+        status,
+        burned_pct: burned_pct.map(rounded),
+        locked_pct: locked_pct.map(rounded),
+        pool_type,
+        provider: "goplus",
+    })
+}
+
+fn parse_optional_percentage(value: Option<&Value>, label: &str) -> Result<Option<f64>, String> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    if value.is_null() {
+        return Ok(None);
+    }
+    let parsed = value_to_f64(value).ok_or_else(|| format!("{label} is invalid"))?;
+    if !(0.0..=100.0).contains(&parsed) {
+        return Err(format!("{label} is outside 0..100"));
+    }
+    Ok(Some(parsed))
+}
+
+fn parse_pool_bound_locked_percentage(
+    token: &Value,
+    pool: &Value,
+    pool_count: usize,
+) -> Result<Option<f64>, String> {
+    // GoPlus documents lp_holders for the largest main-token pool, but does
+    // not expose a pool id on each holder. Bind the balances only when there is
+    // exactly one reported pool; otherwise the association is ambiguous.
+    if pool_count != 1 {
+        return Ok(None);
+    }
+    let Some(lp_amount_value) = pool.get("lp_amount") else {
+        return Ok(None);
+    };
+    let lp_amount = value_to_f64(lp_amount_value)
+        .filter(|value| *value > 0.0)
+        .ok_or_else(|| "LP total amount is invalid".to_string())?;
+    let Some(holders) = token.get("lp_holders").and_then(Value::as_array) else {
+        return Ok(None);
+    };
+    let mut locked_amount = 0.0;
+    for holder in holders {
+        let is_locked = holder
+            .get("is_locked")
+            .and_then(value_to_u64)
+            .filter(|value| *value <= 1)
+            .ok_or_else(|| "LP holder lock flag is invalid".to_string())?;
+        if is_locked == 1 {
+            let balance = holder
+                .get("balance")
+                .and_then(value_to_f64)
+                .filter(|value| *value >= 0.0)
+                .ok_or_else(|| "locked LP holder balance is invalid".to_string())?;
+            locked_amount += balance;
+            if !locked_amount.is_finite() {
+                return Err("locked LP holder balance is invalid".to_string());
+            }
+        }
+    }
+    if locked_amount > lp_amount * 1.001 {
+        return Err("locked LP balance exceeds the pool total".to_string());
+    }
+    Ok(Some((locked_amount / lp_amount * 100.0).clamp(0.0, 100.0)))
+}
+
+pub fn parse_market_pairs(
+    response: &Value,
+    requested_mint: &str,
+) -> Result<MarketEvidence, String> {
     let pairs = response
         .as_array()
         .or_else(|| response.get("pairs").and_then(Value::as_array))
@@ -481,6 +817,14 @@ pub fn parse_market_pairs(response: &Value) -> Result<MarketEvidence, String> {
             .and_then(Value::as_str)
             .is_some_and(|v| !v.eq_ignore_ascii_case("solana"))
         {
+            continue;
+        }
+        let matches_requested_mint = ["baseToken", "quoteToken"].iter().any(|side| {
+            pair.pointer(&format!("/{side}/address"))
+                .and_then(Value::as_str)
+                .is_some_and(|address| address == requested_mint)
+        });
+        if !matches_requested_mint {
             continue;
         }
         count += 1;
@@ -526,14 +870,7 @@ fn reject_rpc_error(response: &Value) -> Result<(), String> {
             .get("code")
             .and_then(Value::as_i64)
             .unwrap_or_default();
-        let message = error
-            .get("message")
-            .and_then(Value::as_str)
-            .unwrap_or("unknown RPC error");
-        return Err(format!(
-            "RPC error {code}: {}",
-            concise_error(Some(message), "unknown RPC error")
-        ));
+        return Err(format!("RPC error {code}"));
     }
     Ok(())
 }
@@ -545,6 +882,8 @@ pub struct RiskEvidence {
     pub holders_error: Option<String>,
     pub market: Option<MarketEvidence>,
     pub market_error: Option<String>,
+    pub lp_security: Option<LpEvidence>,
+    pub lp_security_error: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -579,6 +918,11 @@ pub struct RiskFacts {
     pub transfer_fee_bps: Option<u64>,
     pub transfer_hook: bool,
     pub permanent_delegate: bool,
+    pub pausable_authority: bool,
+    pub paused: bool,
+    pub permissioned_burn_authority: bool,
+    pub scaled_ui_amount_authority: bool,
+    pub unassessed_extensions: Vec<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub extensions: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -589,6 +933,16 @@ pub struct RiskFacts {
     pub liquidity_usd: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub market: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lp_status: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lp_burned_pct: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lp_locked_pct: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lp_pool_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lp_evidence_source: Option<&'static str>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -678,6 +1032,56 @@ pub fn assess(mint_address: &str, evidence: &RiskEvidence, cfg: &RiskConfig) -> 
             10,
             "CONFIDENTIAL_TRANSFER",
             "balances or transfer amounts may be opaque".to_string(),
+        );
+    }
+    if evidence.mint.paused {
+        add(
+            Severity::Red,
+            50,
+            "TOKEN_PAUSED",
+            "minting, burning, and transfers are paused".to_string(),
+        );
+    } else if evidence.mint.pausable_authority {
+        add(
+            Severity::Amber,
+            15,
+            "PAUSABLE_AUTHORITY",
+            "an authority can pause minting, burning, and transfers".to_string(),
+        );
+    }
+    if evidence.mint.permissioned_burn_authority {
+        add(
+            Severity::Amber,
+            10,
+            "PERMISSIONED_BURN",
+            "holder burns require an additional authority".to_string(),
+        );
+    }
+    if evidence.mint.scaled_ui_amount_authority {
+        add(
+            Severity::Amber,
+            10,
+            "SCALED_UI_AMOUNT",
+            "an authority can change displayed token amounts".to_string(),
+        );
+    }
+    if !evidence.mint.unassessed_extensions.is_empty() {
+        complete = false;
+        add(
+            Severity::Amber,
+            15,
+            "UNASSESSED_TOKEN_EXTENSION",
+            format!(
+                "unassessed Token-2022 extensions: {}",
+                evidence
+                    .mint
+                    .unassessed_extensions
+                    .iter()
+                    .take(4)
+                    .map(String::as_str)
+                    .collect::<Vec<_>>()
+                    .join(",")
+            ),
         );
     }
     if let Some(bps) = evidence.mint.transfer_fee_bps.filter(|v| *v > 0) {
@@ -819,6 +1223,65 @@ pub fn assess(mint_address: &str, evidence: &RiskEvidence, cfg: &RiskConfig) -> 
         (None, None)
     };
 
+    let (lp_status, lp_burned_pct, lp_locked_pct, lp_pool_type, lp_evidence_source) =
+        if let Some(lp) = &evidence.lp_security {
+            match lp.status {
+                LpStatus::Locked | LpStatus::Burned => {}
+                LpStatus::PartiallyLocked => add(
+                    Severity::Amber,
+                    15,
+                    "LP_PARTIALLY_LOCKED",
+                    "only part of the observed LP position is locked or burned".to_string(),
+                ),
+                LpStatus::Unlocked => add(
+                    Severity::Red,
+                    35,
+                    "LP_UNLOCKED",
+                    "the largest standard pool has no observed LP lock or burn".to_string(),
+                ),
+                LpStatus::Concentrated => {
+                    complete = false;
+                    add(
+                        Severity::Amber,
+                        15,
+                        "LP_POSITION_CONTROL_UNVERIFIED",
+                        "the largest pool uses concentrated positions; lock control is unverified"
+                            .to_string(),
+                    );
+                }
+                LpStatus::Unknown => {
+                    complete = false;
+                    add(
+                        Severity::Red,
+                        25,
+                        "LP_STATUS_UNKNOWN",
+                        "LP lock or burn status could not be established".to_string(),
+                    );
+                }
+            }
+            (
+                Some(lp.status.label()),
+                lp.burned_pct,
+                lp.locked_pct,
+                lp.pool_type.clone(),
+                Some(lp.provider),
+            )
+        } else if cfg.require_lp_status {
+            complete = false;
+            add(
+                Severity::Red,
+                35,
+                "LP_EVIDENCE_MISSING",
+                concise_error(
+                    evidence.lp_security_error.as_deref(),
+                    "LP security evidence unavailable",
+                ),
+            );
+            (None, None, None, None, None)
+        } else {
+            (None, None, None, None, None)
+        };
+
     if evidence.mint.supply == 0 {
         add(
             Severity::Red,
@@ -859,6 +1322,18 @@ pub fn assess(mint_address: &str, evidence: &RiskEvidence, cfg: &RiskConfig) -> 
             transfer_fee_bps: evidence.mint.transfer_fee_bps,
             transfer_hook: evidence.mint.transfer_hook,
             permanent_delegate: evidence.mint.permanent_delegate,
+            pausable_authority: evidence.mint.pausable_authority,
+            paused: evidence.mint.paused,
+            permissioned_burn_authority: evidence.mint.permissioned_burn_authority,
+            scaled_ui_amount_authority: evidence.mint.scaled_ui_amount_authority,
+            unassessed_extensions: evidence
+                .mint
+                .unassessed_extensions
+                .iter()
+                .take(8)
+                .map(|value| compact_label(value, 40))
+                .filter(|value| !value.is_empty())
+                .collect(),
             extensions: evidence
                 .mint
                 .extension_names
@@ -871,6 +1346,11 @@ pub fn assess(mint_address: &str, evidence: &RiskEvidence, cfg: &RiskConfig) -> 
             top10_pct,
             liquidity_usd,
             market,
+            lp_status,
+            lp_burned_pct,
+            lp_locked_pct,
+            lp_pool_type,
+            lp_evidence_source,
         },
         note: "Read-only evidence, not financial advice.",
     }
