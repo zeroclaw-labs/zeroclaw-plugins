@@ -1,0 +1,10 @@
+name = "rent-reclaim-build"
+version = "0.1.0"
+description = "Build an unsigned transaction closing empty Solana token accounts; rent returns to the owner, a human signs"
+author = "Udit Jain"
+wasm_path = "rent_reclaim_build.wasm"
+capabilities = ["tool"]
+# http_client: outbound JSON-RPC to the configured Solana RPC endpoint (TLS is
+# performed host-side). config_read: read `rpc_url` from this plugin's own
+# config section; without it the public mainnet endpoint is used.
+permissions = ["http_client", "config_read"]
