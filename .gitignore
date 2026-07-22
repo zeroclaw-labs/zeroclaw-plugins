@@ -8,9 +8,17 @@ target/
 *.wasm
 .superpowers/
 
-# Demo secrets
+# Demo secrets + local runtime (never commit)
 demo/keys/
 demo/*.mp4
 demo/recording/
+demo/.env
+demo/zeroclaw-config/config.toml
+demo/zeroclaw-config/.secret_key
+demo/zeroclaw-config/data/
+demo/zeroclaw-config/plugins/
+demo/dist/
 .env
 .env.*
+!.env.example
+!demo/.env.example
