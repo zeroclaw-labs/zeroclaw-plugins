@@ -5,10 +5,11 @@ Solana SPL or Token-2022 mint before an agent recommends interacting with it.
 It gathers public on-chain and market evidence, applies deterministic rules,
 and returns a compact red/amber/green JSON report.
 
-**Submission status:** the implementation has been exercised in a ZeroClaw
-0.8.3 host during development. A fresh post-hardening host run, final WASM
-digest, and a short real Telegram or Discord channel recording must be captured
-before submission. The earlier slide-based demo is not submission evidence.
+**Submission status:** the post-hardening release has been rebuilt and exercised
+in a ZeroClaw 0.8.3 host against live Solana RPC, DexScreener, and GoPlus
+evidence. Its final WASM digest and reproducible host result are recorded below.
+The remaining bounty artifact is a short real Telegram or Discord channel
+recording; the earlier slide-based demo is not submission evidence.
 
 It never accepts a recovery phrase or private key, never connects a wallet,
 and cannot construct, sign, simulate, or submit a transaction. The report is
