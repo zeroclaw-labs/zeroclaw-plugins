@@ -1,0 +1,9 @@
+name = "payment-watch"
+version = "0.1.0"
+description = "Watch a Solana address for an expected SPL payment and report a compact, chain-verified confirmation (T0 read-only)"
+author = "luongs3"
+wasm_path = "payment_watch.wasm"
+capabilities = ["tool"]
+# http_client: read-only JSON-RPC (getSignaturesForAddress / getTransaction).
+# config_read: watched address + RPC URL from the plugin's jailed config.
+permissions = ["http_client", "config_read"]
