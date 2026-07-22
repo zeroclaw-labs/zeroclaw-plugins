@@ -1,0 +1,31 @@
+[package]
+name = "payment-watch"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "ZeroClaw T0 tool plugin that checks Solana payments by amount and reference."
+publish = false
+
+[lib]
+name = "payment_watch"
+crate-type = ["cdylib", "rlib"]
+path = "src/lib.rs"
+
+[dependencies]
+bs58 = "0.5"
+curve25519-dalek = { version = "4", default-features = false, features = ["alloc"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+thiserror = "1"
+wit-bindgen = "0.46"
+
+[target.'cfg(target_family = "wasm")'.dependencies]
+waki = { version = "0.5.1", features = ["json"] }
+
+[profile.release]
+opt-level = "z"
+lto = true
+strip = true
+
+[workspace]

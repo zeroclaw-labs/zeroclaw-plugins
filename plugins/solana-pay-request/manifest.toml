@@ -1,0 +1,7 @@
+name = "solana-pay-request"
+version = "0.1.0"
+description = "Create a Solana Pay URL and QR-ready payload for an unsigned SPL-token payment."
+author = "Adarsh"
+wasm_path = "solana_pay_request.wasm"
+capabilities = ["tool"]
+permissions = []
