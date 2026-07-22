@@ -63,6 +63,9 @@ opt-level = "s"
 lto = true
 strip = true
 codegen-units = 1
+# Panic on overflow in release: the plugin does lamport / HNT-bone arithmetic;
+# silent overflow in amount math is a real footgun. Defense in depth.
+overflow-checks = true
 
 # Standalone crate: built for wasm32-wasip2, not part of the host workspace.
 [workspace]

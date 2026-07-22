@@ -20,6 +20,8 @@ A ZeroClaw WIT **tool plugin** (`wasm32-wasip2` component) that an LLM agent (or
 | `watch` | **The cron workhorse:** detect an online→offline flip (instant Telegram alert) + optional 08:00 daily rewards summary | T0 read + Telegram send |
 | `claim_tx` | *(roadmap)* Draft an unsigned rewards-claim tx for the hotspot's owner | T1 unsigned |
 
+> **One tool, one data source, one custody tier — not a god-tool.** All four actions are related reads/alerts of the *same* configured hotspot (`status` / time-range `summary` / cron `watch`) plus the roadmap `claim_tx` draft. They share one LLM discovery surface ("watch my hotspot") and one redacted config; the action field routes T0 reads, not unrelated capabilities across custody tiers. `claim_tx` is T1 and fails closed until shipped — see [Custody](#custody-tier--t0t1-no-signing-key-declared--defended).
+
 Data source: the public **Relay API** (`api.relaywireless.com`) — Helium-Foundation-sponsored, free Community tier (1,000 req/mo). The bounty explicitly grants plugins *"read access to any Solana RPC, any DAS endpoint, any aggregator API"* — Relay is a Helium data aggregator, squarely within that grant.
 
 ---
@@ -178,7 +180,7 @@ We deliberately **did not ship the claim tx yet.** Helium hotspots are **compres
 
 ```bash
 cd plugins/depin-rewards
-cargo test                              # 55 host tests (52 core + 3 demo) over the pure core (MockHttp)
+cargo test                              # 58 host tests (55 core + 3 demo) over the pure core (MockHttp)
 cargo clippy --all-targets -- -D warnings
 cargo build --target wasm32-wasip2 --release   # the component
 ```
