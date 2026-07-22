@@ -29,6 +29,13 @@ const DEFAULT_ATTESTATION_TTL_SECS: i64 = 7_776_000;
 /// ~1000 years is nonsensical for a sensor-reading expiry.
 const MAX_ATTESTATION_TTL_SECS: i64 = i64::MAX - 31_622_400;
 
+/// Maximum accepted memo length (bytes). The Memo program itself has no fixed
+/// limit, but a memo is attacker-supplied (LLM args) and an unbounded memo
+/// could blow past Solana's 1232-byte tx limit (RPC reject) or be used to bloat
+/// the tx. 566 bytes is the commonly-cited spl-memo practical max; we cap there
+/// — well under the tx budget after the advance + attestation ixs.
+pub const MEMO_MAX_BYTES: usize = 566;
+
 // ── Errors ──
 
 /// Every error the attestation flow can produce. Specific + actionable — no
@@ -524,6 +531,7 @@ pub fn execute_t1(
 ) -> Result<AttestOutput, AttestError> {
     // 1. Validate the reading.
     validate_reading(reading)?;
+    validate_memo(memo)?;
 
     // 2-3. Build the SAS instruction + derive the nonce + PDA + expiry.
     let nonce = reading.derive_nonce();
@@ -624,6 +632,21 @@ fn validate_reading(reading: &SensorReading) -> Result<(), AttestError> {
     Ok(())
 }
 
+/// Validate an attacker-supplied memo (LLM args). Empty/None is allowed (no memo
+/// ix is appended); a non-empty memo longer than `MEMO_MAX_BYTES` is rejected
+/// (InvalidReading) so it can't bloat the tx past Solana's 1232-byte limit.
+fn validate_memo(memo: Option<&str>) -> Result<(), AttestError> {
+    if let Some(m) = memo {
+        if !m.is_empty() && m.len() > MEMO_MAX_BYTES {
+            return Err(AttestError::InvalidReading(format!(
+                "memo too long: {} bytes (max {MEMO_MAX_BYTES}) — would blow the tx size budget",
+                m.len()
+            )));
+        }
+    }
+    Ok(())
+}
+
 // ── Memo fallback (slice E) ──
 
 /// Execute the memo-fallback T1 flow: skip SAS, build a memo-only tx with the
@@ -636,6 +659,7 @@ fn execute_memo_fallback(
     rpc: &dyn Rpc,
 ) -> Result<AttestOutput, AttestError> {
     validate_reading(reading)?;
+    validate_memo(memo)?;
 
     // Build the memo text: "palinurus: sensor_id=value unit @ timestamp"
     let memo_text = format!(
@@ -860,6 +884,7 @@ pub fn execute_t2(
     daily_cap_state: &mut DailyCapState,
 ) -> Result<AttestOutput, AttestError> {
     validate_reading(reading)?;
+    validate_memo(memo)?;
 
     // ── Custody guard 1: session key identity (fail closed before any work) ──
     enforce_session_key_identity(cfg)?;

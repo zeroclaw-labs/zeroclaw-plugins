@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 use std::str::FromStr;
 
-use depin_attest::depin_attest::{AttestConfig, AttestError, CustodyMode, SensorReading};
+use depin_attest::depin_attest::{AttestConfig, AttestError, CustodyMode, MEMO_MAX_BYTES, SensorReading};
 use palinurus_core::Pubkey;
 use sha2::{Digest, Sha256};
 
@@ -616,6 +616,19 @@ fn execute_t1_with_memo() {
         tx_bytes.windows(9).any(|w| w == b"sensor ok"),
         "tx must contain the memo text"
     );
+}
+
+/// F5: an attacker-supplied memo longer than MEMO_MAX_BYTES is rejected before
+/// any tx is built or any RPC call is made (the memo could otherwise blow past
+/// Solana's 1232-byte tx limit or bloat the tx). validate_memo runs before
+/// build_attest_ix + get_account_info, so no RPC is touched.
+#[test]
+fn execute_t1_rejects_oversized_memo() {
+    let cfg = test_config();
+    let rpc = MockRpc::new(vec![]); // never reached — validate_memo fails first
+    let huge = "x".repeat(MEMO_MAX_BYTES + 34);
+    let err = execute_t1(&test_reading(), Some(&huge), &cfg, &rpc).unwrap_err();
+    assert!(matches!(err, AttestError::InvalidReading(m) if m.contains("memo too long")));
 }
 
 #[test]
