@@ -1,0 +1,41 @@
+# Standalone crate (own [workspace]): the `args` core is host-tested with a
+# plain `cargo test`; the component is a wasm-only shim. `cupel-core` does the
+# decoding, simulation, and diffing, and is depended on by version rather than
+# by path because the plugins CI snapshots only `plugins/<name>` and `wit/v0`
+# before building — a path dependency would point at a directory that does not
+# exist in the build sandbox.
+[package]
+name = "tx-preflight"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.87"
+license = "MIT OR Apache-2.0"
+description = "Simulate a Solana transaction and report its observed effect before a human approves it."
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+wit-bindgen = "0.46"
+serde_json = "1"
+cupel-core = "0.1"
+
+# wasi:http client — only compiled for the wasm component, never on the host.
+[target.'cfg(target_family = "wasm")'.dependencies]
+waki = { version = "0.5.1", features = ["json"] }
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true
+codegen-units = 1
+
+# Standalone crate: built for wasm32-wasip2, not part of the host workspace.
+[workspace]
+
+# LOCAL DEVELOPMENT ONLY — uncomment to build against the working copy of
+# cupel-core before it is published. REMOVE BEFORE OPENING THE PR: the path
+# does not exist inside the CI build sandbox and the build will fail.
+# [patch.crates-io]
+# cupel-core = { path = "../../../core/cupel-core" }
