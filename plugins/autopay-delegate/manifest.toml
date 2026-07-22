@@ -1,0 +1,7 @@
+name = "autopay-delegate"
+version = "0.1.0"
+description = "Generate an unsigned transaction to delegate SPL token spending power to an agent"
+author = "Terry"
+wasm_path = "autopay_delegate.wasm"
+capabilities = ["tool"]
+permissions = []
