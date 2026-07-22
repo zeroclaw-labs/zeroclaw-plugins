@@ -194,9 +194,14 @@ Rolling the timestamp to a different UTC day resets the cap, but produces a
 **different attestation PDA** (different timestamp → different nonce → different
 PDA). The cap is a rate limiter; the PDA uniqueness is the replay guard.
 
-> **Disclosure:** The daily cap is a soft bound (thread_local state, resets on
-> component reload). The hard security boundary is the program allowlist. For a
-> hard daily cap, a future version could use an on-chain counter PDA.
+> **Disclosure — the daily cap is a rate-hint, not a security guard.** It is
+> thread_local (resets on component reload) AND the per-day counter is derived
+> from the reading's `timestamp` (attacker-supplied), so a prompt-injected agent
+> can roll the timestamp to reset it. It bounds nuisance spam, not funds. The
+> real fund bounds are (a) the **program allowlist** (blocks value transfer) and
+> (b) the **session-key lamport balance** (the key holds cents; `max_lamports_per_tx`
+> caps each tx). A hard, tamper-proof cap needs an on-chain counter PDA — see
+> "What we'd build next."
 
 ## What we'd build next
 
