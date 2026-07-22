@@ -1,5 +1,17 @@
 # spl-transfer-build
 
+## Part of the Solana Payments suite
+
+This plugin is one of three that work together for agent payments:
+
+| Plugin | Tier | Role |
+|---|---|---|
+| `solana-pay-request` | T1 | Generates a Solana Pay URL / QR for a requested amount |
+| `spl-transfer-build` | T1 | Builds an unsigned transfer transaction for a human/gate to sign |
+| `payment-watch` | T0 | Watches an address and fires an event when the expected payment lands |
+
+See each plugin's own README for its custody tier, config keys, and threat model.
+
 `spl-transfer-build` builds an **unsigned** versioned SPL token transfer. It
 derives the source and destination associated token accounts, always includes
 an idempotent destination-ATA creation instruction, optionally adds a memo,
@@ -20,18 +32,11 @@ component cannot read global configuration or another plugin's settings.
 | Key | Required | Default | Purpose |
 | --- | --- | --- | --- |
 | `allowed_recipients` | Yes, to build a transfer | empty (allows nobody) | Comma-separated base58 wallet-owner public keys that may be destinations. |
+| `allowed_mints` | Yes, to build a transfer | empty (allows nobody) | Comma-separated base58 SPL mint addresses. |
+| `max_amount` | No | empty (no cap) | Optional maximum amount to enforce. |
 | `rpc_url` | No | `https://api.devnet.solana.com/` | Solana JSON-RPC endpoint used only to obtain a blockhash and report ATA existence. |
 
-Example configuration:
-
-```toml
-[[plugins.entries]]
-name = "spl-transfer-build"
-
-[plugins.entries.config]
-allowed_recipients = "9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM"
-rpc_url = "https://api.devnet.solana.com/"
-```
+See `config.example.toml` for a starting point.
 
 An unset or blank `allowed_recipients` value is deliberately **not** an
 allow-all policy: every request fails with `recipient is not approved`.
@@ -144,6 +149,14 @@ exports and uses `wasi:http` through `waki` for RPC.
 Every component event is emitted through ZeroClaw's imported
 `logging.log-record` interface. The plugin does not write requests, secrets,
 or events to stdout.
+
+## Testing
+
+Run the guardrail coverage check:
+
+```bash
+./tools/check_injection_coverage.sh
+```
 
 ## Build and test
 

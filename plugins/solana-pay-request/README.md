@@ -1,10 +1,32 @@
 # solana-pay-request
 
+## Part of the Solana Payments suite
+
+This plugin is one of three that work together for agent payments:
+
+| Plugin | Tier | Role |
+|---|---|---|
+| `solana-pay-request` | T1 | Generates a Solana Pay URL / QR for a requested amount |
+| `spl-transfer-build` | T1 | Builds an unsigned transfer transaction for a human/gate to sign |
+| `payment-watch` | T0 | Watches an address and fires an event when the expected payment lands |
+
+See each plugin's own README for its custody tier, config keys, and threat model.
+
 `solana-pay-request` is a **T1 (Build)** ZeroClaw tool. Given a recipient,
 exact decimal amount, SPL mint, optional memo, and required reference public
 key, it returns a standards-compatible `solana:` transfer URL and an identical
 QR-ready payload. A wallet performs the separate transaction construction,
 approval, signing, and submission.
+
+## Configuration
+
+| Key | Default | Purpose |
+| --- | --- | --- |
+| `rpc_url` | `https://api.mainnet-beta.solana.com` | Solana JSON-RPC endpoint. |
+| `max_amount` | empty (no cap) | Optional maximum amount to enforce. |
+| `allowed_mints` | empty (no restriction) | Optional comma-separated allowed SPL mint addresses. |
+
+See `config.example.toml` for a starting point.
 
 ## Safety and custody
 
@@ -33,6 +55,14 @@ The result includes `solana_pay_url` and `qr_payload`, such as
 Text in `memo` is percent-encoded URL data only; it cannot change the
 recipient, amount, mint, or reference. Invalid keys and non-positive/malformed
 amounts fail with `success: false`. `tests/core.rs` covers this case.
+
+## Testing
+
+Run the guardrail coverage check:
+
+```bash
+./tools/check_injection_coverage.sh
+```
 
 ## Build and test
 

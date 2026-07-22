@@ -1,5 +1,17 @@
 # payment-watch
 
+## Part of the Solana Payments suite
+
+This plugin is one of three that work together for agent payments:
+
+| Plugin | Tier | Role |
+|---|---|---|
+| `solana-pay-request` | T1 | Generates a Solana Pay URL / QR for a requested amount |
+| `spl-transfer-build` | T1 | Builds an unsigned transfer transaction for a human/gate to sign |
+| `payment-watch` | T0 | Watches an address and fires an event when the expected payment lands |
+
+See each plugin's own README for its custody tier, config keys, and threat model.
+
 `payment-watch` is a **T0 (Read)**, stateless ZeroClaw tool. An agent or SOP
 invokes it with an expected recipient, exact amount, mint, decimal precision,
 and Solana Pay reference. The component reads recent transactions for the
@@ -12,7 +24,9 @@ It has no private key and cannot sign, submit, or alter a transaction.
 
 | Key | Default | Purpose |
 | --- | --- | --- |
-| `rpc_url` | `https://api.devnet.solana.com/` | JSON-RPC endpoint used for read-only transaction lookups. |
+| `rpc_url` | `https://api.mainnet-beta.solana.com` | JSON-RPC endpoint used for read-only transaction lookups. |
+
+See `config.example.toml` for a starting point.
 
 The only permissions are `http_client` and `config_read`. The RPC URL is read
 from the component's jailed configuration section; no endpoint key is in code.
@@ -50,6 +64,14 @@ The plugin watches only the latest 20 transactions per invocation. An SOP that
 runs infrequently should retain its own cursor or increase the lookback in a
 future version. Token-2022 transfer-fee and transfer-hook accounting are not
 yet supported and should be treated as non-matching until explicitly added.
+
+## Testing
+
+Run the guardrail coverage check:
+
+```bash
+./tools/check_injection_coverage.sh
+```
 
 ## Build and test
 

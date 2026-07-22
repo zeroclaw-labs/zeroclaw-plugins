@@ -1,0 +1,4 @@
+rpc_url = "https://api.mainnet-beta.solana.com"
+allowed_recipients = ""  # empty = fails closed, builds nothing
+allowed_mints = ""       # empty = fails closed, builds nothing
+max_amount = ""          # empty = no cap enforced
