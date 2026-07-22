@@ -22,7 +22,7 @@ mod component {
         features: ["plugins-wit-v0"],
     });
 
-    use crate::invoice_tool::execute_invoice;
+    use crate::invoice_tool::{execute_invoice, now_unix_ms};
     use exports::zeroclaw::plugin::plugin_info::Guest as PluginInfo;
     use exports::zeroclaw::plugin::tool::{Guest as Tool, ToolResult};
     use zeroclaw::plugin::logging::{
@@ -67,7 +67,7 @@ mod component {
                     },
                     "invoice_id": {
                         "type": "string",
-                        "description": "Optional invoice id (memo/status). Empty → auto INV-XXXXXXXX."
+                        "description": "Optional invoice id (memo/status). Must be unique per sale: the payment reference is derived from it, so reusing an id makes an older payment settle the new invoice. Empty → auto INV-XXXXXXXX, unique per issuance instant."
                     },
                     "description": {
                         "type": "string",
@@ -96,7 +96,9 @@ mod component {
         }
 
         fn execute(args: String) -> Result<ToolResult, String> {
-            match execute_invoice(&args) {
+            // The clock lives here, in the shim: the core takes the issuance
+            // instant as data so it stays pure and host-testable.
+            match execute_invoice(&args, now_unix_ms()) {
                 Ok(output) => {
                     emit(
                         PluginAction::Complete,
@@ -128,12 +130,7 @@ mod component {
         }
     }
 
-    fn emit(
-        action: PluginAction,
-        outcome: PluginOutcome,
-        message: &str,
-        detail: Option<&str>,
-    ) {
+    fn emit(action: PluginAction, outcome: PluginOutcome, message: &str, detail: Option<&str>) {
         let attrs = detail.map(|d| {
             // Keep attrs small and JSON-ish; avoid dumping full payloads.
             let short = if d.len() > 120 { &d[..120] } else { d };

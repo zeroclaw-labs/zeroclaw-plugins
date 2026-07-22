@@ -5,9 +5,11 @@
 //! Network I/O is injected via [`HttpTransport`] so host tests can pass
 //! fixture [`SignatureInfo`] lists to [`evaluate_status`] without HTTP.
 
+use std::cmp::Ordering;
 use std::collections::HashMap;
 
 use serde_json::Value;
+use solana_wasm_core::amount::compare_units_to_decimal;
 use solana_wasm_core::{
     derive_reference, status_from_signatures, status_from_signatures_verified, HttpTransport,
     RpcClient, SignatureInfo, UsdcReceipt, USDC_MINT,
@@ -19,10 +21,24 @@ pub const DEFAULT_RPC_URL: &str = "https://api.mainnet-beta.solana.com";
 /// Default `getSignaturesForAddress` lookback when the tool call omits it.
 pub const DEFAULT_LOOKBACK: u64 = 25;
 
-/// Upper bound of `getTransaction` value checks per status call. Partial
-/// payments across several transfers are summed up to this many recent
-/// successful signatures.
-pub const MAX_VALUE_CHECKS: usize = 5;
+/// Hard ceiling on `getTransaction` calls in one status check, so a caller
+/// passing an enormous `lookback` cannot turn one tool call into hundreds of
+/// RPC requests.
+///
+/// Every successful signature the lookback returned is checked up to this
+/// bound, so in practice the window is `lookback` itself (default
+/// [`DEFAULT_LOOKBACK`] = 25) and the ceiling only binds above 64.
+///
+/// It used to be 5, which was the bug: six successful dust transactions on the
+/// reference pushed a genuine older payment out of the checked window, and a
+/// paid invoice reported PENDING for the price of six network fees.
+///
+/// A ceiling is still a window, and pretending otherwise would be the same
+/// mistake one size larger. When it truncates the scan, the signatures left
+/// unchecked are counted, and the verdict degrades to
+/// `SIG OK (valor não verificado)` rather than asserting a shortfall the tool
+/// did not establish.
+pub const MAX_VALUE_CHECKS: usize = 64;
 
 /// Plugin config resolved from the host-injected `__config` section.
 #[derive(Debug, Clone)]
@@ -131,11 +147,7 @@ pub fn resolve_reference(
 ///
 /// Resolves the reference first; on resolution failure returns the error text
 /// so callers (and the wasm shim) can surface it without panicking.
-pub fn evaluate_status(
-    req: &StatusRequest,
-    cfg: &StatusConfig,
-    sigs: &[SignatureInfo],
-) -> String {
+pub fn evaluate_status(req: &StatusRequest, cfg: &StatusConfig, sigs: &[SignatureInfo]) -> String {
     let reference = match resolve_reference(
         &req.invoice_id,
         req.reference.as_deref(),
@@ -188,15 +200,27 @@ pub fn evaluate_status_verified(
 /// Fetch signatures for the invoice reference over `http`, then verify the
 /// amount actually received by the merchant and evaluate status.
 ///
-/// Flow: `getSignaturesForAddress(reference)` → up to [`MAX_VALUE_CHECKS`]
-/// recent successful sigs → `getTransaction(sig)` each → sum of net USDC
-/// received by `merchant_solana` for `usdc_mint` → value-aware verdict +
-/// shareable receipt when paid. Summing covers invoices settled by multiple
-/// partial transfers and spam txs touching the reference.
+/// Flow: `getSignaturesForAddress(reference, lookback)` → **every** successful
+/// signature it returned → `getTransaction(sig)` each → exact integer sum of
+/// the net USDC received by `merchant_solana` for `usdc_mint` → value-aware
+/// verdict + shareable receipt when paid.
 ///
-/// If the merchant pubkey is unknown, or `getTransaction` fails / omits the
-/// transaction, the amount cannot be confirmed and the status degrades to
-/// `USDC: SIG OK (valor não verificado …)` — it is never reported as PAID.
+/// Scanning all of them, rather than the newest few, is what stops cheap spam
+/// from hiding a real payment: anyone can emit dust transactions naming the
+/// invoice reference, and a window smaller than the lookback would let six of
+/// them bury the transfer that actually settled the invoice. RPC cost stays
+/// bounded by `lookback` (default 25) and by [`MAX_VALUE_CHECKS`], and the scan
+/// **stops early** as soon as the running total reaches `expected_usdc`, so the
+/// common settled case still costs a couple of calls.
+///
+/// The amount cannot be confirmed — and the status degrades to
+/// `USDC: SIG OK (valor não verificado …)`, never to PAID — when the merchant
+/// pubkey is unknown, when `getTransaction` fails or omits the transaction,
+/// when the transactions that did arrive disagree on the mint's decimals, or
+/// when part of the scan could not be read and the running total does not yet
+/// cover `expected_usdc`. That last case is why the incomplete scan is
+/// counted: a partial total is a lower bound, and a lower bound may confirm a
+/// payment but may never be published as a shortfall.
 pub fn fetch_and_status<T: HttpTransport>(
     req: &StatusRequest,
     cfg: &StatusConfig,
@@ -217,16 +241,30 @@ pub fn fetch_and_status<T: HttpTransport>(
         .get_signatures_for_address(&reference, req.effective_lookback())
         .map_err(|e| format!("invoice_status: rpc failed: {}", e.message))?;
 
-    // Sum the verified value over the most recent successful signatures
-    // (newest first). A single invoice can be settled across multiple partial
-    // transfers, and spam txs touching the reference must not mask an older
-    // real payment — so one tx is not enough. RPC cost is bounded by
-    // MAX_VALUE_CHECKS.
+    // Sum the verified value over *every* successful signature the lookback
+    // returned (newest first). A single invoice can be settled across multiple
+    // partial transfers, and dust transactions touching the reference must not
+    // mask an older real payment — so neither one tx nor "the newest five" is
+    // enough. The scan stops as soon as the expected amount is reached.
     let merchant = cfg.merchant_solana.trim();
+    let expected = req
+        .expected_usdc
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
 
-    let mut received_sum = 0.0_f64;
+    let mut received_units: u128 = 0;
+    // Decimals of the mint, learned from the first transaction that actually
+    // moved funds. Zero-delta transactions carry no usable decimals.
+    let mut decimals: Option<u32> = None;
     let mut any_verified = false;
+    let mut inconsistent = false;
     let mut block_time: Option<i64> = None;
+    let mut settled = false;
+    // Successful signatures the scan could not account for: either the ceiling
+    // cut them off, or `getTransaction` would not answer for them.
+    let successful = sigs.iter().filter(|s| s.is_success()).count();
+    let mut unverifiable = successful.saturating_sub(MAX_VALUE_CHECKS);
 
     // Need the merchant pubkey to filter received balances; without it the
     // amount cannot be verified, so degrade honestly rather than guess.
@@ -236,33 +274,81 @@ pub fn fetch_and_status<T: HttpTransport>(
             .filter(|s| s.is_success())
             .take(MAX_VALUE_CHECKS)
         {
-            // A tx the RPC cannot return (no result / no meta / transport
-            // error) is simply unverifiable: skip it and let the txs that did
-            // verify stand as an honest lower bound of what arrived.
-            if let Ok(Some(r)) =
-                client.get_transaction(&sig.signature, cfg.usdc_mint.trim(), merchant)
-            {
-                any_verified = true;
-                // Only positive deltas count as received; an unrelated
-                // outgoing transfer in a tx touching the reference must not
-                // subtract from the settlement sum.
-                if r.ui_amount > 0.0 {
-                    received_sum += r.ui_amount;
+            // A tx the RPC cannot return (no result / no meta / unreadable
+            // token balances / transport error) is unverifiable. Skip it — but
+            // count it, because the running total is then only a lower bound
+            // and a lower bound may not be published as a shortfall.
+            let r = match client.get_transaction(&sig.signature, cfg.usdc_mint.trim(), merchant) {
+                Ok(Some(r)) => r,
+                _ => {
+                    unverifiable += 1;
+                    continue;
                 }
-                if block_time.is_none() {
-                    block_time = r.block_time.or(sig.block_time);
+            };
+            any_verified = true;
+            // A zero delta contributes nothing and says nothing about the
+            // mint's decimals — an unrelated outgoing transfer in a tx
+            // touching the reference must not subtract from the total either.
+            if r.received_units == 0 {
+                continue;
+            }
+            // Receipt date comes from the newest transaction that actually
+            // moved funds, never from a dust tx that merely touched the
+            // reference.
+            if block_time.is_none() {
+                block_time = r.block_time.or(sig.block_time);
+            }
+            match decimals {
+                None => decimals = Some(r.decimals),
+                // Decimals are fixed per mint: a disagreement means the sum
+                // would be nonsense. Refuse to build a verdict from it.
+                Some(d) if d != r.decimals => {
+                    inconsistent = true;
+                    break;
                 }
+                Some(_) => {}
+            }
+            received_units = match received_units.checked_add(r.received_units) {
+                Some(t) => t,
+                None => {
+                    inconsistent = true;
+                    break;
+                }
+            };
+
+            // Early stop: the invoice is covered, further RPC calls would only
+            // add signatures nobody is waiting on. Whatever they hold cannot
+            // change a verdict that is already settled, so the transactions
+            // left unscanned here do not make the answer a lower bound.
+            settled = match (expected, decimals) {
+                (Some(exp), Some(d)) => compare_units_to_decimal(received_units, d, exp)
+                    .map(|c| c.expected_units > 0 && c.ordering != Ordering::Less)
+                    .unwrap_or(false),
+                _ => false,
+            };
+            if settled {
+                unverifiable = 0;
+                break;
             }
         }
     }
 
-    let verified = if any_verified {
+    // `received_units` is a *lower bound* whenever part of the scan is missing.
+    // A lower bound is enough to confirm a payment (it already covers the
+    // invoice) but never enough to assert a shortfall: publishing
+    // `UNDERPAID … faltam 7.27` because the public RPC rate-limited us halfway
+    // through is the same lie as claiming PAID without checking, pointed the
+    // other way. So an incomplete scan that has not yet covered the invoice
+    // degrades to `SIG OK (valor não verificado)`.
+    let complete = unverifiable == 0;
+    let verified = if !any_verified || inconsistent || (!complete && !settled) {
+        None
+    } else {
         Some(UsdcReceipt {
-            received_ui: received_sum,
+            received_units,
+            decimals: decimals.unwrap_or(0),
             block_time,
         })
-    } else {
-        None
     };
 
     Ok(status_from_signatures_verified(

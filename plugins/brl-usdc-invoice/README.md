@@ -34,7 +34,9 @@ the plugin:
    `solana:<merchant>?amount=<usdc>&spl-token=<mint>&reference=<ref>&label=…&message=…&memo=…`
 4. Derives a deterministic **reference**
    `bs58(sha256("zc-inv-v1" || invoice_id || "|" || merchant)[0..32])`, which is
-   the address [`invoice-status`](../invoice-status) later watches.
+   the address [`invoice-status`](../invoice-status) later watches. This
+   derivation is unchanged and unchanging: given the id and the merchant, anyone
+   can recompute the reference, with nothing stored.
 5. Emits the memo `PIX|BRL|<invoice_id>|<label>` — the same marker
    [`pixzclaw-brief`](../pixzclaw-brief) counts in its daily close-out.
 6. Renders a **mobile-first Telegram card**: a QR link per rail, the PIX
@@ -117,12 +119,61 @@ watch_hint = "true"
 | Arg | Required | Meaning |
 |---|---|---|
 | `amount_brl` | **yes** | Invoice amount in BRL, 2 decimals (`"150.00"`). |
-| `invoice_id` | no | Invoice id for memo + status; empty → auto `INV-XXXXXXXX`. |
+| `invoice_id` | no | Invoice id for memo + status. **Must be unique per sale** — see [Invoice ids](#invoice-ids-must-be-unique-per-sale). Empty → auto `INV-XXXXXXXX`, salted with the issuance instant. |
 | `description` | no | Short label used in the memo. |
 | `payer_name` | no | Used in the memo label when no description is given. |
 | `usdc_amount` | no | Explicit USDC amount; otherwise `amount_brl / brl_per_usdc`. |
 | `merchant_override` | no | Ignored when `recipient_locked = true` (default). |
 | `mint_override` | no | Must be in `allowed_mints`, else fails closed. |
+
+### Invoice ids must be unique per sale
+
+The Solana Pay **reference is derived from the invoice id**, and the reference is
+the only thing that links a payment to an invoice. Two invoices sharing an id
+share a reference, and there is then no way — on-chain or off — to tell which of
+them a payment settled. [`invoice-status`](../invoice-status) will report the
+older invoice's payment as settling the newer one, receipt and all.
+
+That is a property of a stateless, storage-free design, not a bug to be patched
+away: the id *is* the identity.
+
+- **Explicit `invoice_id`:** yours to keep unique. An order number, a sale id, a
+  UUID — anything that never repeats. `"cobra R$ 10 fatura teste"` twice is two
+  sales sharing one invoice.
+- **Omitted `invoice_id`:** the plugin mints
+  `INV-XXXXXXXX = sha256("zc-auto-inv-v2" | amount | description | merchant |
+  issued_at_unix_ms)[0..4]`. The issuance instant is in there precisely because
+  the rest is not enough — without it, two "R$ 10, no description" charges on
+  different days produced the *same* id, the same reference, and yesterday's
+  payment marked today's invoice `PAID ✅`. No attacker needed; charging the same
+  amount twice was the whole exploit.
+  (tests: `auto_invoice_id_differs_across_issuance_instants`,
+  `auto_invoice_id_is_unique_per_issuance_instant`)
+
+The clock lives in the wasm shim (`now_unix_ms()`, the same `SystemTime` pattern
+[`pixzclaw-brief`](../pixzclaw-brief) uses); the core takes the instant as a
+parameter and stays pure and host-testable. Milliseconds, not seconds, because
+two identical charges a second apart is an ordinary thing for a merchant to do.
+
+Two limits worth knowing:
+
+- **Same millisecond, same charge, same id.** Pass an explicit id at that volume.
+- **`INV-XXXXXXXX` is 32 bits**, kept short because the merchant reads it aloud
+  and types it back into `invoice_status`. The salt removes the *systematic*
+  collision (same charge, different day); it does not remove the birthday one,
+  so a merchant minting tens of thousands of automatic invoices should be using
+  explicit ids.
+
+If the host cannot give the shim a plausible clock, `build_invoice` **refuses**
+to mint an automatic id and returns
+`cannot mint a unique invoice_id: no usable clock … Pass an explicit, unique
+invoice_id.` Falling back to an unsalted id would be falling back to the bug.
+An explicit id needs no clock at all.
+(test: `auto_invoice_id_refuses_a_broken_clock`)
+
+An explicit id is never salted, so its reference stays reproducible from the id
+alone, which is what `invoice_status` recomputes when the merchant types the id
+back (test: `explicit_invoice_id_is_stable_across_instants`).
 
 ## Custody tier: T1
 
@@ -148,7 +199,7 @@ no private key in the wasm guest, so there is no hot wallet to drain.
 | Network exfiltration of the PIX key | **No `http_client` permission**; the component cannot open a socket |
 | Key theft | No keys exist in the plugin, its config, or its tool I/O |
 | Malformed PIX accepted by a bank app | EMV assembled field-by-field with CRC16-CCITT over the full payload |
-| Two invoices colliding on one reference | Reference is `sha256`-derived from `invoice_id` + merchant, so it is unique per pair and reproducible without storage |
+| Two invoices colliding on one reference | Reference is `sha256`-derived from `invoice_id` + merchant, so it is unique per pair and reproducible without storage. **The id therefore has to be unique per sale**: auto-generated ids are salted with the issuance instant, explicit ids are the caller's responsibility — see [Invoice ids](#invoice-ids-must-be-unique-per-sale) |
 | A forwarded card mangled by host redaction | Raw `solana:` line omitted; PIX code lives in a fenced block; the anti-redaction note sits outside the forwardable body |
 
 Fail-closed: validation errors return `ToolResult { success: false, error: … }`,
@@ -343,8 +394,11 @@ Written up because it is the part of this work that does not show in a demo.
    is startling the first time, and it is why the lockfiles are committed.
 5. **No clock in the core.** `wasm32-wasip2` does have a clock, but reading it
    inside the pure core would make tests non-deterministic. Time is a parameter
-   (`now_unix`) supplied by the shim, which is why the sibling brief's 24h and 7d
-   windows can be asserted exactly instead of approximately.
+   supplied by the shim — `now_unix` for the sibling brief's 24h and 7d windows,
+   `now_unix_ms` here for the auto-invoice-id salt — which is why both can be
+   asserted exactly instead of approximately. `build_invoice` takes
+   `issued_at_unix_ms` and hashes it into the generated id; it never asks what
+   time it is.
 6. **The core is vendored, not path-linked upstream.** The plugin CI
    (`tools/ci/validate_components.sh`) builds each plugin from a snapshot
    containing only `plugins/<name>` and `wit/v0`. A path dependency on

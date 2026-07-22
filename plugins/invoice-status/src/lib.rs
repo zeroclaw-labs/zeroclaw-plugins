@@ -27,9 +27,7 @@ mod component {
     use serde_json::Value;
     use solana_wasm_core::{HttpTransport, RpcError};
 
-    use crate::status_tool::{
-        fetch_and_status, StatusConfig, StatusRequest, DEFAULT_LOOKBACK,
-    };
+    use crate::status_tool::{fetch_and_status, StatusConfig, StatusRequest, DEFAULT_LOOKBACK};
     use exports::zeroclaw::plugin::plugin_info::Guest as PluginInfo;
     use exports::zeroclaw::plugin::tool::{Guest as Tool, ToolResult};
     use zeroclaw::plugin::logging::{
@@ -92,9 +90,17 @@ mod component {
             "Check dual-rail (PIX + USDC) invoice settlement status by Solana Pay \
              reference. Queries getSignaturesForAddress for the invoice reference \
              (derived from invoice_id + merchant_solana when reference is omitted), \
-             then getTransaction on the latest successful signature to verify the \
-             USDC amount actually received by the merchant (PAID / UNDERPAID / \
-             OVERPAID vs expected_usdc). Emits a shareable receipt when paid. \
+             then getTransaction on every successful signature it returned (up to \
+             the lookback), summing the exact USDC amount actually received by the \
+             merchant across them — so partial payments add up and dust \
+             transactions within the lookback cannot hide a real one — and stopping \
+             early once expected_usdc is reached. The verdict is an exact integer \
+             comparison against expected_usdc with no tolerance: PAID only on the \
+             exact amount, otherwise UNDERPAID / OVERPAID. expected_usdc must be a \
+             plain decimal like \"27.27\" (dot, no currency symbol); anything else \
+             is reported as invalid rather than compared. When part of the scan \
+             cannot be read, the tool says so instead of claiming a shortfall. \
+             Emits a shareable receipt when paid. \
              Read-only T0: cannot move funds. PIX is marked paid only when the \
              operator sets pix_marked_paid (bank SPI is not visible on-chain). \
              Idempotent and side-effect free, so it is safe to run periodically \
@@ -110,7 +116,7 @@ mod component {
                 "properties": {
                     "invoice_id": {
                         "type": "string",
-                        "description": "Invoice id used when deriving the Solana Pay reference (with merchant_solana from config)."
+                        "description": "Invoice id used when deriving the Solana Pay reference (with merchant_solana from config). Must be exactly the unique id the invoice was issued under: the reference is a function of it, so two sales sharing an id cannot be told apart on-chain."
                     },
                     "reference": {
                         "type": "string",
@@ -118,7 +124,7 @@ mod component {
                     },
                     "expected_usdc": {
                         "type": "string",
-                        "description": "Optional expected USDC amount. When set, the received amount is compared against it (PAID when >= 99.5%, UNDERPAID when less, OVERPAID when more). Omit to just report the amount received."
+                        "description": "Optional expected USDC amount as a plain decimal, e.g. \"27.27\" — dot separator, no currency symbol, no thousands separator. When set, the received amount is compared against it exactly, in the token's minor units and with no tolerance (PAID only on the exact amount, UNDERPAID when even one minor unit short, OVERPAID when more). A value that cannot be parsed is reported as invalid and NOT treated as if it were omitted. Omit entirely to just report the amount received."
                     },
                     "pix_marked_paid": {
                         "type": "boolean",
@@ -126,7 +132,7 @@ mod component {
                     },
                     "lookback": {
                         "type": "integer",
-                        "description": "Max signatures to fetch for the reference (default 25)."
+                        "description": "Max signatures to fetch for the reference (default 25). This is also how far back a payment can be found; at most 64 of them are value-checked per call, and a scan that could not read them all says so rather than reporting a shortfall."
                     }
                 }
             })
@@ -166,9 +172,7 @@ mod component {
                 return Ok(ToolResult {
                     success: false,
                     output: String::new(),
-                    error: Some(
-                        "invoice_status: provide invoice_id and/or reference".to_string(),
-                    ),
+                    error: Some("invoice_status: provide invoice_id and/or reference".to_string()),
                 });
             }
 

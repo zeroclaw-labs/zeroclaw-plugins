@@ -121,14 +121,13 @@ mod tests {
         );
         // Ends with 6304 + 4 hex uppercase
         let tail = &payload[payload.len() - 8..];
-        assert!(
-            tail.starts_with("6304"),
-            "CRC field missing: tail={tail}"
-        );
+        assert!(tail.starts_with("6304"), "CRC field missing: tail={tail}");
         let crc_hex = &tail[4..];
         assert_eq!(crc_hex.len(), 4);
         assert!(
-            crc_hex.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_lowercase()),
+            crc_hex
+                .chars()
+                .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_lowercase()),
             "CRC must be 4 uppercase hex, got {crc_hex}"
         );
     }

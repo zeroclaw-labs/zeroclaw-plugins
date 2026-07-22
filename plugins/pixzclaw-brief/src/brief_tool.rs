@@ -5,8 +5,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::Deserialize;
 use solana_wasm_core::{
-    default_usdc_mint, format_dashboard, DashboardSnapshot, HttpTransport, RpcClient,
-    SignatureInfo,
+    default_usdc_mint, format_dashboard, DashboardSnapshot, HttpTransport, RpcClient, SignatureInfo,
 };
 
 pub const DEFAULT_RPC_URL: &str = "https://api.mainnet-beta.solana.com";
@@ -75,8 +74,7 @@ pub fn fetch_and_brief<T: HttpTransport>(
     let merchant = cfg.merchant_solana.trim();
     if merchant.is_empty() {
         return Err(
-            "pixzclaw_brief: merchant_solana is required in config (receive wallet)"
-                .into(),
+            "pixzclaw_brief: merchant_solana is required in config (receive wallet)".into(),
         );
     }
     if cfg.rpc_url.trim().is_empty() {
@@ -91,7 +89,12 @@ pub fn fetch_and_brief<T: HttpTransport>(
 
     let usdc_ui = client
         .get_token_ui_balance(merchant, cfg.usdc_mint.trim())
-        .map_err(|e| format!("pixzclaw_brief: getTokenAccountsByOwner failed: {}", e.message))?;
+        .map_err(|e| {
+            format!(
+                "pixzclaw_brief: getTokenAccountsByOwner failed: {}",
+                e.message
+            )
+        })?;
 
     let limit = if lookback == 0 {
         DEFAULT_LOOKBACK
@@ -100,7 +103,12 @@ pub fn fetch_and_brief<T: HttpTransport>(
     };
     let signatures = client
         .get_signatures_for_address(merchant, limit)
-        .map_err(|e| format!("pixzclaw_brief: getSignaturesForAddress failed: {}", e.message))?;
+        .map_err(|e| {
+            format!(
+                "pixzclaw_brief: getSignaturesForAddress failed: {}",
+                e.message
+            )
+        })?;
 
     let snap = DashboardSnapshot {
         merchant_solana: merchant.into(),

@@ -98,22 +98,16 @@ pub fn parse_decimal(s: &str, scale: u32) -> Result<ParsedAmount, AmountError> {
     let mut int_val: u128 = if int_part.is_empty() {
         0
     } else {
-        int_part
-            .parse()
-            .map_err(|_| AmountError::Overflow)?
+        int_part.parse().map_err(|_| AmountError::Overflow)?
     };
 
     let factor = ten_pow(scale).ok_or(AmountError::Overflow)?;
-    int_val = int_val
-        .checked_mul(factor)
-        .ok_or(AmountError::Overflow)?;
+    int_val = int_val.checked_mul(factor).ok_or(AmountError::Overflow)?;
 
     let mut frac_val: u128 = if frac_part.is_empty() {
         0
     } else {
-        frac_part
-            .parse()
-            .map_err(|_| AmountError::Overflow)?
+        frac_part.parse().map_err(|_| AmountError::Overflow)?
     };
     // Pad fractional part to full scale: "12.3" with scale 2 → 30
     let pad = scale.saturating_sub(frac_part.len() as u32);
@@ -124,9 +118,7 @@ pub fn parse_decimal(s: &str, scale: u32) -> Result<ParsedAmount, AmountError> {
             .ok_or(AmountError::Overflow)?;
     }
 
-    let value = int_val
-        .checked_add(frac_val)
-        .ok_or(AmountError::Overflow)?;
+    let value = int_val.checked_add(frac_val).ok_or(AmountError::Overflow)?;
 
     Ok(ParsedAmount { value, scale })
 }
@@ -232,6 +224,80 @@ pub fn brl_to_usdc(amount_brl: &str, brl_per_usdc: &str) -> Result<String, Amoun
     ))
 }
 
+/// Largest decimal scale accepted when comparing an on-chain amount against an
+/// expected decimal string. SPL mints top out at 9 decimals in practice; the
+/// headroom exists so an over-precise `expected` is still compared exactly
+/// instead of being rounded in the payer's favour.
+const MAX_COMPARE_SCALE: u32 = 24;
+
+/// Format an integer amount of **minor units** (e.g. `1_000_000` at 6 decimals)
+/// as a decimal string in shortest form (`"1"`, `"27.27"`, `"0.5"`).
+///
+/// Exact: no floating point anywhere on the path.
+pub fn format_minor_units(units: u128, decimals: u32) -> String {
+    format_up_to(
+        &ParsedAmount {
+            value: units,
+            scale: decimals,
+        },
+        decimals,
+    )
+}
+
+/// Result of an exact comparison between an on-chain amount and an expected
+/// decimal string. Produced by [`compare_units_to_decimal`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnitsComparison {
+    /// `received` vs `expected`, exact — no tolerance band.
+    pub ordering: Ordering,
+    /// `|received − expected|` in shortest decimal form.
+    pub diff: String,
+    /// `expected` re-emitted in shortest decimal form (`"10.00"` → `"10"`).
+    pub expected_fmt: String,
+    /// `expected` scaled to `scale`. Zero means "no real expectation".
+    pub expected_units: u128,
+    /// Common scale both sides were compared at.
+    pub scale: u32,
+}
+
+/// Compare `units` (minor units at `decimals`) with the decimal string
+/// `expected`, **exactly**, using integer arithmetic only.
+///
+/// Both sides are lifted to `max(decimals, fractional digits of expected)` so an
+/// `expected` carrying more precision than the token can represent still
+/// compares honestly (it simply never equals a representable received amount).
+///
+/// Errors when `expected` is not a plain non-negative decimal, or when the
+/// required scale / magnitude would overflow — callers must then degrade rather
+/// than guess.
+pub fn compare_units_to_decimal(
+    units: u128,
+    decimals: u32,
+    expected: &str,
+) -> Result<UnitsComparison, AmountError> {
+    let expected = expected.trim();
+    let frac = expected.split_once('.').map(|(_, f)| f.len());
+    let scale = decimals.max(frac.unwrap_or(0) as u32);
+    if scale > MAX_COMPARE_SCALE {
+        return Err(AmountError::Overflow);
+    }
+
+    let exp = parse_decimal(expected, scale)?;
+    let lift = ten_pow(scale - decimals).ok_or(AmountError::Overflow)?;
+    let received = units.checked_mul(lift).ok_or(AmountError::Overflow)?;
+
+    let ordering = received.cmp(&exp.value);
+    let diff_units = received.abs_diff(exp.value);
+
+    Ok(UnitsComparison {
+        ordering,
+        diff: format_minor_units(diff_units, scale),
+        expected_fmt: format_minor_units(exp.value, scale),
+        expected_units: exp.value,
+        scale,
+    })
+}
+
 /// Rescale a ParsedAmount to a new scale (truncating extra decimals).
 fn rescale(amount: &ParsedAmount, new_scale: u32) -> u128 {
     if new_scale == amount.scale {
@@ -269,10 +335,7 @@ mod tests {
 
     #[test]
     fn compare_caps() {
-        assert_eq!(
-            compare_amount("100", "100.00", 2).unwrap(),
-            Ordering::Equal
-        );
+        assert_eq!(compare_amount("100", "100.00", 2).unwrap(), Ordering::Equal);
         assert_eq!(
             compare_amount("100.01", "100", 2).unwrap(),
             Ordering::Greater
@@ -307,5 +370,82 @@ mod tests {
         assert_eq!(format_usdc(&a), "10.5");
         let b = parse_decimal("10", 6).unwrap();
         assert_eq!(format_usdc(&b), "10");
+    }
+
+    #[test]
+    fn format_minor_units_shortest_form() {
+        // The exact strings the video script depends on: 1 / 10 / 9, not 1.000000.
+        assert_eq!(format_minor_units(1_000_000, 6), "1");
+        assert_eq!(format_minor_units(10_000_000, 6), "10");
+        assert_eq!(format_minor_units(9_000_000, 6), "9");
+        assert_eq!(format_minor_units(27_270_000, 6), "27.27");
+        assert_eq!(format_minor_units(42_500_000, 6), "42.5");
+        assert_eq!(format_minor_units(0, 6), "0");
+        assert_eq!(format_minor_units(1, 6), "0.000001");
+    }
+
+    #[test]
+    fn compare_units_exact_equality_has_no_tolerance() {
+        // Exactly the invoiced amount → Equal.
+        let c = compare_units_to_decimal(100_000_000, 6, "100").unwrap();
+        assert_eq!(c.ordering, Ordering::Equal);
+        assert_eq!(c.diff, "0");
+        assert_eq!(c.expected_fmt, "100");
+
+        // One millionth short of 100 USDC is *not* paid. The old f64 path
+        // accepted anything above 99.5.
+        let c = compare_units_to_decimal(99_999_999, 6, "100").unwrap();
+        assert_eq!(c.ordering, Ordering::Less);
+        assert_eq!(c.diff, "0.000001");
+
+        // 99.6 of 100 — the case the 0.5% tolerance used to call PAID.
+        let c = compare_units_to_decimal(99_600_000, 6, "100").unwrap();
+        assert_eq!(c.ordering, Ordering::Less);
+        assert_eq!(c.diff, "0.4");
+    }
+
+    #[test]
+    fn compare_units_reports_shortfall_and_excess() {
+        let short = compare_units_to_decimal(1_000_000, 6, "10").unwrap();
+        assert_eq!(short.ordering, Ordering::Less);
+        assert_eq!(short.diff, "9");
+        assert_eq!(short.expected_fmt, "10");
+
+        let over = compare_units_to_decimal(120_000_000, 6, "100").unwrap();
+        assert_eq!(over.ordering, Ordering::Greater);
+        assert_eq!(over.diff, "20");
+    }
+
+    #[test]
+    fn compare_units_expected_more_precise_than_the_token() {
+        // 1.2345678 cannot be represented at 6 decimals. Paying the closest
+        // representable amount below it must stay UNDERPAID, never round up.
+        let c = compare_units_to_decimal(1_234_567, 6, "1.2345678").unwrap();
+        assert_eq!(c.ordering, Ordering::Less);
+        assert_eq!(c.scale, 7);
+        assert_eq!(c.diff, "0.0000008");
+
+        // Trailing zeros beyond the token's precision are harmless.
+        let c = compare_units_to_decimal(10_000_000, 6, "10.0000000").unwrap();
+        assert_eq!(c.ordering, Ordering::Equal);
+        assert_eq!(c.expected_fmt, "10");
+    }
+
+    #[test]
+    fn compare_units_rejects_garbage_and_absurd_precision() {
+        assert!(compare_units_to_decimal(1, 6, "abc").is_err());
+        assert!(compare_units_to_decimal(1, 6, "-5").is_err());
+        assert!(compare_units_to_decimal(1, 6, "").is_err());
+        let too_precise = format!("1.{}", "0".repeat(30));
+        assert_eq!(
+            compare_units_to_decimal(1, 6, &too_precise),
+            Err(AmountError::Overflow)
+        );
+    }
+
+    #[test]
+    fn compare_units_zero_expected_is_flagged() {
+        let c = compare_units_to_decimal(5_000_000, 6, "0").unwrap();
+        assert_eq!(c.expected_units, 0);
     }
 }

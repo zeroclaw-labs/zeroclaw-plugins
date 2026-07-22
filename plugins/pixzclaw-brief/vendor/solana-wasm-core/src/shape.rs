@@ -93,10 +93,7 @@ mod tests {
     #[test]
     fn pix_key_cpf_cnpj_digits_only() {
         assert_eq!(sanitize_pix_key("123.456.789-09"), "12345678909");
-        assert_eq!(
-            sanitize_pix_key("12.345.678/0001-99"),
-            "12345678000199"
-        );
+        assert_eq!(sanitize_pix_key("12.345.678/0001-99"), "12345678000199");
         assert_eq!(sanitize_pix_key("loja@empresa.com"), "loja@empresa.com");
     }
 }

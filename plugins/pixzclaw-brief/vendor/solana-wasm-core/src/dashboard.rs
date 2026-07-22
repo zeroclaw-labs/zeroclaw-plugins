@@ -52,14 +52,9 @@ pub fn format_dashboard(snap: &DashboardSnapshot) -> String {
         snap.usdc_ui.trim()
     };
 
-    let ok_sigs: Vec<&SignatureInfo> = snap
-        .signatures
-        .iter()
-        .filter(|s| s.is_success())
-        .collect();
+    let ok_sigs: Vec<&SignatureInfo> = snap.signatures.iter().filter(|s| s.is_success()).collect();
 
-    let pix_memos: Vec<&&SignatureInfo> =
-        ok_sigs.iter().filter(|s| is_pix_memo(s)).collect();
+    let pix_memos: Vec<&&SignatureInfo> = ok_sigs.iter().filter(|s| is_pix_memo(s)).collect();
 
     let spark = sparkline_7d(&ok_sigs, snap.now_unix);
     let activity_7d = count_in_window(&ok_sigs, snap.now_unix, 7 * DAY_SECS);
@@ -106,8 +101,7 @@ pub fn format_dashboard(snap: &DashboardSnapshot) -> String {
         let when = relative_time(s.block_time, snap.now_unix);
         // PIX-memo → mostra invoice_id + tag PIX; senão memo curto / sig.
         let (label, tag) = if is_pix_memo(s) {
-            let inv = extract_invoice_id(s.memo.as_deref())
-                .unwrap_or_else(|| "invoice".into());
+            let inv = extract_invoice_id(s.memo.as_deref()).unwrap_or_else(|| "invoice".into());
             (inv, "PIX".to_string())
         } else {
             let memo = s
@@ -147,7 +141,11 @@ fn count_pix_in_window(sigs: &[&SignatureInfo], now: i64, window_secs: i64) -> u
     let start = now.saturating_sub(window_secs);
     sigs.iter()
         .filter(|s| is_pix_memo(s))
-        .filter(|s| s.block_time.map(|t| t >= start && t <= now).unwrap_or(false))
+        .filter(|s| {
+            s.block_time
+                .map(|t| t >= start && t <= now)
+                .unwrap_or(false)
+        })
         .count()
 }
 
@@ -207,7 +205,11 @@ fn extract_invoice_id(memo: Option<&str>) -> Option<String> {
 fn count_in_window(sigs: &[&SignatureInfo], now: i64, window_secs: i64) -> usize {
     let start = now.saturating_sub(window_secs);
     sigs.iter()
-        .filter(|s| s.block_time.map(|t| t >= start && t <= now).unwrap_or(false))
+        .filter(|s| {
+            s.block_time
+                .map(|t| t >= start && t <= now)
+                .unwrap_or(false)
+        })
         .count()
 }
 
@@ -285,8 +287,16 @@ mod tests {
             sol_lamports: 410_000_000,
             usdc_ui: "142.5".into(),
             signatures: vec![
-                sig("VeryLongSigAAAAAAAA", Some("PIX|BRL|demo-1|cafe"), now - 120),
-                sig("VeryLongSigBBBBBBBB", Some("PIX|BRL|inv-412|x"), now - 90_000),
+                sig(
+                    "VeryLongSigAAAAAAAA",
+                    Some("PIX|BRL|demo-1|cafe"),
+                    now - 120,
+                ),
+                sig(
+                    "VeryLongSigBBBBBBBB",
+                    Some("PIX|BRL|inv-412|x"),
+                    now - 90_000,
+                ),
             ],
             now_unix: now,
             recent_limit: 5,
@@ -340,8 +350,8 @@ mod tests {
         let sigs = [
             sig("A", Some("PIX|BRL|hoje-1|x"), now - 3_600), // 1h atrás → dentro
             sig("B", Some("PIX|BRL|hoje-2|x"), now - 80_000), // ~22h → dentro
-            sig("C", Some("PIX|BRL|velha|x"), now - 90_000),  // 25h → fora
-            sig("D", None, now - 100),                         // tx não-PIX, dentro
+            sig("C", Some("PIX|BRL|velha|x"), now - 90_000), // 25h → fora
+            sig("D", None, now - 100),                       // tx não-PIX, dentro
         ];
         let refs: Vec<&SignatureInfo> = sigs.iter().collect();
         assert_eq!(count_in_window(&refs, now, DAY_SECS), 3); // A,B,D
@@ -373,8 +383,16 @@ mod tests {
             sol_lamports: 410_000_000,
             usdc_ui: "142.5".into(),
             signatures: vec![
-                sig("VeryLongSigAAAAAAAA", Some("PIX|BRL|demo-1|cafe"), now - 120),
-                sig("VeryLongSigBBBBBBBB", Some("PIX|BRL|inv-412|x"), now - 3_600),
+                sig(
+                    "VeryLongSigAAAAAAAA",
+                    Some("PIX|BRL|demo-1|cafe"),
+                    now - 120,
+                ),
+                sig(
+                    "VeryLongSigBBBBBBBB",
+                    Some("PIX|BRL|inv-412|x"),
+                    now - 3_600,
+                ),
             ],
             now_unix: now,
             recent_limit: 5,

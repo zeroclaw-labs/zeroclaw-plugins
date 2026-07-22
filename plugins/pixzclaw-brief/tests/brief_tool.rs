@@ -15,10 +15,7 @@ struct SeqMock {
 
 impl HttpTransport for SeqMock {
     fn post_json(&self, _url: &str, body: &Value) -> Result<Value, RpcError> {
-        let method = body
-            .get("method")
-            .and_then(|m| m.as_str())
-            .unwrap_or("");
+        let method = body.get("method").and_then(|m| m.as_str()).unwrap_or("");
         let mut q = self.responses.borrow_mut();
         // Prefer matching by order; fall back to method name
         if let Some(next) = q.first().cloned() {
@@ -26,9 +23,10 @@ impl HttpTransport for SeqMock {
             if let Some(m) = next.get("_method").and_then(|x| x.as_str()) {
                 if m != method {
                     // find matching
-                    if let Some(i) = q.iter().position(|r| {
-                        r.get("_method").and_then(|x| x.as_str()) == Some(method)
-                    }) {
+                    if let Some(i) = q
+                        .iter()
+                        .position(|r| r.get("_method").and_then(|x| x.as_str()) == Some(method))
+                    {
                         let mut r = q.remove(i);
                         if let Some(obj) = r.as_object_mut() {
                             obj.remove("_method");
@@ -52,8 +50,14 @@ impl HttpTransport for SeqMock {
 
 fn cfg() -> HashMap<String, String> {
     let mut m = HashMap::new();
-    m.insert("merchant_solana".into(), "11111111111111111111111111111112".into());
-    m.insert("rpc_url".into(), "https://api.mainnet-beta.solana.com".into());
+    m.insert(
+        "merchant_solana".into(),
+        "11111111111111111111111111111112".into(),
+    );
+    m.insert(
+        "rpc_url".into(),
+        "https://api.mainnet-beta.solana.com".into(),
+    );
     m
 }
 

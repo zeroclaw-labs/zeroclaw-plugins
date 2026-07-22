@@ -2,11 +2,10 @@
 //! (ZeroClaw host redacts high-entropy base58 as [REDACTED_…]).
 
 use std::collections::HashMap;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::Deserialize;
-use solana_wasm_core::invoice::{
-    build_invoice, InvoiceConfig, InvoiceRequest, InvoiceResult,
-};
+use solana_wasm_core::invoice::{build_invoice, InvoiceConfig, InvoiceRequest, InvoiceResult};
 use solana_wasm_core::solana_pay::url_encode;
 
 #[derive(Debug, Deserialize)]
@@ -28,13 +27,19 @@ pub struct ExecuteArgs {
     pub config: HashMap<String, String>,
 }
 
-pub fn execute_invoice(args_json: &str) -> Result<String, String> {
+/// Build the invoice card from a tool-call JSON payload.
+///
+/// `issued_at_unix_ms` is the issuance instant, supplied by the caller: the
+/// core never reads a clock, and the auto-generated invoice id is salted with
+/// this value so two identical charges are two different invoices. Host tests
+/// pass a fixed value; the wasm shim passes [`now_unix_ms`].
+pub fn execute_invoice(args_json: &str, issued_at_unix_ms: i64) -> Result<String, String> {
     let args: ExecuteArgs =
         serde_json::from_str(args_json).map_err(|e| format!("invalid arguments: {e}"))?;
-    execute_from_args(args)
+    execute_from_args(args, issued_at_unix_ms)
 }
 
-pub fn execute_from_args(args: ExecuteArgs) -> Result<String, String> {
+pub fn execute_from_args(args: ExecuteArgs, issued_at_unix_ms: i64) -> Result<String, String> {
     let cfg = InvoiceConfig::from_map(&args.config);
     let req = InvoiceRequest {
         amount_brl: args.amount_brl,
@@ -46,7 +51,7 @@ pub fn execute_from_args(args: ExecuteArgs) -> Result<String, String> {
         mint_override: empty_to_none(args.mint_override),
     };
     let watch_hint = config_bool(&args.config, "watch_hint", true);
-    let result = build_invoice(&req, &cfg)?;
+    let result = build_invoice(&req, &cfg, issued_at_unix_ms)?;
     Ok(format_invoice_result(
         &result,
         cfg.recipient_locked,
@@ -71,6 +76,22 @@ fn config_bool(cfg: &HashMap<String, String>, key: &str, default: bool) -> bool 
         Some(v) if !v.trim().is_empty() => parse_bool(v),
         _ => default,
     }
+}
+
+/// Wall clock in unix milliseconds — the one impure call in this plugin, kept
+/// out of the core exactly like `pixzclaw-brief`'s `now_unix()`.
+///
+/// Used only to salt the auto-generated invoice id (see
+/// `solana_wasm_core::invoice::build_invoice`). A clock that cannot be read
+/// yields `0`, which `build_invoice` **rejects** with an explicit error rather
+/// than minting the same id it would have minted yesterday: a silent fallback
+/// here would restore exactly the collision the salt exists to prevent. An
+/// explicit `invoice_id` still works with no clock at all.
+pub fn now_unix_ms() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
 }
 
 fn empty_to_none(v: Option<String>) -> Option<String> {
@@ -172,6 +193,9 @@ Ele paga por PIX *ou* por USDC — os dois valem a fatura #{inv}.
 mod unit_tests {
     use super::*;
 
+    /// Fixed issuance instant (unix ms) so card tests stay deterministic.
+    const T0: i64 = 1_700_000_000_000;
+
     fn sample() -> InvoiceResult {
         InvoiceResult {
             pix_payload: "000201TEST".into(),
@@ -248,7 +272,10 @@ mod unit_tests {
         assert_eq!(s.matches('🔔').count(), 1, "{s}");
         // Still outside the anti-redact system line, which stays last.
         let last = s.lines().last().unwrap();
-        assert!(last.starts_with("[sistema]") && last.contains("redact"), "{last}");
+        assert!(
+            last.starts_with("[sistema]") && last.contains("redact"),
+            "{last}"
+        );
     }
 
     #[test]
@@ -258,7 +285,10 @@ mod unit_tests {
         assert!(!s.contains('🔔'), "watch line must vanish:\n{s}");
         assert!(!s.contains("avisa quando"), "{s}");
         let last = s.lines().last().unwrap();
-        assert!(last.starts_with("[sistema]") && last.contains("redact"), "{last}");
+        assert!(
+            last.starts_with("[sistema]") && last.contains("redact"),
+            "{last}"
+        );
         // Disabled output equals the pre-watch card exactly.
         assert!(
             s.contains("destino travado=sim\n\n[sistema]"),
@@ -309,10 +339,65 @@ mod unit_tests {
             }
         }
 
-        let on = execute_from_args(args(None)).expect("default invoice");
+        let on = execute_from_args(args(None), T0).expect("default invoice");
         assert!(on.contains("avisa quando a INV-412 pagar"), "{on}");
 
-        let off = execute_from_args(args(Some("false"))).expect("watch off invoice");
+        let off = execute_from_args(args(Some("false")), T0).expect("watch off invoice");
         assert!(!off.contains('🔔'), "{off}");
+    }
+
+    /// FURO B, end to end through the tool: omitting `invoice_id` twice must
+    /// not produce the same invoice, or the second sale inherits the first
+    /// one's payment.
+    #[test]
+    fn auto_id_is_salted_with_the_issuance_instant() {
+        fn card(now_ms: i64) -> String {
+            let mut config = HashMap::new();
+            config.insert(
+                "merchant_solana".to_string(),
+                "11111111111111111111111111111112".to_string(),
+            );
+            config.insert("pix_key".to_string(), "loja@pix.com".to_string());
+            config.insert("pix_name".to_string(), "LOJA TESTE".to_string());
+            config.insert("pix_city".to_string(), "SAO PAULO".to_string());
+            config.insert("brl_per_usdc".to_string(), "5.5".to_string());
+            let args = ExecuteArgs {
+                amount_brl: "10.00".to_string(),
+                invoice_id: None,
+                description: None,
+                payer_name: None,
+                usdc_amount: None,
+                merchant_override: None,
+                mint_override: None,
+                config,
+            };
+            execute_from_args(args, now_ms).expect("invoice")
+        }
+
+        fn header(card: &str) -> String {
+            card.lines().next().unwrap().to_string()
+        }
+
+        let today = card(T0);
+        let tomorrow = card(T0 + 86_400_000);
+        assert!(header(&today).contains("Fatura #INV-"), "{today}");
+        assert_ne!(
+            header(&today),
+            header(&tomorrow),
+            "two 'cobra R$ 10' a day apart must be two invoices"
+        );
+
+        // Same instant, same inputs → still reproducible.
+        assert_eq!(header(&card(T0)), header(&today));
+    }
+
+    /// `now_unix_ms` is the only clock read, and it is plausible.
+    #[test]
+    fn now_unix_ms_is_a_millisecond_clock() {
+        let t = now_unix_ms();
+        // After 2020-01-01 in ms, and well before the year 3000 in ms —
+        // catches a seconds/millis mix-up, which would weaken the salt.
+        assert!(t > 1_577_836_800_000, "not milliseconds: {t}");
+        assert!(t < 32_503_680_000_000, "implausible clock: {t}");
     }
 }

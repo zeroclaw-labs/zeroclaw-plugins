@@ -34,53 +34,109 @@ Given an `invoice_id` (and/or an explicit Solana Pay `reference`):
    is stored between calls; the address is recomputed.
 2. **`getSignaturesForAddress(reference, limit = lookback)`** — the candidate
    transactions.
-3. **For up to `MAX_VALUE_CHECKS` (5) recent *successful* signatures**, call
-   **`getTransaction(sig, encoding = "jsonParsed")`**.
+3. **For every *successful* signature it returned**, call
+   **`getTransaction(sig, encoding = "jsonParsed")`** — stopping early as soon
+   as the running total reaches `expected_usdc`.
 4. **Read `meta.preTokenBalances` / `meta.postTokenBalances`**, keeping only
    entries where `mint == usdc_mint` **and** `owner == merchant_solana`.
-   `delta = post − pre`. Only **positive** deltas are added to the running total.
-5. **Compare the summed amount against `expected_usdc`** and emit a verdict.
+   `delta = post − pre`, computed from the integer `uiTokenAmount.amount`
+   (minor units) and never from the `uiAmount` double. Only **positive** deltas
+   are added to the running total.
+5. **Compare the summed amount against `expected_usdc`** — exact integer
+   comparison, no tolerance — and emit a verdict.
 
 Working from token balance deltas rather than parsed instructions means plain
 `transfer` and `transferChecked` are both covered without instruction decoding,
 and an associated token account created inside the paying transaction (no `pre`
 entry) is handled correctly.
 
-Why the sum over several signatures matters:
+Why the sum over *all* the returned signatures matters:
 
 - **Partial payments settle.** Two 45 USDC transfers against a 90 USDC invoice
   add up to `PAID`, not to two underpayments.
   (test: `fetch_and_status_sums_partial_payments`)
 - **Spam cannot mask a real payment.** Anyone can emit a transaction referencing
-  your invoice's reference. If the newest one moves no USDC, the older genuine
-  payment is still counted, because the tool scans several and sums, rather than
-  trusting the latest. (test: `fetch_and_status_spam_tx_does_not_mask_payment`)
+  your invoice's reference — a dust transfer costs a network fee and nothing
+  else. If the newest ones move no USDC, the older genuine payment is still
+  counted, because the tool scans every successful signature in the lookback and
+  sums, rather than trusting the latest few.
+  (tests: `fetch_and_status_spam_tx_does_not_mask_payment`,
+  `fetch_and_status_six_spam_txs_do_not_mask_payment`)
 - **Spam cannot fake one either**, since a delta is only credited when the mint
   *and* the receiving owner match the configured merchant.
 
-The RPC cost stays bounded: at most 1 + 5 calls per invocation.
+RPC cost stays bounded by `lookback` (default 25), and by `MAX_VALUE_CHECKS`
+(64) as an absolute ceiling. On the settled path the scan stops at the
+transaction that covers the invoice, so the common case is 2 calls (test:
+`fetch_and_status_stops_early_once_expected_is_reached`). One consequence of
+stopping early: an overpayment spread across transactions *behind* the one that
+covered the invoice is reported as `PAID` rather than `OVERPAID`. It under-
+claims, never over-claims.
+
+> **Known limit, stated plainly.** The scan window is
+> `min(lookback, MAX_VALUE_CHECKS)` successful signatures counted back from the
+> newest. More dust than that on a reference — 25 transactions at default
+> settings, ~US$0.000125 of network fees — pushes a genuine payment outside it.
+>
+> What the tool then does *not* do is report `PENDING`. Whenever the scan is
+> incomplete — truncated by the ceiling, or with a `getTransaction` the RPC
+> would not answer — the running total is only a **lower bound**, and a lower
+> bound is enough to confirm a payment but never enough to assert a shortfall.
+> So an incomplete scan that has not yet covered the invoice degrades to
+> `SIG OK (valor não verificado)`, and the merchant is told the amount was not
+> established rather than being told the customer underpaid. Raising `lookback`
+> helps up to 64; past that the honest answer is that this stateless design
+> cannot page an arbitrarily noisy reference, and the roadmap item is cursor
+> paging.
+> (tests: `fetch_and_status_incomplete_scan_does_not_assert_a_shortfall`,
+> `fetch_and_status_incomplete_scan_still_confirms_a_covered_invoice`,
+> `fetch_and_status_truncated_scan_degrades_instead_of_pending`)
 
 ### Verdicts
 
 | Verdict | Condition | Receipt? |
 |---|---|---|
-| `USDC: PAID ✅` | received ≥ 99.5% of `expected_usdc` | yes |
+| `USDC: PAID ✅` | received **equals** `expected_usdc`, to the minor unit | yes |
 | `USDC: OVERPAID` | received > expected (still settled; excess shown) | yes |
-| `USDC: RECEBIDO <x>` | funds arrived, no `expected_usdc` to compare against | yes |
-| `USDC: UNDERPAID ⚠️` | `0 < received < expected` — shows received, expected, and the shortfall | no |
+| `USDC: RECEBIDO <x>` | funds arrived and **no** `expected_usdc` was given | yes |
+| `USDC: UNDERPAID ⚠️` | `0 < received < expected`, on a complete scan — shows received, expected, and the shortfall | no |
 | `USDC: PENDING` | no signatures, no *successful* signature, or a successful signature that moved no USDC to the merchant | no |
-| `USDC: SIG OK (valor não verificado …)` | a successful signature exists but the RPC returned no transaction / no `meta` | no |
+| `USDC: SIG OK (valor não verificado …)` | a successful signature exists but the amount could not be established, or the scan was incomplete and does not yet cover the invoice | no |
+| `USDC: SIG OK (… expected_usdc inválido …)` | an `expected_usdc` was given that cannot be parsed | no |
 
-The 99.5% tolerance absorbs rounding at the wallet, not real shortfalls: 99.6 of
-100 is `PAID`; 0.01 of 90 is `UNDERPAID`.
+**An unusable `expected_usdc` is not the same as an absent one.** `"27,27"` —
+how a Brazilian merchant writes it — is not a decimal this tool can parse, and
+treating it as "no expectation" would fall into `RECEBIDO`, which *is* a settled
+verdict: receipt, cron teardown, `OVERALL: USDC PAID (valor conferido)`. Anyone
+holding the invoice id could then send one dust unit (0.000001 USDC) and collect
+a receipt. So a stated-but-unusable expectation gets no verdict at all.
+`expected_usdc` must be a plain decimal: dot separator, no `R$`, no thousands
+separator. (test: `verified_unusable_expected_degrades_instead_of_settling`)
+
+**There is no tolerance band.** The comparison is exact integer arithmetic on
+the token's minor units: 99.6 of 100 is `UNDERPAID`, and so is 99.999999 of 100.
+An earlier version accepted anything ≥ 99.5% of the invoice as `PAID`, which
+handed a payer 0.5% — R$ 5 on a R$ 1.000 invoice — with a receipt to prove it.
+Wallets do not round Solana token transfers; there was nothing for the band to
+absorb. (tests: `verified_no_tolerance_band`,
+`fetch_and_status_has_no_tolerance_band`)
+
+The issuing side (`solana-wasm-core::amount`) was already exact `u128`
+arithmetic; the verification side now matches it end to end, including the
+summation across partial payments — three 0.1 USDC transfers make exactly 0.3,
+not 0.30000000000000004 (test:
+`fetch_and_status_sum_is_exact_integer_arithmetic`).
 
 **The tool never reports `PAID` without a confirmed amount.** If `getTransaction`
 comes back empty — unindexed, pruned, a flaky endpoint — or if `merchant_solana`
-is not configured (there is then no owner to filter on), it degrades to `SIG OK`
+is not configured (there is then no owner to filter on), or if the RPC returns
+token balances it cannot read exactly (no `uiTokenAmount.amount`, no `decimals`,
+or transactions disagreeing on the mint's `decimals`), it degrades to `SIG OK`
 and says out loud that the value was not verified. It does not guess, and it does
 not fall back to "a signature exists, close enough".
 (tests: `verified_degrades_without_transaction`,
-`fetch_and_status_degrades_when_tx_missing`)
+`fetch_and_status_degrades_when_tx_missing`,
+`fetch_and_status_conflicting_decimals_degrades`)
 
 ### Shareable receipt
 
@@ -144,11 +200,11 @@ granted. See [`config.example.toml`](./config.example.toml).
 
 | Arg | Required | Meaning |
 |---|---|---|
-| `invoice_id` | one of id/ref | Invoice id, used for derivation and as the status label |
+| `invoice_id` | one of id/ref | Invoice id, used for derivation and as the status label. **Must be the same unique id the invoice was issued under** — the reference is derived from it, so an id reused across two sales cannot be told apart on-chain |
 | `reference` | one of id/ref | Explicit Solana Pay reference (skips derivation) |
-| `expected_usdc` | no | Expected amount. Present → PAID/UNDERPAID/OVERPAID verdict; absent → the tool just reports what arrived |
+| `expected_usdc` | no | Expected amount as a plain decimal (`"27.27"`). Present and parseable → exact PAID/UNDERPAID/OVERPAID verdict; absent → the tool just reports what arrived; present but unparseable (`"27,27"`, `"R$ 27,27"`, `"0"`) → reported as invalid, **no** verdict |
 | `pix_marked_paid` | no (default `false`) | Operator/PSP signal that the PIX bank leg settled |
-| `lookback` | no (default 25) | `getSignaturesForAddress` limit. Independent of `MAX_VALUE_CHECKS = 5`, which caps the `getTransaction` calls |
+| `lookback` | no (default 25) | `getSignaturesForAddress` limit, and the real bound on how far back a payment is found. `MAX_VALUE_CHECKS = 64` is only a ceiling on `getTransaction` calls for callers that pass a very large `lookback` |
 
 ## Custody (T0)
 
@@ -170,11 +226,18 @@ code path that constructs a transaction, and no key to sign one with.
 |---|---|
 | Prompt injection tries to "pay out", "refund", or "settle" | The tool surface is status-only; no sign/send API exists to be reached |
 | **Spam transaction referencing the invoice fakes a payment** | A delta is credited only when `mint == usdc_mint` **and** `owner == merchant_solana`; a transaction that moves no USDC to the merchant contributes 0 |
-| **Spam transaction hides a real payment** by being newest | Up to `MAX_VALUE_CHECKS` successful signatures are summed, so an older genuine payment is still found |
-| **Partial payment misread as unpaid** | Positive deltas are summed across transactions before the verdict |
+| **Spam transaction hides a real payment** by being newest | **Every** successful signature in the scan window is checked and summed, so an older genuine payment is still found. Six dust transactions used to be enough to hide one, back when only the newest 5 were checked (test: `fetch_and_status_six_spam_txs_do_not_mask_payment`). Past `min(lookback, 64)` the payment does fall outside the window — but then the answer is `SIG OK (valor não verificado)`, never a false `PAID` and never an asserted shortfall |
+| **A transaction naming *several* references** | **Not defended.** The credited delta is the merchant's whole-transaction balance change; nothing ties it to one invoice. One transfer carrying two invoices' references settles both. Attribution needs the memo or instruction-level parsing — see the roadmap |
+| **`expected_usdc` supplied in the wrong format, then a dust payment** | An unusable expectation is reported as invalid, not silently downgraded to the receipt-issuing `RECEBIDO` path |
+| **Partial payment misread as unpaid** | Positive deltas are summed across transactions before the verdict, in exact minor units |
+| **Payer keeps 0.5% and still gets a receipt** | No tolerance band: `PAID` requires the exact amount, to the minor unit |
+| **Float rounding in the settlement sum** | The delta comes from the integer `uiTokenAmount.amount`; `uiAmount` (a JSON double) is never read. Comparison and summation are `u128` |
+| **RPC returns balances that cannot be read exactly** | Missing `amount`/`decimals`, or transactions disagreeing on `decimals`, degrade to `SIG OK` rather than contributing a silent zero |
+| **Invoice id reused across two sales** | Not defendable here — the reference *is* the id. Auto-generated ids are salted with the issuance instant by `brl-usdc-invoice`; an explicit id is the merchant's responsibility to keep unique per sale |
 | **Wrong-token payment counted as USDC** | Mint filter; another mint contributes 0 (test: `get_transaction_other_mint_does_not_count`) |
 | **Payment to the wrong owner counted** | Owner filter (test: `get_transaction_wrong_owner_does_not_count`) |
-| An outgoing transfer in the same tx inflating or deflating the result | Only positive deltas count toward the total |
+| An outgoing transfer in a *different* tx deflating the result | Only positive per-transaction deltas count toward the total; a net-negative transaction contributes 0, never a subtraction |
+| An outgoing transfer in the *same* tx as the payment | **Not defended.** The delta is netted within a transaction, so a payment bundled with a merchant-side outgoing transfer nets toward 0 and reads as `PENDING`. It under-claims, never over-claims |
 | **RPC lies by omission** (tx unindexed / pruned / endpoint flaky) | Degrades to `SIG OK (valor não verificado)`; **never** `PAID` without a checked value |
 | Fake PIX "paid" claim by the model | Requires an explicit `pix_marked_paid` from the caller; the output text states that bank SPI is unverified |
 | Merchant / reference confusion | The reference is deterministic from `invoice_id` + config `merchant_solana`, or an explicit reference the clerk already issued |
@@ -291,9 +354,11 @@ realistic.)
    settlement and then stop: it is the only behaviour that cannot spam the
    merchant. With a small host-side per-invoice memo (last verdict, last amount)
    the watcher could say "still 7.27 short" once, and then hold its tongue.
-4. **A mint allowlist and per-mint decimals**, mirroring `allowed_mints` in the
-   invoice clerk, so a merchant can accept USDC *or* EURC and have each verified
-   against the right mint instead of one hardcoded `usdc_mint`.
+4. **A mint allowlist**, mirroring `allowed_mints` in the invoice clerk, so a
+   merchant can accept USDC *or* EURC and have each verified against the right
+   mint instead of one hardcoded `usdc_mint`. Per-mint decimals already work —
+   the verifier reads `decimals` off the transaction rather than assuming 6 —
+   so what is missing is only the config surface.
 5. **Cross-checking two RPC providers before declaring `PAID`.** A single
    endpoint is currently trusted for reads. Requiring two independent endpoints
    to agree on the balance delta would close the "hostile RPC" row in the threat
@@ -304,7 +369,17 @@ realistic.)
    an address the operator did not configure.
 7. **`lookback` paging for long-lived references.** 25 signatures is plenty for a
    normal invoice; a reference reused as a permanent shop address would need
-   `before`/`until` cursors.
+   `before`/`until` cursors. Paging is also the only real answer to a reference
+   buried under more dust than the scan window holds — today that case degrades
+   to `SIG OK` rather than being resolved.
+8. **Per-invoice attribution of the credited delta.** The amount credited is the
+   merchant's balance change across the whole transaction, and a Solana Pay
+   transaction may carry any number of references. One transfer that names two
+   invoices' references therefore settles both. Fixing it means reading the
+   `PIX|BRL|<id>|…` memo (or the parsed transfer instructions) and crediting
+   only what is attributable to *this* invoice — which the tool already emits at
+   issuance and simply does not read back. This is the largest remaining
+   correctness gap in the settlement check.
 
 ### What we will *not* build, and why
 
@@ -367,7 +442,7 @@ report a payment that did not arrive.
 
 Judges will call `execute` and count tokens. The output is a fixed-shape block of
 5–6 lines (plus a 9-line receipt only when the invoice actually settled) and does
-not grow with `lookback`: scanning 25 signatures and 5 transactions produces
+not grow with `lookback`: scanning 25 signatures and 25 transactions produces
 exactly the same shape as scanning one. Raw RPC JSON is never returned.
 
 Measured from `fetch_and_status` over a mock transport, with a realistic 88-char
@@ -401,8 +476,9 @@ config.example.toml        # operator config template
 ```
 
 Uses `solana-wasm-core`: `derive_reference`, `status_from_signatures_verified`,
-`UsdcReceipt`, `SETTLED_CRON_HINT`, and `RpcClient` / `HttpTransport` /
-`SignatureInfo` / `ReceivedAmount`.
+`UsdcReceipt`, `SETTLED_CRON_HINT`, `compare_units_to_decimal` /
+`format_minor_units` (the exact integer comparison), and `RpcClient` /
+`HttpTransport` / `SignatureInfo` / `ReceivedAmount`.
 
 ## Build and test
 
@@ -498,8 +574,15 @@ This is the plugin that actually makes network calls, so it took the brunt of it
    what pushed the design toward a cron job that is cheap, idempotent, and
    self-terminating.
 9. **Output size is a first-class constraint**, not an afterthought — see
-   [Output budget](#output-budget). Bounded `MAX_VALUE_CHECKS`, fixed-shape text,
-   and no RPC JSON in the model context.
+   [Output budget](#output-budget). Bounded by `lookback` and `MAX_VALUE_CHECKS`,
+   fixed-shape text, and no RPC JSON in the model context.
+10. **No `f64` on the money path.** `uiTokenAmount.amount` is an integer string
+    of minor units and `decimals` comes with it, so the whole verification is
+    `u128` — the same discipline `amount.rs` already used for issuance. The
+    verdict compares exact integers with no tolerance, which also means the
+    comparison had to handle an `expected_usdc` more precise than the mint can
+    represent: both sides are lifted to a common scale rather than rounded, so
+    an over-precise expectation can never be satisfied by a smaller payment.
 
 ## License
 

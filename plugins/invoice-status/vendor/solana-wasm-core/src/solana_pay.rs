@@ -168,10 +168,7 @@ mod tests {
 
     #[test]
     fn usdc_mint_constant() {
-        assert_eq!(
-            USDC_MINT,
-            "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
-        );
+        assert_eq!(USDC_MINT, "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v");
         assert!(is_valid_base58_pubkey(USDC_MINT));
     }
 
