@@ -728,14 +728,39 @@ pub fn execute_t1_entry(
 /// - Memo (for the optional memo instruction)
 const T2_ALLOWED_PROGRAMS: [Pubkey; 3] = [Pubkey::SYSTEM, Pubkey::SAS, Pubkey::MEMO];
 
-/// Enforce that every instruction's program_id is in the T2 allowlist.
-/// This is the primary custody guard — it makes value transfer impossible.
+/// Enforce that every instruction's program_id is in the T2 allowlist, AND that
+/// any System-program instruction is specifically `AdvanceNonceAccount`
+/// (discriminator `[0x04,0x00,0x00,0x00]`). System is in the allowlist (the nonce
+/// advance is required), but `SystemInstruction::Transfer` (disc `0x02`) is also a
+/// System ix — so a program-level check alone would let a value-transfer ix
+/// pass the guard. This instruction-level check makes value transfer truly
+/// unexpressible at the guard, not merely by construction.
+///
+/// SAS (`create_attestation`) and Memo (raw UTF-8 log) move no SOL, so they stay
+/// program-level.
 pub fn enforce_program_allowlist(ixs: &[Instruction]) -> Result<(), AttestError> {
+    /// `SystemInstruction::AdvanceNonceAccount` = variant 4, bincode `u32 LE` →
+ /// `[0x04,0x00,0x00,0x00]` (verified byte-for-byte against
+ /// `solana_program::system_instruction::advance_nonce_account` in
+ /// `palinurus_core::durable_nonce::ADVANCE_NONCE_ACCOUNT_IX_DATA`).
+ const ADVANCE_NONCE_DISC: [u8; 4] = [0x04, 0x00, 0x00, 0x00];
     for ix in ixs {
         if !T2_ALLOWED_PROGRAMS.contains(&ix.program_id) {
             return Err(AttestError::Custody(format!(
                 "program not allowed in T2: {} — only {{System, SAS, Memo}} permitted (value transfer blocked)",
                 ix.program_id
+            )));
+        }
+        // Instruction-level guard for System: the only System ix the T2 path
+        // may emit is AdvanceNonceAccount. A Transfer/CreateAccount/Assign/...
+        // (any other System variant) is rejected even though System is allowed.
+        if ix.program_id == Pubkey::SYSTEM
+            && (ix.data.len() < 4 || ix.data[0..4] != ADVANCE_NONCE_DISC)
+        {
+            return Err(AttestError::Custody(format!(
+                "System ix not allowed in T2: only AdvanceNonceAccount (disc 0x04) is permitted — \
+                 got data[0..4] = {:?} (value transfer blocked)",
+                if ix.data.len() >= 4 { &ix.data[0..4] } else { &ix.data[..] }
             )));
         }
     }

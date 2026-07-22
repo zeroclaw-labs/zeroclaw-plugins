@@ -818,7 +818,9 @@ fn allowlist_allows_system_sas_memo() {
         palinurus_core::Instruction {
             program_id: Pubkey::from_str(SYSTEM).unwrap(),
             accounts: vec![],
-            data: vec![],
+            // System is allowed only as AdvanceNonceAccount (disc 0x04); the
+            // hardened allowlist rejects any other System variant (e.g. Transfer).
+            data: vec![0x04, 0x00, 0x00, 0x00],
         },
         palinurus_core::Instruction {
             program_id: Pubkey::from_str(SAS).unwrap(),

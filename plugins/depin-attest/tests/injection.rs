@@ -26,10 +26,19 @@ fn ix(program: Pubkey) -> Instruction {
     Instruction { program_id: program, accounts: vec![], data: vec![] }
 }
 
-/// Attack 2 (README): an LLM-injected message asks the agent to move funds.
-/// The T2 program allowlist blocks any value-transfer program — an SPL Token
-/// instruction is rejected even if it somehow reached the guard. Value transfer
-/// is not expressible.
+/// A System program ix with a given instruction-data payload (for discriminator tests).
+/// `SystemInstruction::AdvanceNonceAccount` = variant 4 → `[0x04,0x00,0x00,0x00]`;
+/// `SystemInstruction::Transfer` = variant 2 → `[0x02,0x00,0x00,0x00]` + 32B pubkey + 8B lamports.
+fn sys_ix(data: &[u8]) -> Instruction {
+    Instruction { program_id: Pubkey::SYSTEM, accounts: vec![], data: data.to_vec() }
+}
+
+const ADVANCE_NONCE_DISC: [u8; 4] = [0x04, 0x00, 0x00, 0x00];
+
+/// Attack 2 (README): an LLM-injected message asks the agent to move funds via a
+/// non-allowed program. The T2 program allowlist blocks any value-transfer
+/// program — an SPL Token instruction is rejected even if it somehow reached
+/// the guard.
 #[test]
 fn prompt_injection_value_transfer_program_rejected() {
     let token_ix = ix(Pubkey::from_str(SPL_TOKEN).unwrap());
@@ -37,13 +46,42 @@ fn prompt_injection_value_transfer_program_rejected() {
     assert!(matches!(err, AttestError::Custody(_)));
 }
 
-/// Sanity: the three programs a real attestation needs (System for
-/// AdvanceNonceAccount, SAS for create_attestation, Memo) all pass the guard —
-/// the allowlist blocks value transfer, not legitimate attestations.
+/// F2 hardening: a `System::Transfer` (discriminator `0x02`) passes the
+/// *program-level* allowlist (System is allowed) — but value transfer must be
+/// unexpressible at the *guard*, not merely by construction. The hardened
+/// allowlist rejects any System ix that isn't `AdvanceNonceAccount` (`0x04`).
+#[test]
+fn prompt_injection_system_transfer_rejected() {
+    // System::Transfer = [0x02,0,0,0] + 32B dest + 8B lamports — would move SOL.
+    let transfer = sys_ix(&[0x02, 0x00, 0x00, 0x00, 0xaa, 0xbb, 0xcc, 0xdd]);
+    let err = enforce_program_allowlist(&[transfer]).unwrap_err();
+    assert!(matches!(err, AttestError::Custody(_)));
+}
+
+/// F2: a System ix with no data (or < 4 bytes) can't be AdvanceNonceAccount
+/// (which is exactly `[0x04,0,0,0]`) → rejected. Nothing ambiguous.
+#[test]
+fn prompt_injection_short_system_ix_rejected() {
+    let short = sys_ix(&[]);
+    let err = enforce_program_allowlist(&[short]).unwrap_err();
+    assert!(matches!(err, AttestError::Custody(_)));
+}
+
+/// F2 sanity: `System::AdvanceNonceAccount` (disc `0x04`) — the only System ix
+/// the attestation path constructs — is allowed. The hardening blocks value
+/// transfer, not the legitimate durable-nonce advance.
+#[test]
+fn prompt_injection_system_advance_nonce_allowed() {
+    let advance = sys_ix(&ADVANCE_NONCE_DISC);
+    enforce_program_allowlist(&[advance]).expect("AdvanceNonceAccount is allowed");
+}
+
+/// Sanity: the three programs a real attestation needs — System (as
+/// `AdvanceNonceAccount`, disc `0x04`), SAS, Memo — all pass the hardened guard.
 #[test]
 fn prompt_injection_legit_attest_programs_allowed() {
-    let legit = [ix(Pubkey::SYSTEM), ix(Pubkey::SAS), ix(Pubkey::MEMO)];
-    enforce_program_allowlist(&legit).expect("System/SAS/Memo are the attestation allowlist");
+    let legit = [sys_ix(&ADVANCE_NONCE_DISC), ix(Pubkey::SAS), ix(Pubkey::MEMO)];
+    enforce_program_allowlist(&legit).expect("System(AdvanceNonceAccount)/SAS/Memo are the attestation allowlist");
 }
 
 /// Attack 4 (README): flood the agent (or roll timestamps) to mint spam
