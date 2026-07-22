@@ -337,18 +337,28 @@ pub fn evaluate(policy: &Policy, facts: &TxFacts) -> Report {
         }
     }
 
-    // 7. Transfers: recipient allowlist (ATA-aware), mint allowlist, per-tx cap.
+    // 7. Transfers: recipient allowlist, mint allowlist, and the aggregate
+    // per-transaction cap for each asset. Checking instructions one by one
+    // would let a caller split one spend into several individually-at-cap
+    // transfers inside the same transaction.
+    let mut asset_totals: std::collections::BTreeMap<String, Option<u128>> =
+        std::collections::BTreeMap::new();
     for tr in &facts.transfers {
         if !recipient_allowed(policy, tr) {
             deny!("SH-DENY-RECIPIENT-003", "RECIPIENT_ALLOWLIST");
         }
         let asset_key = tr.mint.clone().unwrap_or_else(|| "SOL".to_string());
-        match policy.assets.get(&asset_key) {
-            None => deny!("SH-DENY-MINT-002", "MINT_ALLOWLIST"),
-            Some(asset) => match asset.max_raw() {
-                Ok(max) if tr.amount_raw <= max => {}
+        let total = asset_totals.entry(asset_key).or_insert(Some(0));
+        *total = total.and_then(|current| current.checked_add(tr.amount_raw));
+    }
+    for (asset_key, total) in &asset_totals {
+        match (policy.assets.get(asset_key), total) {
+            (Some(asset), Some(total)) => match asset.max_raw() {
+                Ok(max) if *total <= max => {}
                 _ => deny!("SH-DENY-CAP-001", "PER_TX_CAP"),
             },
+            (Some(_), None) => deny!("SH-DENY-CAP-001", "PER_TX_CAP"),
+            (None, _) => deny!("SH-DENY-MINT-002", "MINT_ALLOWLIST"),
         }
     }
 
@@ -372,25 +382,25 @@ pub fn evaluate(policy: &Policy, facts: &TxFacts) -> Report {
         },
         Some(intent) => {
             let intent_mint = intent.mint.clone().unwrap_or_else(|| "SOL".to_string());
-            let intent_amount = intent.amount_raw.parse::<u128>().unwrap_or(0);
-            let any_match = facts.transfers.iter().any(|tr| {
-                let tr_mint = tr.mint.clone().unwrap_or_else(|| "SOL".to_string());
-                recipient_matches_intent(&intent.recipient, tr)
-                    && tr_mint == intent_mint
-                    && tr.amount_raw <= intent_amount
-            });
-            if facts.transfers.is_empty() || !any_match {
+            let intent_amount = intent.amount_raw.parse::<u128>();
+            if facts.transfers.is_empty() {
                 deny!("SH-INTENT-MATCH-030", "INTENT_MISMATCH");
             }
             for tr in &facts.transfers {
                 let tr_mint = tr.mint.clone().unwrap_or_else(|| "SOL".to_string());
                 if !recipient_matches_intent(&intent.recipient, tr) {
                     deny!("SH-INTENT-RECIPIENT-031", "INTENT_MISMATCH");
-                } else if tr_mint != intent_mint {
-                    deny!("SH-INTENT-MINT-032", "INTENT_MISMATCH");
-                } else if tr.amount_raw > intent_amount {
-                    deny!("SH-INTENT-AMOUNT-033", "INTENT_MISMATCH");
                 }
+                if tr_mint != intent_mint {
+                    deny!("SH-INTENT-MINT-032", "INTENT_MISMATCH");
+                }
+            }
+            let total = facts.transfers.iter().try_fold(0u128, |sum, tr| {
+                sum.checked_add(tr.amount_raw)
+            });
+            if !matches!((intent_amount, total), (Ok(expected), Some(actual)) if expected == actual)
+            {
+                deny!("SH-INTENT-AMOUNT-033", "INTENT_MISMATCH");
             }
         }
     }

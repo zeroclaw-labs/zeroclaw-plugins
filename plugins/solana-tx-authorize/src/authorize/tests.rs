@@ -48,10 +48,81 @@ fn args(tx_b64: &str, policy: &str, intent: Option<&str>) -> String {
 }
 
 fn sim_ok_transport() -> MockTransport {
-    MockTransport::new().with(
-        "simulateTransaction",
-        json!({"result": {"value": {"err": null, "logs": []}}}),
-    )
+    MockTransport::new()
+        .with(
+            "simulateTransaction",
+            json!({"result": {"context": {"slot": 100}, "value": {"err": null, "logs": []}}}),
+        )
+        .with("getSlot", json!({"result": 100}))
+}
+
+#[test]
+fn simulation_sends_full_unsigned_transaction_not_bare_message() {
+    let t = sim_ok_transport();
+    let args = args(
+        &good_tx(),
+        &serde_json::to_string(&json!(policy_json())).unwrap(),
+        Some(&intent_json()),
+    );
+    let out = run(&args, Some(&t as &dyn RpcTransport));
+    assert!(out.success);
+    let calls = t.calls();
+    let (_, params) = calls
+        .iter()
+        .find(|(method, _)| method == "simulateTransaction")
+        .expect("simulation called");
+    let sent = params[0].as_str().expect("base64 tx");
+    let bytes = base64_decode(sent, 4096).expect("decode request");
+    let (sig_count, used) = safe_hands_core::codec::shortvec_decode(&bytes).expect("sig count");
+    assert_eq!(sig_count, 1);
+    assert_eq!(&bytes[used..used + 64], &[0u8; 64]);
+    assert_eq!(&bytes[used + 64..], &base64_decode(&good_tx(), 4096).unwrap());
+}
+
+#[test]
+fn stale_simulation_slot_is_unknown() {
+    let t = MockTransport::new()
+        .with(
+            "simulateTransaction",
+            json!({"result": {"context": {"slot": 100}, "value": {"err": null, "logs": []}}}),
+        )
+        .with("getSlot", json!({"result": 200}));
+    let args = args(
+        &good_tx(),
+        &serde_json::to_string(&json!(policy_json())).unwrap(),
+        Some(&intent_json()),
+    );
+    let out = run(&args, Some(&t as &dyn RpcTransport));
+    let v: Value = serde_json::from_str(&out.output).unwrap();
+    assert_eq!(v["verdict"], "UNKNOWN");
+    assert!(v["reason_codes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|c| c == "SH-UNKNOWN-SIM-STALE-052"));
+}
+
+#[test]
+fn full_output_is_hard_bounded() {
+    let ata = ata_address(
+        &parse_pubkey(RECIP).unwrap(),
+        &ix::spl_token_program(),
+        &parse_pubkey(USDC).unwrap(),
+    );
+    let mut args_json: Value = serde_json::from_str(&args(
+        &good_tx(),
+        &serde_json::to_string(&json!(policy_json())).unwrap(),
+        Some(&format!(
+            r#"{{"action":"spl_transfer","mint":"{USDC}","amount_raw":"25000000","recipient":"{ata}"}}"#
+        )),
+    ))
+    .unwrap();
+    args_json["detail_level"] = json!("full");
+    let out = run(
+        &args_json.to_string(),
+        Some(&sim_ok_transport() as &dyn RpcTransport),
+    );
+    assert!(out.output.len() <= 2_048, "{} bytes", out.output.len());
 }
 
 fn intent_json() -> String {

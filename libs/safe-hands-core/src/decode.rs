@@ -29,6 +29,11 @@ pub enum TxVersion {
 #[derive(Clone, Debug)]
 pub struct DecodedTx {
     pub facts: TxFacts,
+    /// Number of signatures required by the message header.
+    pub required_signatures: usize,
+    /// Whether the input included the transaction signature vector rather than
+    /// being a bare message.
+    pub has_signature_array: bool,
     /// All statically known account keys, base58, in message order.
     pub resolved_keys: Vec<String>,
     pub version: TxVersion,
@@ -56,29 +61,48 @@ const MAX_INSTRUCTIONS: usize = 64;
 /// Decode wire bytes into a [`DecodedTx`]. Accepts:
 /// - a full transaction (shortvec signature array + message), signed or not
 /// - a bare message (legacy or v0) as produced by message builders
+///
+/// A v0 message that references ALTs fails explicitly until the caller loads
+/// and supplies those addresses through [`decode_with_loaded_addresses`].
 pub fn decode(bytes: &[u8]) -> Result<DecodedTx, String> {
+    decode_impl(bytes, None)
+}
+
+/// Decode a v0 transaction after the caller has resolved every ALT reference.
+/// Solana ordering is all loaded writable keys, then all loaded readonly keys.
+/// Counts must match the indices declared in the message exactly.
+pub fn decode_with_loaded_addresses(
+    bytes: &[u8],
+    loaded_writable: &[Pubkey],
+    loaded_readonly: &[Pubkey],
+) -> Result<DecodedTx, String> {
+    decode_impl(bytes, Some((loaded_writable, loaded_readonly)))
+}
+
+fn decode_impl(bytes: &[u8], loaded: Option<(&[Pubkey], &[Pubkey])>) -> Result<DecodedTx, String> {
     if bytes.is_empty() {
         return Err("empty transaction bytes".to_string());
     }
 
-    // Two legal shapes: full transaction (sig array + message) or bare message.
-    // The sig-array form wins when it parses; otherwise we retry as bare
-    // (a bare legacy message can start with the same byte as a sig count).
     if let Some((signed, rest)) = try_strip_signatures(bytes)? {
-        if let Ok(mut decoded) = decode_message(rest) {
+        if let Ok(mut decoded) = decode_message(rest, loaded) {
             decoded.facts.signed = signed;
             decoded.facts.byte_len = bytes.len();
+            decoded.has_signature_array = true;
             return Ok(decoded);
         }
     }
-    decode_message(bytes).map(|mut d| {
+    decode_message(bytes, loaded).map(|mut d| {
         d.facts.byte_len = bytes.len();
         d
     })
 }
 
 /// Decode message bytes (no signature array): version detect + parse + classify.
-fn decode_message(message_bytes: &[u8]) -> Result<DecodedTx, String> {
+fn decode_message(
+    message_bytes: &[u8],
+    loaded: Option<(&[Pubkey], &[Pubkey])>,
+) -> Result<DecodedTx, String> {
     if message_bytes.is_empty() {
         return Err("empty message bytes".to_string());
     }
@@ -88,10 +112,66 @@ fn decode_message(message_bytes: &[u8]) -> Result<DecodedTx, String> {
         (TxVersion::Legacy, message_bytes)
     };
 
-    let (header_signers, keys, blockhash, raw_ixs, alt_refs, metas_per_ix) = match version {
+    let (header_signers, mut keys, blockhash, raw_ixs, alt_refs, mut metas_per_ix) = match version {
         TxVersion::Legacy => parse_legacy(body)?,
         TxVersion::V0 => parse_v0(body)?,
     };
+
+    if version == TxVersion::V0 && !alt_refs.is_empty() {
+        let want_writable: usize = alt_refs.iter().map(|r| r.writable_indices.len()).sum();
+        let want_readonly: usize = alt_refs.iter().map(|r| r.readonly_indices.len()).sum();
+        let Some((loaded_writable, loaded_readonly)) = loaded else {
+            return Err(format!(
+                "ALT resolution required: {want_writable} writable and {want_readonly} readonly addresses"
+            ));
+        };
+        if loaded_writable.len() != want_writable || loaded_readonly.len() != want_readonly {
+            return Err(format!(
+                "ALT loaded-address count mismatch: expected {want_writable}/{want_readonly} writable/readonly, got {}/{}",
+                loaded_writable.len(),
+                loaded_readonly.len()
+            ));
+        }
+        let static_len = keys.len();
+        keys.extend_from_slice(loaded_writable);
+        keys.extend_from_slice(loaded_readonly);
+        for (raw, metas) in raw_ixs.iter().zip(metas_per_ix.iter_mut()) {
+            let original_static_metas = metas.clone();
+            metas.clear();
+            for (position, idx) in raw.1.iter().enumerate() {
+                let i = *idx as usize;
+                let pubkey = *keys
+                    .get(i)
+                    .ok_or("account index out of range after ALT resolution")?;
+                let (is_signer, is_writable) = if i < static_len {
+                    // Static accounts preserve the flags computed by parse_v0.
+                    let original_position = raw.1[..position]
+                        .iter()
+                        .filter(|prior| **prior == *idx)
+                        .count();
+                    raw.1
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, candidate)| **candidate == *idx)
+                        .nth(original_position)
+                        .and_then(|(p, _)| original_static_metas.get(p))
+                        .map(|m| (m.is_signer, m.is_writable))
+                        .ok_or("static account meta missing during ALT resolution")?
+                } else if i < static_len + loaded_writable.len() {
+                    (false, true)
+                } else {
+                    (false, false)
+                };
+                metas.push(solana_instruction::AccountMeta {
+                    pubkey,
+                    is_signer,
+                    is_writable,
+                });
+            }
+        }
+    } else if loaded.is_some() && version != TxVersion::V0 {
+        return Err("loaded ALT addresses supplied for a legacy message".to_string());
+    }
 
     let resolved_keys: Vec<String> = keys.iter().map(|k| k.to_string()).collect();
     let mut facts = TxFacts {
@@ -101,10 +181,13 @@ fn decode_message(message_bytes: &[u8]) -> Result<DecodedTx, String> {
     facts.estimated_fee_lamports = 5_000u64.saturating_mul(header_signers as u64);
 
     let mut raw_instructions = Vec::with_capacity(raw_ixs.len());
-    for ((program_id, accounts, data), metas) in raw_ixs.iter().zip(metas_per_ix) {
-        classify(*program_id, accounts, data, &keys, &mut facts)?;
+    for ((program_index, accounts, data), metas) in raw_ixs.iter().zip(metas_per_ix) {
+        let program_id = *keys
+            .get(*program_index as usize)
+            .ok_or("program id index out of range after ALT resolution")?;
+        classify(program_id, accounts, data, &keys, &mut facts)?;
         raw_instructions.push(solana_instruction::Instruction {
-            program_id: *program_id,
+            program_id,
             accounts: metas,
             data: data.clone(),
         });
@@ -112,6 +195,8 @@ fn decode_message(message_bytes: &[u8]) -> Result<DecodedTx, String> {
 
     Ok(DecodedTx {
         facts,
+        required_signatures: header_signers as usize,
+        has_signature_array: false,
         resolved_keys,
         version,
         blockhash: bs58::encode(blockhash).into_string(),
@@ -142,7 +227,7 @@ fn try_strip_signatures(bytes: &[u8]) -> Result<Option<(bool, &[u8])>, String> {
     Ok(Some((any_nonzero, &bytes[used + sig_bytes..])))
 }
 
-type RawIx = (Pubkey, Vec<u8>, Vec<u8>); // (program, account indices, data)
+type RawIx = (u8, Vec<u8>, Vec<u8>); // (program index, account indices, data)
 type MetasPerIx = Vec<Vec<solana_instruction::AccountMeta>>;
 type ParsedParts = (
     u8,
@@ -179,8 +264,8 @@ fn parse_legacy(bytes: &[u8]) -> Result<ParsedParts, String> {
         if ixs.len() >= MAX_INSTRUCTIONS {
             return Err("instruction vector exceeds bound".to_string());
         }
-        let program = keys
-            .get(ci.program_id_index as usize)
+        let program_index = ci.program_id_index;
+        keys.get(program_index as usize)
             .ok_or("program id index out of range")?;
         let metas: Vec<solana_instruction::AccountMeta> = ci
             .accounts
@@ -194,7 +279,7 @@ fn parse_legacy(bytes: &[u8]) -> Result<ParsedParts, String> {
                 }
             })
             .collect();
-        ixs.push((*program, ci.accounts.clone(), ci.data.clone()));
+        ixs.push((program_index, ci.accounts.clone(), ci.data.clone()));
         metas_per_ix.push(metas);
     }
     Ok((
@@ -234,7 +319,8 @@ fn parse_v0(bytes: &[u8]) -> Result<ParsedParts, String> {
     let mut ixs = Vec::with_capacity(ix_count);
     let mut metas_per_ix: MetasPerIx = Vec::with_capacity(ix_count);
     for _ in 0..ix_count {
-        let program_idx = cur.u8()? as usize;
+        let program_index = cur.u8()?;
+        let program_idx = program_index as usize;
         let account_count = cur.shortvec()?;
         if account_count > MAX_ACCOUNTS {
             return Err("instruction account vector exceeds bound".to_string());
@@ -244,18 +330,26 @@ fn parse_v0(bytes: &[u8]) -> Result<ParsedParts, String> {
         for _ in 0..account_count {
             let idx = cur.u8()?;
             acc_indices.push(idx);
+            let i = idx as usize;
+            let (pubkey, signer, writable) = if let Some(key) = keys.get(i) {
+                (*key, is_signer(i), is_writable(i))
+            } else {
+                // Dynamic ALT key — bound after the table account is loaded.
+                (Pubkey::default(), false, false)
+            };
             metas.push(solana_instruction::AccountMeta {
-                pubkey: *keys.get(idx as usize).ok_or("account index out of range")?,
-                is_signer: is_signer(idx as usize),
-                is_writable: is_writable(idx as usize),
+                pubkey,
+                is_signer: signer,
+                is_writable: writable,
             });
         }
         let data_len = cur.shortvec()?;
         let data = cur.bytes(data_len)?.to_vec();
-        let program = *keys
-            .get(program_idx)
-            .ok_or("program id index out of range")?;
-        ixs.push((program, acc_indices, data));
+        // Program may itself be loaded from an ALT; validate after resolution.
+        if program_idx < keys.len() {
+            let _ = keys[program_idx];
+        }
+        ixs.push((program_index, acc_indices, data));
         metas_per_ix.push(metas);
     }
     // Address lookup tables (leftover bytes after instructions).

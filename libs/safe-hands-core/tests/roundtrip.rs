@@ -139,6 +139,50 @@ fn v0_message_with_nonce_parses() {
 }
 
 #[test]
+fn v0_alt_loaded_recipient_requires_resolution_then_decodes() {
+    // Minimal v0 transfer whose destination is loaded from an ALT. Static
+    // keys: payer + system program. Dynamic key index 2 = loaded recipient.
+    let authority = payer();
+    let system = Pubkey::default();
+    let table = Pubkey::new_from_array([11u8; 32]);
+    let loaded_recipient = dest();
+
+    let mut m = vec![0x80u8];
+    m.extend_from_slice(&[1, 0, 1]);
+    m.extend_from_slice(&shortvec_encode(2));
+    m.extend_from_slice(authority.as_ref());
+    m.extend_from_slice(system.as_ref());
+    m.extend_from_slice(&[7u8; 32]);
+    m.extend_from_slice(&shortvec_encode(1));
+    m.push(1);
+    m.extend_from_slice(&shortvec_encode(2));
+    m.extend_from_slice(&[0, 2]);
+    let mut data = 2u32.to_le_bytes().to_vec();
+    data.extend_from_slice(&1_000_000u64.to_le_bytes());
+    m.extend_from_slice(&shortvec_encode(data.len()));
+    m.extend_from_slice(&data);
+    m.extend_from_slice(&shortvec_encode(1));
+    m.extend_from_slice(table.as_ref());
+    m.extend_from_slice(&shortvec_encode(1));
+    m.push(3);
+    m.extend_from_slice(&shortvec_encode(0));
+
+    let unresolved = decode(&m).expect_err("ALT-backed instruction must not guess keys");
+    assert!(
+        unresolved.contains("ALT resolution required"),
+        "{unresolved}"
+    );
+
+    let d = safe_hands_core::decode::decode_with_loaded_addresses(&m, &[loaded_recipient], &[])
+        .expect("resolved v0 decodes");
+    assert_eq!(d.version, TxVersion::V0);
+    assert_eq!(d.alt_refs.len(), 1);
+    assert_eq!(d.alt_refs[0].table, table.to_string());
+    assert_eq!(d.facts.transfers[0].recipient, loaded_recipient.to_string());
+    assert_eq!(d.facts.transfers[0].amount_raw, 1_000_000);
+}
+
+#[test]
 fn approve_is_authority_change() {
     // SPL Approve ix: disc 7 — latent drain path, must flag.
     let payer = payer();

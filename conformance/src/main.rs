@@ -205,15 +205,22 @@ fn build_tx(spec: &TxSpec) -> Vec<u8> {
 fn transport_for(simulation: &str) -> Box<dyn RpcTransport> {
     match simulation {
         "down" => Box::new(DownTransport),
+        // A real node always returns a context.slot even when the tx errors;
+        // include it so the mock matches the JSON-RPC shape simulate() parses.
         "fail" => Box::new(MockTransport::new().with(
             "simulateTransaction",
-            json!({"result": {"value": {"err": "InstructionError", "logs": []}}}),
+            json!({"result": {"context": {"slot": 100}, "value": {"err": "InstructionError", "logs": []}}}),
         )),
+        // Healthy transport: simulation succeeds with a fresh slot. Mirrors the
+        // contract asserted by the authorize unit tests — simulateTransaction
+        // carries context.slot and getSlot reports the current (equal) slot, so
+        // the freshness gate (max_slot_age) passes deterministically offline.
         _ => Box::new(MockTransport::new()
             .with(
                 "simulateTransaction",
-                json!({"result": {"value": {"err": null, "logs": []}}}),
+                json!({"result": {"context": {"slot": 100}, "value": {"err": null, "logs": []}}}),
             )
+            .with("getSlot", json!({"result": 100}))
             .with(
                 "getAccountInfo",
                 json!({"result": {"value": {"owner": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA", "data": ["", "base64"]}}}),

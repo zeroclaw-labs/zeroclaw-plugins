@@ -117,8 +117,28 @@ pub fn run(args_json: &str, transport: Option<&dyn RpcTransport>) -> ExecuteOutp
     // 3. Simulation: mandatory when policy requires it. Evidence problems =
     //    UNKNOWN, never silent.
     if policy.simulation.required {
-        facts.simulation_ok = match simulate(transport, tx_b64, decoded.facts.byte_len) {
+        facts.simulation_ok = match simulate(
+            transport,
+            &decoded,
+            &tx_bytes,
+            tx_b64,
+            policy.simulation.max_slot_age,
+        ) {
             SimOutcome::Ok => true,
+            SimOutcome::Stale => {
+                return ExecuteOutput::verdict(verdict_json(
+                    &Report {
+                        verdict: Verdict::Unknown,
+                        reason_codes: vec!["SH-UNKNOWN-SIM-STALE-052".to_string()],
+                        matched_rules: vec!["SIMULATION_FRESHNESS".to_string()],
+                    },
+                    &decoded_summary(&decoded.facts),
+                    &message_digest,
+                    &policy_sha256,
+                    "RETRY_OR_ALERT_OPERATOR",
+                    args.detail_level.as_deref(),
+                ));
+            }
             SimOutcome::Unavailable => {
                 return ExecuteOutput::verdict(verdict_json(
                     &Report {
@@ -170,31 +190,61 @@ pub fn run(args_json: &str, transport: Option<&dyn RpcTransport>) -> ExecuteOutp
 /// Simulation outcomes, mapped to fail-closed semantics.
 enum SimOutcome {
     Ok,
+    Stale,
     Failed,
     Unavailable,
 }
 
-/// simulateTransaction over the injected transport. The tx is wrapped as an
-/// unsigned transaction (zeroed signature slots) when it arrives as a bare
-/// message — simulation requires the full tx form.
-fn simulate(transport: Option<&dyn RpcTransport>, tx_b64: &str, _byte_len: usize) -> SimOutcome {
+/// Simulate a canonical unsigned transaction and require fresh, structurally
+/// complete RPC evidence. Missing fields never count as successful evidence.
+fn simulate(
+    transport: Option<&dyn RpcTransport>,
+    decoded: &safe_hands_core::decode::DecodedTx,
+    tx_bytes: &[u8],
+    tx_b64: &str,
+    max_slot_age: u64,
+) -> SimOutcome {
     let Some(rpc) = transport else {
         return SimOutcome::Unavailable;
     };
+    let simulation_tx = if decoded.has_signature_array {
+        tx_b64.to_string()
+    } else {
+        wrap_unsigned_tx(tx_bytes, decoded.required_signatures)
+    };
     let params = json!([
-        tx_b64,
+        simulation_tx,
         {"encoding": "base64", "sigVerify": false, "replaceRecentBlockhash": true}
     ]);
-    match rpc.call("simulateTransaction", params) {
-        Ok(resp) => {
-            let err = resp.pointer("/result/value/err");
-            match err {
-                Some(Value::Null) | None => SimOutcome::Ok,
-                _ => SimOutcome::Failed,
-            }
-        }
-        Err(_) => SimOutcome::Unavailable,
+    let response = match rpc.call("simulateTransaction", params) {
+        Ok(response) => response,
+        Err(_) => return SimOutcome::Unavailable,
+    };
+    match response.pointer("/result/value/err") {
+        Some(Value::Null) => {}
+        Some(_) => return SimOutcome::Failed,
+        None => return SimOutcome::Unavailable,
     }
+    let Some(simulation_slot) = response
+        .pointer("/result/context/slot")
+        .and_then(Value::as_u64)
+    else {
+        return SimOutcome::Unavailable;
+    };
+    let current_slot = match rpc.call("getSlot", json!([{"commitment": "confirmed"}])) {
+        Ok(response) => match response.get("result").and_then(Value::as_u64) {
+            Some(slot) => slot,
+            None => return SimOutcome::Unavailable,
+        },
+        Err(_) => return SimOutcome::Unavailable,
+    };
+    if current_slot < simulation_slot {
+        return SimOutcome::Unavailable;
+    }
+    if current_slot - simulation_slot > max_slot_age {
+        return SimOutcome::Stale;
+    }
+    SimOutcome::Ok
 }
 
 /// One-paragraph human narration of the decoded transaction.

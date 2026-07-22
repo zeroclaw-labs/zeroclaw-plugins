@@ -309,3 +309,28 @@ fn policy_hash_is_stable() {
     assert_eq!(h1, h2);
     assert_eq!(h1.len(), 64);
 }
+
+
+#[test]
+fn same_recipient_transfers_are_aggregated_for_cap_and_intent() {
+    let mut facts = usdc_transfer(25_000_000, RECIP);
+    facts.transfers.push(TransferFact {
+        mint: Some(USDC.into()),
+        amount_raw: 25_000_000,
+        recipient: RECIP.into(),
+    });
+
+    let report = evaluate(&policy(), &facts);
+
+    assert_eq!(report.verdict, Verdict::Deny);
+    assert!(
+        report.reason_codes.iter().any(|code| code == "SH-DENY-CAP-001"),
+        "aggregate spend must exceed the per-transaction cap: {:?}",
+        report.reason_codes
+    );
+    assert!(
+        report.reason_codes.iter().any(|code| code == "SH-INTENT-AMOUNT-033"),
+        "aggregate spend must exactly match declared intent: {:?}",
+        report.reason_codes
+    );
+}

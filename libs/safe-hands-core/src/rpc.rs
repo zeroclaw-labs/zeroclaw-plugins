@@ -22,7 +22,7 @@ pub fn envelope(method: &str, params: Value) -> Value {
 #[derive(Default)]
 pub struct MockTransport {
     pub responses: std::collections::HashMap<String, Value>,
-    pub calls: std::cell::RefCell<Vec<String>>,
+    calls: std::cell::RefCell<Vec<(String, Value)>>,
 }
 
 impl MockTransport {
@@ -34,11 +34,18 @@ impl MockTransport {
         self.responses.insert(method.to_string(), response);
         self
     }
+
+    /// Return the exact method/params pairs observed by this mock.
+    pub fn calls(&self) -> Vec<(String, Value)> {
+        self.calls.borrow().clone()
+    }
 }
 
 impl RpcTransport for MockTransport {
-    fn call(&self, method: &str, _params: Value) -> Result<Value, String> {
-        self.calls.borrow_mut().push(method.to_string());
+    fn call(&self, method: &str, params: Value) -> Result<Value, String> {
+        self.calls
+            .borrow_mut()
+            .push((method.to_string(), params));
         self.responses
             .get(method)
             .cloned()
@@ -92,7 +99,7 @@ mod tests {
         let rpc = MockTransport::new().with("getBalance", json!({"result": {"value": 42}}));
         let out = rpc.call("getBalance", json!([])).expect("fixture");
         assert_eq!(out["result"]["value"], 42);
-        assert_eq!(rpc.calls.borrow().as_slice(), ["getBalance"]);
+        assert_eq!(rpc.calls()[0], ("getBalance".to_string(), json!([])));
     }
 
     #[test]

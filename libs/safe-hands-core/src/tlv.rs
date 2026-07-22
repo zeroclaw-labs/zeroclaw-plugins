@@ -25,7 +25,7 @@ pub struct MintRisk {
 }
 
 const BASE_MINT_LEN: usize = 82;
-const ACCOUNT_TYPE_MINT_EXT: u8 = 2; // StateWithExtensions marker for mints
+const ACCOUNT_TYPE_MINT_EXT: u8 = 1; // Token-2022 AccountType::Mint
 
 /// Parse a mint account buffer + owner into [`MintRisk`]. Total function:
 /// truncated/foreign data yields "no signals", never a panic.
@@ -143,5 +143,26 @@ mod tests {
         data.extend_from_slice(&[12, 0, 255, 255]); // declares huge entry, no payload
         let r = parse_mint_risk(TOKEN_2022_PROGRAM_ID, &data);
         assert!(!r.permanent_delegate, "truncated entry must not count");
+    }
+}
+
+
+#[cfg(test)]
+mod official_layout_tests {
+    use super::*;
+
+    #[test]
+    fn token_2022_official_mint_account_type_marker_is_parsed() {
+        // Token-2022 AccountType is Uninitialized=0, Mint=1, Account=2.
+        // Build this golden independently of the parser's private constant so
+        // a self-consistent but wrong marker cannot make the test pass.
+        let mut data = vec![0u8; 82];
+        data.push(1);
+        data.extend_from_slice(&12u16.to_le_bytes());
+        data.extend_from_slice(&32u16.to_le_bytes());
+        data.extend_from_slice(&[7u8; 32]);
+
+        let risk = parse_mint_risk(TOKEN_2022_PROGRAM_ID, &data);
+        assert!(risk.permanent_delegate);
     }
 }
