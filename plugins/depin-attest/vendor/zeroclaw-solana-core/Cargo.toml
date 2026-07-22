@@ -1,0 +1,53 @@
+[package]
+name = "zeroclaw-solana-core"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Zero-solana-sdk, wasm32-wasip2-friendly Solana core: base58, borsh, versioned-transaction construction, durable-nonce handling, JSON-RPC over waki. Shared substrate for ZeroClaw Solana tool plugins."
+publish = false
+
+[lib]
+crate-type = ["rlib"]
+
+[dependencies]
+borsh = { version = "1.5", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+bs58 = "0.5"
+base64 = "0.22"
+waki = { version = "0.5", optional = true }
+
+[dev-dependencies]
+proptest = "1.5"
+# Dev-only, differential-testing dependencies: verify our hand-rolled
+# zero-copy Token-2022 parser against the canonical SPL/Solana crates'
+# own layout constants and pack/extension APIs. Neither of these are a
+# dependency of the shipped rlib -- `cargo build`/`cargo check` without
+# `--tests` never touches them, and the wasm32-wasip2 plugin builds don't
+# either, so this does not reintroduce solana-program into the plugin binaries.
+spl-token-2022 = "6"
+solana-program = "2"
+# Lightweight, standalone crate (no solana-program pulled in) exposing the
+# canonical compact-u16 shortvec codec; used to differentially test our
+# hand-rolled ShortVec encode/decode against ground truth. bincode drives
+# its `Serialize` impl to get raw encoded bytes out.
+solana-short-vec = "2"
+bincode = "1"
+
+[features]
+default = []
+# Enabled only by the wasm32-wasip2 plugin shims; keeps `waki` (and its
+# wasi:http component bindings) entirely out of the default host build so
+# `cargo test` never needs a wasm toolchain or network access.
+waki-transport = ["dep:waki"]
+
+# No [profile.release] here: this is a nested workspace member (see the
+# comment near the top), and Cargo only honors profiles at the workspace
+# root -- the enclosing plugin's own [profile.release] applies to the whole
+# build, this crate included.
+
+# Vendored into this plugin's own tree as a nested path dependency (see
+# ../../README.md): no [workspace] marker here, so it resolves as a member
+# of the enclosing plugin's workspace rather than claiming its own root.
+# The canonical, independently-buildable copy lives at the top-level
+# crates/zeroclaw-solana-core and keeps its own [workspace] marker there.

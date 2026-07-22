@@ -1,0 +1,13 @@
+name = "depin-attest"
+version = "0.1.0"
+description = "Packages an edge-node sensor/health reading into an unsigned, durable-nonce Solana transaction targeting the well-known SPL Memo program. Nonce doubles as a replay guard."
+author = "ZeroClaw Solana-Edge Trio"
+wasm_path = "depin_attest.wasm"
+capabilities = ["tool"]
+# config_read: the host injects this plugin's own config section (fee_payer,
+#   nonce_account, nonce_authority) into execute args as `__config`. No
+#   http_client -- this plugin never calls out; the caller supplies the
+#   nonce account's current value directly (read via a separate RPC-reading
+#   tool, e.g. token-risk-check's own RPC path or a future solana-rpc-read
+#   plugin), and this plugin only ever builds an unsigned transaction.
+permissions = ["config_read"]

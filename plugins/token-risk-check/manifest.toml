@@ -1,0 +1,15 @@
+name = "token-risk-check"
+version = "0.1.0"
+description = "SPL Token-2022 mint risk check: mint/freeze authority, dangerous extensions (permanent delegate, transfer hook, transfer fee, non-transferable), holder concentration, and liquidity pool status. Red/amber/green verdict with reasons."
+author = "ZeroClaw Solana-Edge Trio"
+wasm_path = "token_risk_check.wasm"
+capabilities = ["tool"]
+# http_client: fetch the mint account + top-holder list from the operator's
+#   own Solana RPC endpoint, and (optionally) query Jupiter's Tokens API for
+#   liquidity data -- both read-only; T0, no funds ever move.
+# config_read: the host injects this plugin's own config section
+#   (solana_rpc_url, concentration_amber_pct, concentration_red_pct,
+#   jupiter_api_key, min_liquidity_usd) into execute args as `__config`.
+#   Without solana_rpc_url execute fails closed; without jupiter_api_key the
+#   liquidity check is simply skipped, not an error.
+permissions = ["http_client", "config_read"]
