@@ -1,8 +1,9 @@
 # token-risk-check — one-page bounty write-up
 
-Demo video: pending the required real Telegram or Discord channel capture; the
-earlier slide-based draft is not part of this submission. The release digest
-and post-hardening ZeroClaw host trace below come from the same final build.
+Demo video: pending a new continuous capture of the already-verified real
+Telegram flow; the earlier slide-based draft is not part of this submission.
+The release digest and post-hardening ZeroClaw host trace below come from the
+same final build.
 
 Upstream pull request: https://github.com/zeroclaw-labs/zeroclaw-plugins/pull/93
 
@@ -96,9 +97,12 @@ evidence, and the exact result was returned to the agent on its second turn.
   top-one concentration of 11.6%, top-ten concentration of 33.9%, $14,994,072
   PumpSwap liquidity, and `lp_status: concentrated_position` from GoPlus.
 
-The remaining artifact is the public video no longer than three minutes from a
-real Telegram or Discord channel. It is pending human channel authentication
-and capture. Live market and holder values can change between runs.
+The Telegram channel was authenticated and exercised end to end on 2026-07-22:
+a real Telegram request reached ZeroClaw, the model selected this WASM tool,
+live evidence returned, and the second-turn answer was delivered to Telegram.
+The remaining artifact is a new continuous public recording no longer than
+three minutes that visibly proves that full sequence. Live market and holder
+values can change between runs.
 
 If the primary and fallback RPCs, market endpoint, or required LP source fail,
 the plugin fails closed rather than inventing data.

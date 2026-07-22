@@ -224,12 +224,14 @@ on 2026-07-22:
 {"mint":"EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v","rating":"red","score":70,"complete":false,"findings":[{"severity":"red","code":"MINT_AUTHORITY_ACTIVE","detail":"supply can still be increased"},{"severity":"amber","code":"FREEZE_AUTHORITY_ACTIVE","detail":"token accounts can be frozen"},{"severity":"amber","code":"LP_POSITION_CONTROL_UNVERIFIED","detail":"the largest pool uses concentrated positions; lock control is unverified"}],"facts":{"program":"spl-token","decimals":6,"mint_authority":true,"freeze_authority":true,"transfer_hook":false,"permanent_delegate":false,"pausable_authority":false,"paused":false,"permissioned_burn_authority":false,"scaled_ui_amount_authority":false,"unassessed_extensions":[],"top1_pct":11.6,"top10_pct":33.9,"liquidity_usd":14994072.0,"market":"pumpswap","lp_status":"concentrated_position","lp_pool_type":"Concentrated","lp_evidence_source":"goplus"},"note":"Read-only evidence, not financial advice."}
 ```
 
-The remaining bounty artifact is a public video no longer than three minutes
-showing the tool invoked from a real Telegram or Discord channel. It is pending
-human channel authentication and capture. The earlier slide-based player is
-not final proof. Live concentration and liquidity values naturally change
-between runs. If any required source fails, the report remains visibly
-incomplete/red rather than inventing evidence.
+The real Telegram channel path was authenticated and exercised end to end on
+2026-07-22: a Telegram user sent the canonical USDC mint, ZeroClaw selected this
+WASM tool, live evidence returned, and the second-turn answer was delivered to
+Telegram. The remaining bounty artifact is a new continuous public recording,
+no longer than three minutes, that visibly proves that full sequence. The
+earlier slide-based player is not final proof. Live concentration and liquidity
+values naturally change between runs. If any required source fails, the report
+remains visibly incomplete/red rather than inventing evidence.
 
 ## Install and use
 
