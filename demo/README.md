@@ -8,7 +8,6 @@ Reproduce the Superteam Brasil bounty flow: Telegram → `depin_attest` (T1) →
 
 | Path | Purpose |
 |---|---|
-| `scripts/` | Channel keep-alive, Telegram wire-up, recordable host demo, final video helpers |
 | `runner/` | Host e2e: build unsigned tx → sign with payer keypair → submit → uptime |
 | `config.example.toml` | Plugin config fragment (public pubkeys only) |
 | `.env.example` | Env template — copy to `demo/.env` / `demo/keys/env.sh` |
@@ -19,21 +18,15 @@ Local-only (gitignored): `keys/`, `zeroclaw-config/config.toml`, `recording/`, p
 ## Quick start
 
 ```bash
-# 1) Keys + env (gitignored)
+# Keys + env (gitignored)
 cp demo/.env.example demo/.env   # fill DEPIN_* + TELEGRAM_BOT_TOKEN
 # place payer.json + create durable nonce → demo/keys/
 
-# 2) Install plugins into a local ZeroClaw config dir, then:
-export TELEGRAM_BOT_TOKEN='…from BotFather…'
-./demo/scripts/wire-telegram.sh
-./demo/scripts/keep-channel.sh
-
-# 3) Terminal / explorer proof
 source demo/keys/env.sh
-./demo/scripts/recordable-demo.sh
+cargo +1.96.1 run --manifest-path demo/runner/Cargo.toml --release
 ```
 
-Telegram message:
+Telegram (with your own ZeroClaw channel + bot token):
 
 ```text
 Attest device pi-greenhouse-7 metric temperature reading 21.4 unit celsius
