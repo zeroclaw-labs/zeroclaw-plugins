@@ -254,7 +254,15 @@ impl SensorReading {
     /// `CreateAttestationIxData`. This is the attestation payload an off-chain
     /// verifier decodes with the Schema's `layout`.
     pub fn encode(&self) -> Vec<u8> {
-        borsh::to_vec(self).expect("SensorReading is a fixed-shape struct — encode is infallible")
+        // F7 (audit): this `expect` is a deliberate ACCEPT of an unreachable
+        // panic. borsh::to_vec serializes a fixed-shape struct of
+        // String/f64/i64/String — all infallible borsh types — into a Vec<u8> of
+        // <100 bytes that never fails to allocate. No code path can panic here.
+        // (Converting to Result would be cosmetic API churn for zero security
+        // benefit; the `build_unsigned` panics in palinurus-core are likewise
+        // unreachable for our <=10-account ixs and are roadmaped for a future
+        // core bump's Result-returning variant.)
+        borsh::to_vec(self).expect("SensorReading is a fixed-shape struct — borsh encode is infallible (no allocator/serialize failure path)")
     }
 
     /// Derive the attestation nonce: a `Pubkey` (32 bytes) from the SHA-256 of
