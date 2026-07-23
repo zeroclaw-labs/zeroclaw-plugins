@@ -115,6 +115,9 @@ fn epoch_to_ymdhm(epoch: u64) -> (u32, u32, u32, u32, u32) {
 }
 
 fn main() {
+  // Auto-load per-repo `.env` (symlinked into the plugin dir) so the demo runs
+  // without manual `source`/`export` — vars already in the real env win.
+  let _ = dotenvy::dotenv();
   let step = env::args().nth(1).unwrap_or_else(|| "all".to_string());
   let cfg = build_cfg();
   let http = ReqwestHttp::default();
