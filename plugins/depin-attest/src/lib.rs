@@ -138,15 +138,60 @@ mod component {
             };
 
             let nonce = derive_nonce(&attest_args.device_id, slot);
-            let memo_text = build_memo(&attest_args, slot, &nonce);
+            let memo_text = match build_memo(&attest_args, slot, &nonce) {
+                Ok(m) => m,
+                Err(e) => {
+                    emit(PluginAction::Fail, PluginOutcome::Failure, "invalid arguments", None);
+                    return Ok(ToolResult {
+                        success: false,
+                        output: String::new(),
+                        error: Some(format!("invalid arguments: {e}")),
+                    });
+                }
+            };
+
+            let fee_payer_b58 = config.get("fee_payer").map(String::as_str).unwrap_or("");
+            let fee_payer: [u8; 32] = if fee_payer_b58.is_empty() {
+                [0u8; 32]
+            } else {
+                match base58_decode(fee_payer_b58) {
+                    Ok(decoded) if decoded.len() == 32 => {
+                        let mut arr = [0u8; 32];
+                        arr.copy_from_slice(&decoded);
+                        arr
+                    }
+                    Ok(_) => {
+                        emit(PluginAction::Fail, PluginOutcome::Failure, "invalid fee_payer config", None);
+                        return Ok(ToolResult {
+                            success: false,
+                            output: String::new(),
+                            error: Some("fee_payer must be a 32-byte base58 pubkey".to_string()),
+                        });
+                    }
+                    Err(e) => {
+                        emit(PluginAction::Fail, PluginOutcome::Failure, "invalid fee_payer config", None);
+                        return Ok(ToolResult {
+                            success: false,
+                            output: String::new(),
+                            error: Some(format!("invalid fee_payer in config: {e}")),
+                        });
+                    }
+                }
+            };
+
             let instr = memo_instruction(&memo_text);
             let tx = UnsignedTx {
-                fee_payer: [0u8; 32],
+                fee_payer,
                 recent_blockhash: blockhash,
                 instruction: instr,
             };
             let tx_b64 = base64_encode(&serialize(&tx));
             let nonce_hex = hex_encode(&nonce);
+            let fee_payer_note = if fee_payer == [0u8; 32] {
+                "fee_payer not configured — replace the zero pubkey at account index 0 before signing".to_string()
+            } else {
+                format!("fee_payer: {fee_payer_b58}")
+            };
 
             let result = AttestResult {
                 unsigned_tx_b64: tx_b64,
@@ -154,6 +199,7 @@ mod component {
                 memo_payload: memo_text.clone(),
                 replay_nonce: nonce_hex.clone(),
                 custody_tier: "T1",
+                fee_payer_note,
                 summary: format!(
                     "Attestation built for {} ({}: {:.4} {}) at slot {}. Unsigned — sign with \
                      your wallet and submit to commit on-chain. Nonce: {}...",
@@ -198,9 +244,10 @@ mod component {
         let resp = waki::Client::new()
             .post(rpc_url)
             .header("Content-Type", "application/json")
+            .connect_timeout(std::time::Duration::from_secs(10))
             .json(&body)
             .send()
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| format!("rpc fetch failed (timeout or network): {e}"))?;
 
         let val: Value = resp.json().map_err(|e| e.to_string())?;
 

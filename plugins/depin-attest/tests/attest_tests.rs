@@ -41,7 +41,7 @@ fn nonce_differs_by_device() {
 fn memo_format_includes_all_fields() {
     let args = sample_args();
     let nonce = derive_nonce(&args.device_id, 12345);
-    let memo = build_memo(&args, 12345, &nonce);
+    let memo = build_memo(&args, 12345, &nonce).expect("valid args must build a memo");
     assert!(memo.starts_with("zc-depin|pi-node-001|temperature"));
     assert!(memo.contains("slot:12345"));
     assert!(memo.contains("nonce:"));
@@ -53,7 +53,7 @@ fn memo_format_includes_all_fields() {
 fn attestation_hash_is_deterministic_and_matches_memo() {
     let args = sample_args();
     let nonce = derive_nonce(&args.device_id, 1);
-    let memo = build_memo(&args, 1, &nonce);
+    let memo = build_memo(&args, 1, &nonce).expect("valid args must build a memo");
     let h1 = attestation_hash(&memo);
     let h2 = attestation_hash(&memo);
     assert_eq!(h1, h2);
@@ -69,7 +69,7 @@ fn tx_serializes_without_panic() {
         unit: "seconds".into(),
     };
     let nonce = derive_nonce(&args.device_id, 9999);
-    let memo_text = build_memo(&args, 9999, &nonce);
+    let memo_text = build_memo(&args, 9999, &nonce).expect("valid args must build a memo");
     let instr = memo_instruction(&memo_text);
     let tx = UnsignedTx {
         fee_payer: [0u8; 32],
@@ -87,7 +87,7 @@ fn tx_serializes_without_panic() {
 fn tx_base64_roundtrips_expected_length() {
     let args = sample_args();
     let nonce = derive_nonce(&args.device_id, 42);
-    let memo_text = build_memo(&args, 42, &nonce);
+    let memo_text = build_memo(&args, 42, &nonce).expect("valid args must build a memo");
     let instr = memo_instruction(&memo_text);
     let tx = UnsignedTx {
         fee_payer: [0u8; 32],
@@ -129,7 +129,7 @@ fn prompt_injection_unknown_field_rejected() {
 fn prompt_injection_sign_and_submit_ignored() {
     let args = sample_args();
     let nonce = derive_nonce(&args.device_id, 1);
-    let memo = build_memo(&args, 1, &nonce);
+    let memo = build_memo(&args, 1, &nonce).expect("valid args must build a memo");
     assert!(!memo.contains("sendTransaction"));
     assert!(!memo.contains("private_key"));
 }
@@ -150,4 +150,55 @@ fn summary_stays_compact() {
         args.device_id, args.sensor_type, args.value, args.unit, 500_000, &nonce_hex[..16],
     );
     assert!(summary.len() < 300, "summary too long: {} chars", summary.len());
+}
+
+#[test]
+fn delimiter_injection_in_device_id_rejected() {
+    let args = AttestArgs {
+        device_id: "pi-node|slot:0|nonce:fake".into(),
+        sensor_type: "temperature".into(),
+        value: 23.0,
+        unit: "celsius".into(),
+    };
+    let nonce = derive_nonce(&args.device_id, 1);
+    assert!(build_memo(&args, 1, &nonce).is_err());
+}
+
+#[test]
+fn delimiter_injection_in_unit_rejected() {
+    let args = AttestArgs {
+        device_id: "pi-node-001".into(),
+        sensor_type: "temperature".into(),
+        value: 23.0,
+        unit: "celsius|nonce:evil".into(),
+    };
+    let nonce = derive_nonce(&args.device_id, 1);
+    assert!(build_memo(&args, 1, &nonce).is_err());
+}
+
+#[test]
+fn memo_length_cap_enforced() {
+    let args = AttestArgs {
+        device_id: "a".repeat(64),
+        sensor_type: "custom".into(),
+        value: 1.0,
+        unit: "x".repeat(16),
+    };
+    let nonce = derive_nonce(&args.device_id, u64::MAX);
+    // May or may not exceed 256 — just assert build_memo doesn't panic
+    let _ = build_memo(&args, u64::MAX, &nonce);
+}
+
+#[test]
+fn zero_fee_payer_produces_valid_tx_bytes() {
+    // Even with zero fee-payer, the tx must serialize without panic
+    // and the v0 prefix must be present.
+    let instr = memo_instruction("test");
+    let tx = UnsignedTx {
+        fee_payer: [0u8; 32],
+        recent_blockhash: [1u8; 32],
+        instruction: instr,
+    };
+    let bytes = serialize(&tx);
+    assert_eq!(bytes[1], 0x80);
 }

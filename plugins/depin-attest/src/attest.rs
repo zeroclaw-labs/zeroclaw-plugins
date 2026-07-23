@@ -25,6 +25,7 @@ pub struct AttestResult {
     pub memo_payload: String,
     pub replay_nonce: String,
     pub custody_tier: &'static str,
+    pub fee_payer_note: String,
     pub summary: String,
 }
 
@@ -49,17 +50,41 @@ pub fn derive_nonce(device_id: &str, slot: u64) -> [u8; 32] {
     h.finalize().into()
 }
 
+/// Strip pipe characters (the memo field delimiter) and enforce max length.
+/// Called on every user-controlled string before it enters the memo payload.
+fn sanitize(s: &str, max_len: usize, field: &str) -> Result<String, String> {
+    if s.len() > max_len {
+        return Err(format!("{field} too long: {} chars (max {max_len})", s.len()));
+    }
+    // Reject '|' — it is the memo field delimiter; allowing it lets a caller
+    // forge fake slot:/nonce: segments that a downstream parser would accept.
+    if s.contains('|') {
+        return Err(format!("{field} must not contain '|'"));
+    }
+    Ok(s.to_string())
+}
+
 /// Build the memo string committed on-chain.
-pub fn build_memo(args: &AttestArgs, slot: u64, nonce: &[u8; 32]) -> String {
-    format!(
+/// Returns Err if any field would corrupt the delimiter-separated format.
+pub fn build_memo(args: &AttestArgs, slot: u64, nonce: &[u8; 32]) -> Result<String, String> {
+    let device_id = sanitize(&args.device_id, 64, "device_id")?;
+    let sensor_type = sanitize(&args.sensor_type, 32, "sensor_type")?;
+    let unit = sanitize(&args.unit, 16, "unit")?;
+
+    let memo = format!(
         "zc-depin|{}|{}|{:.4}{}|slot:{}|nonce:{}",
-        args.device_id,
-        args.sensor_type,
+        device_id,
+        sensor_type,
         args.value,
-        args.unit,
+        unit,
         slot,
         hex_encode(nonce)
-    )
+    );
+    // Hard cap: Solana Memo program accepts up to ~566 bytes; stay well under.
+    if memo.len() > 256 {
+        return Err(format!("memo too long: {} chars (max 256)", memo.len()));
+    }
+    Ok(memo)
 }
 
 /// sha256 of the memo payload, used as the attestation hash returned to the

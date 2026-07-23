@@ -53,6 +53,7 @@ node:
 | Key | Default | Meaning |
 |---|---|---|
 | `rpc_url` | `https://api.mainnet-beta.solana.com` | Solana RPC endpoint used for `getLatestBlockhash`. Point this at your own RPC provider to avoid public-endpoint rate limits. |
+| `fee_payer` | *(none)* | Base58 pubkey to use as fee-payer in the unsigned transaction. If omitted, a zero-byte placeholder is used — you **must** replace it before signing. |
 
 Requires the `config_read` permission to read `rpc_url` from this plugin's
 own jailed config section; without it, the plugin falls back to the public
