@@ -77,9 +77,9 @@ dependencies = [
 
 [[package]]
 name = "cupel-core"
-version = "0.1.0"
+version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "12d454abbe6c7a3de737d403ada21357c498506d1caab915151498b20f87aa7d"
+checksum = "4806b5fb865cb728b9391d423635279de74e8a16abe0a3cc27f3cd1f739d65cd"
 dependencies = [
  "bs58",
  "serde",

@@ -19,7 +19,7 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 wit-bindgen = "0.46"
 serde_json = "1"
-cupel-core = "0.1"
+cupel-core = "0.1.1"
 
 # wasi:http client — only compiled for the wasm component, never on the host.
 [target.'cfg(target_family = "wasm")'.dependencies]
