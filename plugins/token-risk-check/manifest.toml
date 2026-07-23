@@ -1,0 +1,10 @@
+name = "token-risk-check"
+version = "0.1.0"
+description = "Assess an SPL token mint for risk before touching it: mint/freeze authority, holder concentration, Token-2022 extensions. Read-only; red/amber/green with reasons; fails closed."
+author = "Ertan Yeni"
+wasm_path = "token_risk_check.wasm"
+capabilities = ["tool"]
+# http_client: read-only Solana JSON-RPC over wasi:http (getAccountInfo,
+#              getTokenLargestAccounts). No writes, no keys, no signing.
+# config_read: optional operator-set rpc_url (defaults to public mainnet).
+permissions = ["http_client", "config_read"]

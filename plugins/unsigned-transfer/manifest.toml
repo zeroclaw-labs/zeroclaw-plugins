@@ -1,0 +1,11 @@
+name = "unsigned-transfer"
+version = "0.1.0"
+description = "Assemble an UNSIGNED SOL/SPL transfer transaction for a human's wallet or a Squads multisig to sign. Zero-custody: holds no key, never signs — it only prepares a transfer the owner approves."
+author = "Ertan Yeni"
+wasm_path = "unsigned_transfer.wasm"
+capabilities = ["tool"]
+# http_client: read-only RPC for a recent blockhash, mint decimals, and ATA
+#              existence (getLatestBlockhash / getAccountInfo). No writes.
+# config_read: optional operator-set rpc_url (defaults to public mainnet).
+# No signing capability, no keypair — the returned transaction is UNSIGNED.
+permissions = ["http_client", "config_read"]
