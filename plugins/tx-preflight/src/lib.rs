@@ -127,7 +127,6 @@ mod component {
                 settings.owner,
             );
 
-            let rendered = report.render();
             let signable = report.is_signable();
 
             emit(
@@ -148,38 +147,32 @@ mod component {
                 },
             );
 
+            // A FAIL verdict is a *successful* verification with a negative
+            // result. Reporting it as a tool failure makes the host discard
+            // `output` and surface only the first line, throwing away the one
+            // thing the human needs to read. The verdict word carries the
+            // decision; the tool call itself succeeded either way.
             Ok(ToolResult {
-                success: signable,
-                // The verdict goes in `output` either way: a human who cannot
-                // see the block cannot act on it.
-                output: rendered.clone(),
-                error: if signable {
-                    None
-                } else {
-                    Some(first_line(&rendered))
-                },
+                success: true,
+                output: report.render(),
+                error: None,
             })
         }
     }
 
     /// Anything we could not check is reported in the same shape as anything we
-    /// checked and rejected.
+    /// checked and rejected: a rendered block, delivered intact.
     fn refuse(reason: &str) -> ToolResult {
         emit(
             PluginAction::Reject,
             PluginOutcome::Failure,
             "could not verify",
         );
-        let rendered = cupel_core::Report::unverifiable(reason).render();
         ToolResult {
-            success: false,
-            output: rendered.clone(),
-            error: Some(first_line(&rendered)),
+            success: true,
+            output: cupel_core::Report::unverifiable(reason).render(),
+            error: None,
         }
-    }
-
-    fn first_line(text: &str) -> String {
-        text.lines().next().unwrap_or("FAIL").to_string()
     }
 
     fn emit(action: PluginAction, outcome: PluginOutcome, message: &str) {
