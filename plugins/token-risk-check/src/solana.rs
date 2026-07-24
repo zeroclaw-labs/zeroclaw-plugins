@@ -24,7 +24,6 @@ pub enum ParseError {
     InvalidPadding,
     InvalidTlv,
     Duplicate,
-    OutOfOrder,
     TooMany,
     InvalidRpc,
     RpcError,
@@ -49,7 +48,6 @@ impl fmt::Display for ParseError {
                 Self::InvalidPadding => "invalid account padding",
                 Self::InvalidTlv => "invalid token-2022 extension data",
                 Self::Duplicate => "duplicate account or extension",
-                Self::OutOfOrder => "extension records are out of order",
                 Self::TooMany => "too many records",
                 Self::InvalidRpc => "invalid RPC response",
                 Self::RpcError => "RPC returned an error",
@@ -235,7 +233,6 @@ fn parse_tlv(data: &[u8]) -> Result<MintExtensions, ParseError> {
     let mut result = MintExtensions::default();
     let mut seen = BTreeSet::new();
     let mut offset = 0;
-    let mut previous = 0_u16;
     while offset < data.len() {
         if data[offset..].iter().all(|b| *b == 0) {
             break;
@@ -252,16 +249,14 @@ fn parse_tlv(data: &[u8]) -> Result<MintExtensions, ParseError> {
         if !seen.insert(kind) {
             return Err(ParseError::Duplicate);
         }
-        if kind <= previous {
-            return Err(ParseError::OutOfOrder);
-        }
         if seen.len() > MAX_TLV_ENTRIES {
             return Err(ParseError::TooMany);
         }
-        previous = kind;
         let body = &data[offset..offset + len];
         match kind {
             1 => result.transfer_fee = Some(parse_transfer_fee(body)?),
+            3 => validate_fixed_extension(body, 32, None)?,
+            4 => validate_fixed_extension(body, 65, Some(32))?,
             12 => {
                 if len != 32 {
                     return Err(ParseError::InvalidTlv);
@@ -277,11 +272,69 @@ fn parse_tlv(data: &[u8]) -> Result<MintExtensions, ParseError> {
                 result.transfer_hook_authority = optional_nonzero(&body[..32])?;
                 result.transfer_hook_program = optional_nonzero(&body[32..])?;
             }
+            16 => validate_fixed_extension(body, 129, Some(64))?,
+            18 => validate_fixed_extension(body, 64, None)?,
+            19 => validate_token_metadata(body)?,
             _ => result.unknown_types.push(kind),
         }
         offset += len;
     }
     Ok(result)
+}
+
+fn validate_fixed_extension(
+    data: &[u8],
+    expected_len: usize,
+    bool_offset: Option<usize>,
+) -> Result<(), ParseError> {
+    if data.len() != expected_len
+        || bool_offset.is_some_and(|offset| !matches!(data[offset], 0 | 1))
+    {
+        return Err(ParseError::InvalidTlv);
+    }
+    Ok(())
+}
+
+fn read_borsh_string<'a>(data: &'a [u8], offset: &mut usize) -> Result<&'a str, ParseError> {
+    let length_end = offset.checked_add(4).ok_or(ParseError::InvalidTlv)?;
+    if length_end > data.len() {
+        return Err(ParseError::InvalidTlv);
+    }
+    let length = read_u32(&data[*offset..length_end])? as usize;
+    let end = length_end
+        .checked_add(length)
+        .filter(|end| *end <= data.len())
+        .ok_or(ParseError::InvalidTlv)?;
+    let value = std::str::from_utf8(&data[length_end..end]).map_err(|_| ParseError::InvalidTlv)?;
+    *offset = end;
+    Ok(value)
+}
+
+fn validate_token_metadata(data: &[u8]) -> Result<(), ParseError> {
+    if data.len() < 64 {
+        return Err(ParseError::InvalidTlv);
+    }
+    let mut offset = 64;
+    for _ in 0..3 {
+        read_borsh_string(data, &mut offset)?;
+    }
+    let count_end = offset.checked_add(4).ok_or(ParseError::InvalidTlv)?;
+    if count_end > data.len() {
+        return Err(ParseError::InvalidTlv);
+    }
+    let count = read_u32(&data[offset..count_end])? as usize;
+    if count > MAX_TLV_ENTRIES {
+        return Err(ParseError::TooMany);
+    }
+    offset = count_end;
+    for _ in 0..count {
+        read_borsh_string(data, &mut offset)?;
+        read_borsh_string(data, &mut offset)?;
+    }
+    if offset != data.len() {
+        return Err(ParseError::InvalidTlv);
+    }
+    Ok(())
 }
 
 fn parse_transfer_fee(data: &[u8]) -> Result<TransferFeeConfig, ParseError> {

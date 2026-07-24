@@ -18,6 +18,7 @@ use token_risk_check::solana::{
 };
 
 const SUPPLY: u64 = 1_000_000;
+const PYUSD_MINT_ACCOUNT_BASE64: &str = include_str!("fixtures/pyusd-mint-account.base64");
 
 fn key(byte: u8) -> [u8; 32] {
     [byte; 32]
@@ -57,6 +58,12 @@ fn token_2022_mint(entries: &[(u16, Vec<u8>)]) -> Vec<u8> {
         bytes.extend_from_slice(body);
     }
     bytes
+}
+
+fn pyusd_mint_account() -> Vec<u8> {
+    base64::engine::general_purpose::STANDARD
+        .decode(PYUSD_MINT_ACCOUNT_BASE64.trim())
+        .unwrap()
 }
 
 fn transfer_fee_body(
@@ -459,11 +466,89 @@ fn rejects_duplicate_tlv_kind() {
 }
 
 #[test]
-fn rejects_out_of_order_tlv_kinds() {
+fn accepts_non_monotonic_distinct_tlv_kinds() {
     let bytes = token_2022_mint(&[(14, vec![0; 64]), (12, key(3).to_vec())]);
+    let mint = parse_mint_account(TOKEN_2022_PROGRAM_ID, &bytes).unwrap();
+    assert!(mint.extensions.transfer_hook_present);
+    assert_eq!(mint.extensions.permanent_delegate, Some(key(3)));
+}
+
+#[test]
+fn parses_finalized_pyusd_token_2022_mint_snapshot() {
+    let bytes = pyusd_mint_account();
+    assert_eq!(bytes.len(), 866);
+    let mint = parse_mint_account(TOKEN_2022_PROGRAM_ID, &bytes).unwrap();
+    assert_eq!(mint.program, TOKEN_2022_PROGRAM_ID);
+    assert!(mint.extensions.transfer_fee.is_some());
+    assert!(mint.extensions.transfer_hook_present);
+    assert!(mint.extensions.permanent_delegate_present);
+    assert!(mint.extensions.unknown_types.is_empty());
+}
+
+#[test]
+fn finalized_pyusd_snapshot_produces_complete_non_unknown_core_assessment() {
+    let (assessment, _) = scripted_assessment(
+        pyusd_mint_account(),
+        (10, 10, 10),
+        &[(100_000, 1)],
+        positive_liquidity(),
+        Some(900),
+    );
+    assert!(assessment.complete);
+    assert_eq!(assessment.token_program, "token-2022");
+    assert!(assessment.supply.is_some());
+    assert!(assessment.decimals.is_some());
+    assert_ne!(assessment.mint_authority.status, "unknown");
+    assert_ne!(assessment.freeze_authority.status, "unknown");
+    assert_ne!(assessment.concentration.status, "unknown");
+    assert_ne!(assessment.liquidity.status, "unknown");
+    assert!(assessment.extensions.unknown_extension_types.is_empty());
+}
+
+#[test]
+fn rejects_malformed_known_pyusd_extension_layouts() {
+    for (kind, body) in [
+        (3, vec![0; 31]),
+        (4, vec![0; 64]),
+        (16, vec![0; 128]),
+        (18, vec![0; 63]),
+    ] {
+        assert_eq!(
+            parse_mint_account(TOKEN_2022_PROGRAM_ID, &token_2022_mint(&[(kind, body)])),
+            Err(ParseError::InvalidTlv),
+            "kind {kind}"
+        );
+    }
+
+    let mut invalid_confidential_mint = vec![0; 65];
+    invalid_confidential_mint[32] = 2;
     assert_eq!(
-        parse_mint_account(TOKEN_2022_PROGRAM_ID, &bytes),
-        Err(ParseError::OutOfOrder)
+        parse_mint_account(
+            TOKEN_2022_PROGRAM_ID,
+            &token_2022_mint(&[(4, invalid_confidential_mint)]),
+        ),
+        Err(ParseError::InvalidTlv)
+    );
+
+    let mut invalid_confidential_fee = vec![0; 129];
+    invalid_confidential_fee[64] = 2;
+    assert_eq!(
+        parse_mint_account(
+            TOKEN_2022_PROGRAM_ID,
+            &token_2022_mint(&[(16, invalid_confidential_fee)]),
+        ),
+        Err(ParseError::InvalidTlv)
+    );
+}
+
+#[test]
+fn rejects_truncated_pyusd_token_metadata_extension() {
+    let mut body = vec![0; 64];
+    body.extend_from_slice(&5_u32.to_le_bytes());
+    body.push(b'x');
+    assert_eq!(
+        parse_mint_account(TOKEN_2022_PROGRAM_ID, &token_2022_mint(&[(19, body)])),
+        Err(ParseError::InvalidTlv)
     );
 }
 

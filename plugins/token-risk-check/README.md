@@ -71,7 +71,7 @@ price impact. Those LP-control properties remain explicitly unknown.
 Token-2022 output retains transfer-fee authorities, withheld amount, observed
 epoch, selected basis points and maximum fee, and the newer schedule. It also
 retains transfer-hook authority/program and the permanent-delegate address.
-Unknown, duplicate, out-of-order, truncated, or oversized TLV data cannot yield
+Unknown, duplicate, structurally invalid, truncated, or oversized TLV data cannot yield
 green.
 
 Output is compact JSON bounded to **8 KiB** and **12 reasons**. Provider error
