@@ -99,14 +99,24 @@ change blocks; and `evaluate` is total. That last one matters more than it
 looks — a panic inside an authorization path is an unhandled decision, and a
 caller that reads "no verdict" as "no objection" fails open.
 
-**Status, stated plainly:** the harnesses are written and compile, and CBMC
-begins symbolic execution on them. They have not yet been run to a verdict on
-this machine — the policy engine leans on `String` and `BTreeSet`, and
-exhaustively exploring the heap-allocation paths underneath those is expensive.
-Until a run completes, treat these as proof *obligations*, not proofs: the
-verified claims in this repository are the ones `just prove-safety` covers.
-Progress and any counterexamples will be recorded in
-[`EVIDENCE-merchant.md`](EVIDENCE-merchant.md).
+**Status, stated plainly: no harness has reached a verdict.** They compile and
+CBMC starts, but three rounds of tuning did not get one to terminate, so these
+are proof *obligations*, not proofs. The verified claims in this repository are
+the ones `just prove-safety` covers.
+
+The bottleneck is worth naming because it moved each round and ended somewhere
+specific: not the decision logic, but the heap collections it reads from.
+`evaluate` resolves an allowlist by looking a `String` up in a
+`BTreeSet<String>`, and CBMC has to model the tree's node linking to do it.
+Removing the JSON parse cut the log from 1.2 MB to 107 KB of exploration and
+moved the stall from serde into `BTreeSet`; shrinking the collections did not
+move it further.
+
+The fix is structural rather than more compute — split `evaluate` into
+fact-resolution over the collections and a pure decision over resolved
+booleans, then prove the decision. That is a real refactor of audited code and
+was not done late to chase a result. Full write-up in
+[`proofs.rs`](libs/safe-hands-core/src/policy/proofs.rs).
 
 The harnesses compile only under `cargo kani`, so ordinary builds and
 `cargo test` are untouched.

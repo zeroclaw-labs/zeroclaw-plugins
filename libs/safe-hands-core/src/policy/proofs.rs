@@ -11,6 +11,37 @@
 //! cargo kani --manifest-path libs/safe-hands-core/Cargo.toml
 //! ```
 //!
+//! # Status: obligations, not proofs
+//!
+//! **No harness here has reached a verdict.** They compile, and CBMC begins
+//! symbolic execution, but three rounds of tuning did not get one to
+//! terminate. Treat every claim below as a proof *obligation*; the verified
+//! claims in this repository are the ones `just prove-safety` covers.
+//!
+//! What was tried, and where the cost actually sits — the bottleneck moved
+//! each time, which is what makes this worth recording rather than deleting:
+//!
+//! | Round | Change | Where CBMC was stuck after ~30 min |
+//! |---|---|---|
+//! | 1 | `Policy::from_json` in the harness | `raw_vec` / `alloc` paths under serde, 1.2 MB of log |
+//! | 2 | Policy constructed directly | `BTreeSet<String>` node internals, 107 KB |
+//! | 3 | Policy collections minimised | `BTreeSet<String>` node internals, 188 KB |
+//!
+//! The conclusion is specific: the remaining cost is not the decision logic,
+//! it is the *heap collections the decision logic reads from*. `evaluate`
+//! resolves an allowlist by looking a `String` up in a `BTreeSet<String>`, and
+//! CBMC must model the tree's node linking to do that.
+//!
+//! The fix, if this is picked up again, is structural rather than more
+//! waiting: split `evaluate` into a fact-resolution step that touches the
+//! collections and a pure decision step over already-resolved booleans, then
+//! prove the decision step. That is a real refactor of audited code, so it was
+//! not done late and under time pressure to chase a proof.
+//!
+//! Until then the individual counterpart carries the claim, and it *is*
+//! verified: `just verify-receipt` re-derives any recorded decision from its
+//! inputs and rejects forged ones.
+//!
 //! **What is symbolic:** every boolean risk flag, the nonce-account class, and
 //! the amount, chosen across the cap boundary.
 //!
@@ -52,20 +83,15 @@ fn proof_policy() -> Policy {
         },
     );
 
+    // Only the group the harness's facts can reach. Every additional entry is
+    // BTreeMap/BTreeSet construction the solver must model for no extra
+    // coverage: these fact sets carry no decoded instructions, so the
+    // instruction allowlist is never walked.
     let mut allowed_instructions = BTreeMap::new();
     allowed_instructions.insert(
         "spl_token".to_string(),
         BTreeSet::from(["transfer_checked".to_string()]),
     );
-    allowed_instructions.insert(
-        "associated_token".to_string(),
-        BTreeSet::from(["create_idempotent".to_string()]),
-    );
-    allowed_instructions.insert(
-        "system".to_string(),
-        BTreeSet::from(["advance_nonce".to_string()]),
-    );
-    allowed_instructions.insert("memo".to_string(), BTreeSet::from(["memo".to_string()]));
 
     Policy {
         version: "1.0.0".to_string(),
