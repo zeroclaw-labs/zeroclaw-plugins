@@ -23,7 +23,7 @@ pub fn encode(input: &[u8]) -> String {
         }
     }
     let mut out = String::with_capacity(zeros + digits.len());
-    out.extend(std::iter::repeat('1').take(zeros));
+    out.extend(std::iter::repeat_n('1', zeros));
     for &d in digits.iter().rev() {
         out.push(ALPHABET[d as usize] as char);
     }

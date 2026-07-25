@@ -130,7 +130,10 @@ fn validate_amount(s: &str, decimals: u8, max_amount: f64) -> Result<String, Pay
         )));
     }
     let value: f64 = s.parse().map_err(|_| PayError::BadAmount("unparseable".into()))?;
-    if !(value > 0.0) {
+    // Reject NaN explicitly as well as non-positive: a money amount must be a
+    // finite positive number. (Digits-only parsing upstream already excludes
+    // NaN/inf; this stays defensive.)
+    if value.is_nan() || value <= 0.0 {
         return Err(PayError::BadAmount("must be greater than zero".into()));
     }
     if value > max_amount {
