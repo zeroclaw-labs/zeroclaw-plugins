@@ -1,4 +1,4 @@
-mod core;
+pub mod core;
 
 #[cfg(target_family = "wasm")]
 mod wasm {
