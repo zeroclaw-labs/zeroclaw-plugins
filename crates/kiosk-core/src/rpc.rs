@@ -47,6 +47,15 @@ pub trait RpcTransport {
     fn send(&self, request_body: &str) -> Result<String, RpcError>;
 }
 
+/// A reference to a transport is itself a transport, so a single transport can
+/// be reused across several calls (e.g. a chain recovery AND a getAccountInfo
+/// in one plugin invocation) without being consumed by the first `RpcClient`.
+impl<T: RpcTransport + ?Sized> RpcTransport for &T {
+    fn send(&self, request_body: &str) -> Result<String, RpcError> {
+        (**self).send(request_body)
+    }
+}
+
 /// A thin JSON-RPC client that wraps any [`RpcTransport`]. It builds the
 /// standard `{jsonrpc, id, method, params}` envelope, calls the transport, and
 /// unwraps `result` vs `error` — so callers write `client.call("getBalance",
