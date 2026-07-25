@@ -131,10 +131,14 @@ fn tx_without_reference(owner: &str, mint: &str, amount: &str) -> String {
 
 fn cfg_with_mint(mint: &str) -> WatchConfig {
     WatchConfig::from_section(
-        &[("rpc_url", RPC), ("merchant_address", MERCHANT), ("usdc_mint", mint)]
-            .iter()
-            .map(|(k, v)| (k.to_string(), v.to_string()))
-            .collect(),
+        &[
+            ("rpc_url", RPC),
+            ("merchant_address", MERCHANT),
+            ("usdc_mint", mint),
+        ]
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect(),
     )
     .unwrap()
 }
@@ -144,15 +148,22 @@ fn cfg_with_mint(mint: &str) -> WatchConfig {
 #[test]
 fn misconfig_errors_are_human_and_leak_no_rpc_url() {
     let sec = |pairs: &[(&str, &str)]| -> std::collections::HashMap<String, String> {
-        pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
     };
     // Missing rpc_url → names the missing key.
     let e = WatchConfig::from_section(&sec(&[("merchant_address", MERCHANT)])).unwrap_err();
     assert!(e.to_string().contains("rpc_url"), "unhelpful: {e}");
     // Invalid merchant → names the field and says what's wrong.
-    let e2 = WatchConfig::from_section(&sec(&[("rpc_url", RPC), ("merchant_address", "xx")])).unwrap_err();
+    let e2 = WatchConfig::from_section(&sec(&[("rpc_url", RPC), ("merchant_address", "xx")]))
+        .unwrap_err();
     let s = e2.to_string();
-    assert!(s.contains("merchant_address") && s.contains("pubkey"), "unhelpful: {s}");
+    assert!(
+        s.contains("merchant_address") && s.contains("pubkey"),
+        "unhelpful: {s}"
+    );
     // The configured RPC endpoint never appears in an error message.
     assert!(!s.contains(RPC), "rpc_url leaked into error: {s}");
 }
@@ -161,11 +172,18 @@ fn misconfig_errors_are_human_and_leak_no_rpc_url() {
 
 #[test]
 fn paid_path_makes_exactly_one_sig_and_one_tx_call() {
-    let mock = Mock::full(&one_sig(5), &tx(MERCHANT, DEFAULT_USDC_MINT, "1500000", "null"));
+    let mock = Mock::full(
+        &one_sig(5),
+        &tx(MERCHANT, DEFAULT_USDC_MINT, "1500000", "null"),
+    );
     // Borrow (via impl RpcTransport for &T) so we can read the counters after.
     let v = verify_payment(&pay_args(), &cfg(), &mock, NOW).unwrap();
     assert!(matches!(v, Verdict::Paid { .. }));
-    assert_eq!(mock.sig_calls.get(), 1, "exactly one getSignaturesForAddress");
+    assert_eq!(
+        mock.sig_calls.get(),
+        1,
+        "exactly one getSignaturesForAddress"
+    );
     assert_eq!(mock.tx_calls.get(), 1, "at most one getTransaction");
 }
 
@@ -175,7 +193,11 @@ fn pending_path_makes_one_sig_and_zero_tx_calls() {
     let v = verify_payment(&pay_args(), &cfg(), &mock, NOW).unwrap();
     assert!(matches!(v, Verdict::Pending));
     assert_eq!(mock.sig_calls.get(), 1);
-    assert_eq!(mock.tx_calls.get(), 0, "no getTransaction when nothing to verify");
+    assert_eq!(
+        mock.tx_calls.get(),
+        0,
+        "no getTransaction when nothing to verify"
+    );
 }
 
 // ── SECURE: replay / double-spend — a tx for a different charge cannot clear this one ──
@@ -184,7 +206,10 @@ fn pending_path_makes_one_sig_and_zero_tx_calls() {
 fn payment_not_referencing_this_charge_is_mismatch() {
     // The reference is single-use: a landed payment whose tx does not reference
     // THIS charge must never verify it (prevents replaying one payment across sales).
-    let mock = Mock::full(&one_sig(5), &tx_without_reference(MERCHANT, DEFAULT_USDC_MINT, "1500000"));
+    let mock = Mock::full(
+        &one_sig(5),
+        &tx_without_reference(MERCHANT, DEFAULT_USDC_MINT, "1500000"),
+    );
     let v = verify_payment(&pay_args(), &cfg(), mock, NOW).unwrap();
     assert!(matches!(v, Verdict::Mismatch { .. }), "got {v:?}");
 }

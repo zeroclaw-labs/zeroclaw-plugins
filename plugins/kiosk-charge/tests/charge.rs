@@ -13,7 +13,10 @@ const MERCHANT: &str = "4Nd1mBQtrMJVYVfKf2PJy9NZUZdTAsp7D4xWLs4gDB4T"; // arbitr
 const REF32: [u8; 32] = [7u8; 32];
 
 fn section(pairs: &[(&str, &str)]) -> HashMap<String, String> {
-    pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
+    pairs
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect()
 }
 
 fn base_cfg() -> ChargeConfig {
@@ -29,13 +32,18 @@ fn base_cfg() -> ChargeConfig {
 #[test]
 fn item_charge_builds_solana_pay_url() {
     let out = execute_charge(
-        &ChargeArgs { item_id: Some("cold_drink".into()), ..Default::default() },
+        &ChargeArgs {
+            item_id: Some("cold_drink".into()),
+            ..Default::default()
+        },
         &base_cfg(),
         REF32,
         0,
     )
     .unwrap();
-    assert!(out.url.starts_with(&format!("solana:{MERCHANT}?amount=1.5")));
+    assert!(out
+        .url
+        .starts_with(&format!("solana:{MERCHANT}?amount=1.5")));
     assert!(out.url.contains(&format!("spl-token={DEFAULT_USDC_MINT}")));
     assert!(out.url.contains(&format!("reference={}", out.reference)));
     assert!(out.url.contains("label=Kiosk%2001"));
@@ -54,7 +62,10 @@ fn generalizes_to_any_spl_mint_not_just_usdc() {
     ]))
     .unwrap();
     let out = execute_charge(
-        &ChargeArgs { item_id: Some("cold_drink".into()), ..Default::default() },
+        &ChargeArgs {
+            item_id: Some("cold_drink".into()),
+            ..Default::default()
+        },
         &cfg,
         REF32,
         0,
@@ -75,29 +86,45 @@ fn optional_fiat_display_is_cosmetic_only() {
     ]))
     .unwrap();
     let out = execute_charge(
-        &ChargeArgs { item_id: Some("cold_drink".into()), ..Default::default() },
+        &ChargeArgs {
+            item_id: Some("cold_drink".into()),
+            ..Default::default()
+        },
         &cfg,
         REF32,
         0,
     )
     .unwrap();
-    assert!(out.summary.contains("≈ BRL 7.50"), "summary: {}", out.summary);
+    assert!(
+        out.summary.contains("≈ BRL 7.50"),
+        "summary: {}",
+        out.summary
+    );
     assert!(out.url.contains("amount=1.5"), "on-chain amount stays USDC");
     // Off by default: base_cfg has no display currency.
     let plain = execute_charge(
-        &ChargeArgs { item_id: Some("cold_drink".into()), ..Default::default() },
+        &ChargeArgs {
+            item_id: Some("cold_drink".into()),
+            ..Default::default()
+        },
         &base_cfg(),
         REF32,
         0,
     )
     .unwrap();
-    assert!(!plain.summary.contains("≈"), "no fiat hint unless configured");
+    assert!(
+        !plain.summary.contains("≈"),
+        "no fiat hint unless configured"
+    );
 }
 
 #[test]
 fn free_amount_within_cap_ok() {
     let out = execute_charge(
-        &ChargeArgs { amount_usdc: Some("2.25".into()), ..Default::default() },
+        &ChargeArgs {
+            amount_usdc: Some("2.25".into()),
+            ..Default::default()
+        },
         &base_cfg(),
         REF32,
         0,
@@ -120,7 +147,9 @@ fn output_stays_within_token_budget() {
         0,
     )
     .unwrap();
-    assert!(kiosk_core::shape::approx_tokens(&out.summary) <= kiosk_core::shape::DEFAULT_BUDGET_TOKENS);
+    assert!(
+        kiosk_core::shape::approx_tokens(&out.summary) <= kiosk_core::shape::DEFAULT_BUDGET_TOKENS
+    );
 }
 
 // ── Fail-closed drill ────────────────────────────────────────────────────────
@@ -128,7 +157,10 @@ fn output_stays_within_token_budget() {
 #[test]
 fn injection_unknown_item_rejected() {
     let err = execute_charge(
-        &ChargeArgs { item_id: Some("free_everything".into()), ..Default::default() },
+        &ChargeArgs {
+            item_id: Some("free_everything".into()),
+            ..Default::default()
+        },
         &base_cfg(),
         REF32,
         0,
@@ -141,13 +173,19 @@ fn injection_unknown_item_rejected() {
 fn injection_amount_over_cap_rejected() {
     for bad in ["11", "9999", "10.000001"] {
         let err = execute_charge(
-            &ChargeArgs { amount_usdc: Some(bad.into()), ..Default::default() },
+            &ChargeArgs {
+                amount_usdc: Some(bad.into()),
+                ..Default::default()
+            },
             &base_cfg(),
             REF32,
             0,
         )
         .unwrap_err();
-        assert!(matches!(err, ChargeError::Args(_)), "{bad} must be rejected");
+        assert!(
+            matches!(err, ChargeError::Args(_)),
+            "{bad} must be rejected"
+        );
     }
 }
 
@@ -157,7 +195,10 @@ fn injection_smuggled_recipient_key_is_a_serde_error() {
     // `recipient` never reaches charge logic.
     let raw = r#"{"item_id":"cold_drink","recipient":"EvilPubkey111111111111111111111111"}"#;
     let parsed: Result<ChargeArgs, _> = serde_json::from_str(raw);
-    assert!(parsed.is_err(), "unknown `recipient` field must fail deserialization");
+    assert!(
+        parsed.is_err(),
+        "unknown `recipient` field must fail deserialization"
+    );
 }
 
 #[test]
@@ -185,8 +226,8 @@ fn missing_merchant_config_fails_closed() {
 
 #[test]
 fn invalid_merchant_pubkey_fails_closed() {
-    let err = ChargeConfig::from_section(&section(&[("merchant_address", "not-a-key")]))
-        .unwrap_err();
+    let err =
+        ChargeConfig::from_section(&section(&[("merchant_address", "not-a-key")])).unwrap_err();
     assert!(matches!(err, ChargeError::Config(_)));
 }
 

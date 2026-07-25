@@ -24,7 +24,12 @@ struct Mock {
 }
 impl Mock {
     fn build(sigs: Result<String, RpcError>, account: Result<String, RpcError>) -> Self {
-        Self { sigs, account, sig_calls: std::cell::Cell::new(0), account_calls: std::cell::Cell::new(0) }
+        Self {
+            sigs,
+            account,
+            sig_calls: std::cell::Cell::new(0),
+            account_calls: std::cell::Cell::new(0),
+        }
     }
 }
 impl RpcTransport for Mock {
@@ -277,7 +282,10 @@ fn rpc_failure_is_never_a_successful_attestation() {
 #[test]
 fn misconfig_errors_are_human_and_leak_no_rpc_url() {
     let sec = |pairs: &[(&str, &str)]| -> HashMap<String, String> {
-        pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
     };
     // Missing rpc_url → names the missing key.
     let e = AttestConfig::from_section(&sec(&[("device_id", "k")])).unwrap_err();
@@ -291,7 +299,10 @@ fn misconfig_errors_are_human_and_leak_no_rpc_url() {
     ]))
     .unwrap_err();
     let s = e2.to_string();
-    assert!(s.contains("nonce_account") && s.contains("pubkey"), "unhelpful: {s}");
+    assert!(
+        s.contains("nonce_account") && s.contains("pubkey"),
+        "unhelpful: {s}"
+    );
     assert!(!s.contains(RPC), "rpc_url leaked into error: {s}");
 }
 
@@ -303,6 +314,14 @@ fn recovers_chain_in_exactly_one_signatures_call() {
     // Borrow via impl RpcTransport for &T so counters are readable afterward.
     let out = execute_attest(&reading("temp_c", 4.2), &cfg(), &mock, NOW).unwrap();
     assert!(out.seq == 0);
-    assert_eq!(mock.sig_calls.get(), 1, "chain recovery must be ONE getSignaturesForAddress");
-    assert_eq!(mock.account_calls.get(), 1, "one getAccountInfo for the durable nonce");
+    assert_eq!(
+        mock.sig_calls.get(),
+        1,
+        "chain recovery must be ONE getSignaturesForAddress"
+    );
+    assert_eq!(
+        mock.account_calls.get(),
+        1,
+        "one getAccountInfo for the durable nonce"
+    );
 }
