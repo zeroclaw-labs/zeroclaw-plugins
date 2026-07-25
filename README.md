@@ -45,6 +45,72 @@ The deliberate limit: an invoice created but never paid leaves no on-chain
 trace, so open and expired invoices cannot be listed. Check a specific order
 with `payment-verify`.
 
+## Don't trust the refusal — recompute it
+
+Every safety claim in this repository reduces to one sentence: *the agent
+cannot move money the operator did not allow.* That is easy to assert and hard
+to believe, so there are two independent ways to check it, borrowed from
+outside crypto.
+
+### Individually: re-derive any decision from its receipt
+
+`solana-tx-authorize` returns a `decision_id` that commits to the exact
+transaction bytes, the policy, the verdict, and the reason codes. That
+commitment is now checkable by anyone:
+
+```sh
+just verify-receipt
+```
+
+It decodes the transaction, canonicalises the policy, re-runs the engine, and
+re-derives the id from scratch. A reviewer does not have to trust our ALLOW,
+and does not have to trust us either.
+
+It also refuses forgeries. Take a real ALLOW receipt, swap the intent's
+recipient for an attacker address, leave the verdict claiming ALLOW:
+
+```text
+FAIL  re-derived verdict matches the receipt
+      claimed ALLOW, re-derived DENY
+      ["SH-INTENT-RECIPIENT-031"]
+```
+
+One honest boundary, stated in the tool's own output: the verdict depends on
+four inputs — bytes, policy, declared intent, and whether simulation
+succeeded. The first three are recomputed here. Simulation is external RPC
+evidence, so the receipt *attests* it rather than reproducing it. Building the
+verifier is what surfaced that the `decision_id` shape had implied otherwise.
+
+### Universally: machine-check the engine itself
+
+Tests cover the cases we thought of. [`libs/safe-hands-core/src/policy/proofs.rs`](libs/safe-hands-core/src/policy/proofs.rs)
+covers the ones nobody thought of, using the [Kani](https://github.com/model-checking/kani)
+model checker: it explores the decision space symbolically and returns a
+concrete counterexample if `ALLOW` is reachable when policy forbids it.
+
+```sh
+cargo kani --manifest-path libs/safe-hands-core/Cargo.toml   # Linux/macOS
+```
+
+The invariants each harness asserts: an unlisted recipient is never allowed; no
+amount over the cap is allowed; a signed input is never allowed; durable nonce
+needs both operator opt-ins; any Token-2022 extension blocks; an authority
+change blocks; and `evaluate` is total. That last one matters more than it
+looks — a panic inside an authorization path is an unhandled decision, and a
+caller that reads "no verdict" as "no objection" fails open.
+
+**Status, stated plainly:** the harnesses are written and compile, and CBMC
+begins symbolic execution on them. They have not yet been run to a verdict on
+this machine — the policy engine leans on `String` and `BTreeSet`, and
+exhaustively exploring the heap-allocation paths underneath those is expensive.
+Until a run completes, treat these as proof *obligations*, not proofs: the
+verified claims in this repository are the ones `just prove-safety` covers.
+Progress and any counterexamples will be recorded in
+[`EVIDENCE-merchant.md`](EVIDENCE-merchant.md).
+
+The harnesses compile only under `cargo kani`, so ordinary builds and
+`cargo test` are untouched.
+
 ## Surviving the approval queue
 
 A recent blockhash dies in roughly ninety seconds. A human approving a refund
