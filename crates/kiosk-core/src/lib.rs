@@ -13,5 +13,6 @@
 
 pub mod b58;
 pub mod pay;
+pub mod rpc;
 pub mod shape;
 pub mod shortvec;
