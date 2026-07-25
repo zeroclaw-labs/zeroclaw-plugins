@@ -272,6 +272,29 @@ fn rpc_failure_is_never_a_successful_attestation() {
     assert!(r.is_err());
 }
 
+// ── USER-FRIENDLY + SECURE: human errors that leak no secrets ────────────────
+
+#[test]
+fn misconfig_errors_are_human_and_leak_no_rpc_url() {
+    let sec = |pairs: &[(&str, &str)]| -> HashMap<String, String> {
+        pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
+    };
+    // Missing rpc_url → names the missing key.
+    let e = AttestConfig::from_section(&sec(&[("device_id", "k")])).unwrap_err();
+    assert!(e.to_string().contains("rpc_url"), "unhelpful: {e}");
+    // Bad nonce pubkey → names the field and 'pubkey'; no rpc leak.
+    let e2 = AttestConfig::from_section(&sec(&[
+        ("rpc_url", RPC),
+        ("device_id", "k"),
+        ("nonce_account", "xx"),
+        ("nonce_authority", NONCE_AUTHORITY),
+    ]))
+    .unwrap_err();
+    let s = e2.to_string();
+    assert!(s.contains("nonce_account") && s.contains("pubkey"), "unhelpful: {s}");
+    assert!(!s.contains(RPC), "rpc_url leaked into error: {s}");
+}
+
 // ── FAST: seq/prev recovery is exactly ONE getSignaturesForAddress ───────────
 
 #[test]

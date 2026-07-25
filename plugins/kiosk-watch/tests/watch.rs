@@ -139,6 +139,24 @@ fn cfg_with_mint(mint: &str) -> WatchConfig {
     .unwrap()
 }
 
+// ── USER-FRIENDLY + SECURE: human errors that leak no secrets ────────────────
+
+#[test]
+fn misconfig_errors_are_human_and_leak_no_rpc_url() {
+    let sec = |pairs: &[(&str, &str)]| -> std::collections::HashMap<String, String> {
+        pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
+    };
+    // Missing rpc_url → names the missing key.
+    let e = WatchConfig::from_section(&sec(&[("merchant_address", MERCHANT)])).unwrap_err();
+    assert!(e.to_string().contains("rpc_url"), "unhelpful: {e}");
+    // Invalid merchant → names the field and says what's wrong.
+    let e2 = WatchConfig::from_section(&sec(&[("rpc_url", RPC), ("merchant_address", "xx")])).unwrap_err();
+    let s = e2.to_string();
+    assert!(s.contains("merchant_address") && s.contains("pubkey"), "unhelpful: {s}");
+    // The configured RPC endpoint never appears in an error message.
+    assert!(!s.contains(RPC), "rpc_url leaked into error: {s}");
+}
+
 // ── FAST: bounded RPC — one getSignaturesForAddress + at most one getTransaction ──
 
 #[test]
