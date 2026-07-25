@@ -24,6 +24,13 @@ pub struct ChargeConfig {
     pub price_list: HashMap<String, String>,
     pub max_amount: f64,
     pub label: Option<String>,
+    /// Optional cosmetic fiat display (e.g. "BRL") shown alongside the USDC
+    /// amount. The on-chain amount is ALWAYS the USDC figure; this is a static,
+    /// operator-set convenience only (no oracle, no price feed).
+    pub display_currency: Option<String>,
+    /// Static units-of-`display_currency` per 1 USDC. Only used when
+    /// `display_currency` is also set.
+    pub display_rate: Option<f64>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -82,12 +89,24 @@ impl ChargeConfig {
                 .ok_or_else(|| ChargeError::Config("max_amount_usdc must be > 0".into()))?,
             None => DEFAULT_MAX_AMOUNT,
         };
+        let display_currency = section.get("display_currency").filter(|v| !v.is_empty()).cloned();
+        let display_rate = match section.get("display_rate").filter(|v| !v.is_empty()) {
+            Some(v) => Some(
+                v.parse::<f64>()
+                    .ok()
+                    .filter(|r| r.is_finite() && *r > 0.0)
+                    .ok_or_else(|| ChargeError::Config("display_rate must be a positive number".into()))?,
+            ),
+            None => None,
+        };
         Ok(Self {
             merchant_address,
             usdc_mint,
             price_list,
             max_amount,
             label: section.get("label").filter(|v| !v.is_empty()).cloned(),
+            display_currency,
+            display_rate,
         })
     }
 }
@@ -161,9 +180,19 @@ pub fn execute_charge(
 
     let url = request.url();
     let what = item.clone().unwrap_or_else(|| "custom amount".to_string());
+    // Optional cosmetic fiat hint (e.g. "≈ BRL 7.50"). Never changes the
+    // on-chain amount — that is always the USDC figure above.
+    let fiat = match (&cfg.display_currency, cfg.display_rate) {
+        (Some(cur), Some(rate)) => amount
+            .parse::<f64>()
+            .ok()
+            .map(|a| format!(" (≈ {cur} {:.2})", a * rate))
+            .unwrap_or_default(),
+        _ => String::new(),
+    };
     let summary = shape::clamp(
         &format!(
-            "Charge created: {amount} USDC for `{what}`. Show this Solana Pay link/QR to the customer. Reference for payment-watch: {reference}. URL: {url}"
+            "Charge created: {amount} USDC{fiat} for `{what}`. Show this Solana Pay link/QR to the customer. Reference for payment-watch: {reference}. URL: {url}"
         ),
         shape::DEFAULT_BUDGET_TOKENS,
     );

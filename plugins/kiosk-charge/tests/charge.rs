@@ -64,6 +64,37 @@ fn generalizes_to_any_spl_mint_not_just_usdc() {
 }
 
 #[test]
+fn optional_fiat_display_is_cosmetic_only() {
+    // display_currency + static rate → a "≈ BRL x.xx" hint in the summary.
+    // The on-chain amount stays the USDC figure.
+    let cfg = ChargeConfig::from_section(&section(&[
+        ("merchant_address", MERCHANT),
+        ("price_list", "cold_drink:1.5"),
+        ("display_currency", "BRL"),
+        ("display_rate", "5.00"),
+    ]))
+    .unwrap();
+    let out = execute_charge(
+        &ChargeArgs { item_id: Some("cold_drink".into()), ..Default::default() },
+        &cfg,
+        REF32,
+        0,
+    )
+    .unwrap();
+    assert!(out.summary.contains("≈ BRL 7.50"), "summary: {}", out.summary);
+    assert!(out.url.contains("amount=1.5"), "on-chain amount stays USDC");
+    // Off by default: base_cfg has no display currency.
+    let plain = execute_charge(
+        &ChargeArgs { item_id: Some("cold_drink".into()), ..Default::default() },
+        &base_cfg(),
+        REF32,
+        0,
+    )
+    .unwrap();
+    assert!(!plain.summary.contains("≈"), "no fiat hint unless configured");
+}
+
+#[test]
 fn free_amount_within_cap_ok() {
     let out = execute_charge(
         &ChargeArgs { amount_usdc: Some("2.25".into()), ..Default::default() },
