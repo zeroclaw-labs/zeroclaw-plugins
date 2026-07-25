@@ -13,6 +13,7 @@
 
 pub mod b58;
 pub mod b64;
+pub mod chain;
 pub mod memo;
 pub mod msg;
 pub mod nonce;
