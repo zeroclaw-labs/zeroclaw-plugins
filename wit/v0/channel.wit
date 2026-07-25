@@ -86,6 +86,17 @@ interface channel {
         deny-with-edit(string),
     }
 
+    /// A webhook rejection with an explicit public HTTP classification. The
+    /// string is private diagnostic context for host logs and is never returned
+    /// verbatim to the unauthenticated caller.
+    @unstable(feature = plugins-wit-v0)
+    variant webhook-rejection {
+        /// Platform signature or authenticity verification failed (HTTP 401).
+        unauthorized(string),
+        /// The authenticated payload is malformed or unsupported (HTTP 400).
+        bad-request(string),
+    }
+
     /// Bitmask of optional capabilities this plugin implements.
     ///
     /// The runtime calls `get-channel-capabilities` once at load time. For each
@@ -317,14 +328,25 @@ interface channel {
     /// `/plugin/<segment>` route into inbound messages. The plugin owns both its
     /// platform payload shape and its authenticity check: it verifies the
     /// platform signature over `body` (secret from its own config, signature
-    /// from `headers`) and returns `err(reason)` to make the gateway reply
-    /// 401/400 and enqueue nothing. `headers` are lower-cased; `body` is the
+    /// from `headers`) and returns a typed rejection to make the gateway reply
+    /// 401 or 400 and enqueue nothing. `headers` are lower-cased; `body` is the
     /// exact received bytes.
-    /// Gated by `webhook-ingress`; stub: return `err("unsupported")`.
+    ///
+    /// The host also serves GET on the route and surfaces the request line via
+    /// two reserved lower-cased headers: `x-webhook-method` (`"GET"`/`"POST"`)
+    /// and `x-webhook-query` (the raw query string, e.g. carrying
+    /// `hub.challenge`). To answer a verification handshake that must echo a
+    /// challenge in the HTTP response body, return exactly one
+    /// `inbound-message` whose `channel` is the reserved value
+    /// `__webhook_reply__` and whose `content` is the body to send. The host
+    /// replies 200 with that body and enqueues nothing. This response-body path
+    /// is additive: the `parse-webhook` signature is unchanged.
+    /// Gated by `webhook-ingress`; stub: return
+    /// `err(bad-request("unsupported"))`.
     parse-webhook: func(
         headers: list<tuple<string, string>>,
         body: list<u8>,
-    ) -> result<list<inbound-message>, string>;
+    ) -> result<list<inbound-message>, webhook-rejection>;
 }
 
 /// A component that exports `channel` is a messaging-platform channel plugin.
@@ -341,15 +363,17 @@ world channel-plugin {
     // Outbound host-mediated WebSocket, for platforms that need a persistent
     // duplex socket (Discord Gateway, Slack Socket Mode). Gated by a distinct
     // unstable feature so the host links it only for plugins granted the
-    // `websocket-client` permission; a plugin that does not enable the feature
+    // `websocket_client` permission; a plugin that does not enable the feature
     // never imports it and is unaffected (adding a world import is
     // backward-compatible — existing components need no rebuild).
     @unstable(feature = plugins-wit-v0-websocket)
     import ws-client;
     // Outbound host-mediated raw TCP (+TLS), for platforms that speak a raw byte
     // protocol over a socket (IRC, email IMAP/SMTP, MQTT, AMQP). Gated by a
-    // distinct unstable feature so the host links it only for plugins granted
-    // the `socket_client` permission.
+    // distinct unstable feature so the host links it only for plugins granted the
+    // `socket_client` permission; a plugin that does not enable the feature never
+    // imports it and is unaffected (adding a world import is backward-compatible —
+    // existing components need no rebuild).
     @unstable(feature = plugins-wit-v0-sockets)
     import socket;
     export plugin-info;

@@ -25,9 +25,8 @@ mention_only = false
 
 `bot_username` and channel names are normalized to lowercase. The `oauth:`
 prefix is added when omitted. The access token needs Twitch's `chat:read` and
-`chat:edit` scopes. Sender authorization uses the Twitch login from the IRC
-prefix and the manifest's case-insensitive matcher, matching the native channel
-behavior.
+`chat:edit` scopes. Sender identity uses the normalized lowercase Twitch login
+from the IRC prefix.
 
 ## Supported behavior
 

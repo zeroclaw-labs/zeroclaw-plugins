@@ -1,5 +1,5 @@
 name = "twitter"
-version = "0.1.0"
+version = "0.2.0"
 description = "X/Twitter channel plugin for ZeroClaw: mentions polling + reply tweets over wasi:http."
 author = "JordanTheJet"
 wasm_path = "twitter.wasm"

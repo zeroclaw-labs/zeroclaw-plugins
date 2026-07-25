@@ -19,7 +19,7 @@ mod component {
     };
     use exports::zeroclaw::plugin::channel::{
         ApprovalRequest, ApprovalResponse, ChannelCapabilities, Guest as Channel, InboundMessage,
-        SendMessage,
+        SendMessage, WebhookRejection,
     };
     use exports::zeroclaw::plugin::plugin_info::Guest as PluginInfo;
     use zeroclaw::plugin::socket::{self, SocketEvent};
@@ -337,8 +337,10 @@ mod component {
         fn parse_webhook(
             _headers: Vec<(String, String)>,
             _body: Vec<u8>,
-        ) -> Result<Vec<InboundMessage>, String> {
-            Err("irc: webhook ingress is unsupported".into())
+        ) -> Result<Vec<InboundMessage>, WebhookRejection> {
+            Err(WebhookRejection::BadRequest(
+                "irc: webhook ingress is unsupported".into(),
+            ))
         }
     }
 

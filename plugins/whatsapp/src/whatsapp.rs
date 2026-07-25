@@ -192,12 +192,13 @@ fn constant_time_eq(a: &str, b: &str) -> bool {
 
 /// Handle a Meta webhook verification `GET`. On success returns the
 /// `hub.challenge` string the host must echo back in the response body; on any
-/// mismatch returns `Err(reason)` so the host replies 4xx and enqueues nothing.
+/// mismatch returns `Err(reason)` so the component emits an unauthorized
+/// rejection and enqueues nothing.
 ///
 /// Requires `hub.mode == "subscribe"`, a non-empty configured `verify_token`
 /// that matches `hub.verify_token` (constant-time), and a present
 /// `hub.challenge`.
-pub fn handle_get_verification(cfg: &WhatsAppConfig, raw_query: &str) -> Result<String, String> {
+pub fn verify_get_request(cfg: &WhatsAppConfig, raw_query: &str) -> Result<(), String> {
     let params = parse_query(raw_query);
     let mode = params.get("hub.mode").map(String::as_str).unwrap_or("");
     if mode != "subscribe" {
@@ -215,10 +216,23 @@ pub fn handle_get_verification(cfg: &WhatsAppConfig, raw_query: &str) -> Result<
             "whatsapp: webhook verification failed (hub.verify_token mismatch)".to_string(),
         );
     }
+    Ok(())
+}
+
+/// Extract the non-empty challenge from an authenticated Meta verification
+/// request. Keeping this separate lets the component distinguish a malformed
+/// query (HTTP 400) from failed token verification (HTTP 401).
+pub fn get_verification_challenge(raw_query: &str) -> Result<String, String> {
+    let params = parse_query(raw_query);
     match params.get("hub.challenge") {
         Some(ch) if !ch.is_empty() => Ok(ch.clone()),
         _ => Err("whatsapp: webhook verification missing hub.challenge".to_string()),
     }
+}
+
+pub fn handle_get_verification(cfg: &WhatsAppConfig, raw_query: &str) -> Result<String, String> {
+    verify_get_request(cfg, raw_query)?;
+    get_verification_challenge(raw_query)
 }
 
 /// Parse a raw `key=value&key=value` query string into a map, percent-decoding

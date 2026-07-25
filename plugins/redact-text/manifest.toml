@@ -1,5 +1,5 @@
 name = "redact-text"
-version = "0.1.0"
+version = "0.2.0"
 description = "Redact secrets and PII from text: emails, bearer/API tokens, and configured patterns"
 author = "ZeroClaw Labs"
 wasm_path = "redact_text.wasm"

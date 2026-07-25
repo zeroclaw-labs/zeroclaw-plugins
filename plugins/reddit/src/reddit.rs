@@ -14,7 +14,7 @@ use serde_json::Value;
 /// The plugin's config section (`[channels.reddit.<alias>]` for a mirror, or
 /// `[[plugins.entries.reddit]].config` as a novel plugin). Field names match the
 /// native `RedditConfig` snake_case keys so a mirror plugin can be fed the native
-/// section verbatim; serde ignores the fields this v0.1.0 plugin does not use
+/// section verbatim; serde ignores the fields this plugin does not use
 /// (`enabled`, `excluded_tools`).
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct RedditConfig {
@@ -75,7 +75,11 @@ pub struct Inbound {
 pub const REDDIT_API_BASE: &str = "https://oauth.reddit.com";
 pub const REDDIT_TOKEN_URL: &str = "https://www.reddit.com/api/v1/access_token";
 /// Reddit requires a descriptive, unique `User-Agent` on every request.
-pub const USER_AGENT: &str = "zeroclaw:channel:v0.1.0 (by /u/zeroclaw-bot)";
+pub const USER_AGENT: &str = concat!(
+    "zeroclaw:channel:v",
+    env!("CARGO_PKG_VERSION"),
+    " (by /u/zeroclaw-bot)"
+);
 /// Inbox items fetched per poll. Small so a poll stays cheap and never stalls
 /// `send`; Reddit caps clients at 60 requests/minute so we do a single short
 /// poll per `poll_message`.

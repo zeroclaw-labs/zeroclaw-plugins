@@ -40,12 +40,12 @@ mod component {
 
     use exports::zeroclaw::plugin::channel::{
         ApprovalRequest, ApprovalResponse, ChannelCapabilities, Guest as Channel, InboundMessage,
-        SendMessage,
+        SendMessage, WebhookRejection,
     };
     use exports::zeroclaw::plugin::plugin_info::Guest as PluginInfo;
 
     const PLUGIN_NAME: &str = "bluesky";
-    const PLUGIN_VERSION: &str = "0.1.0";
+    const PLUGIN_VERSION: &str = env!("CARGO_PKG_VERSION");
     /// Notifications fetched per poll. Small so a poll stays cheap and never
     /// stalls `send`; the buffer is drained one message per `poll_message`.
     const NOTIFICATION_LIMIT: u32 = 40;
@@ -353,8 +353,10 @@ mod component {
         fn parse_webhook(
             _headers: Vec<(String, String)>,
             _body: Vec<u8>,
-        ) -> Result<Vec<InboundMessage>, String> {
-            Err("this channel does not serve webhooks".to_string())
+        ) -> Result<Vec<InboundMessage>, WebhookRejection> {
+            Err(WebhookRejection::BadRequest(
+                "this channel does not serve webhooks".to_string(),
+            ))
         }
     }
 

@@ -66,10 +66,20 @@ capability interface ([zeroclaw#8135](https://github.com/zeroclaw-labs/zeroclaw/
 }
 ```
 
+Channel entries also project optional `provides` and `sender_match` values
+directly from their `manifest.toml`. The registry never carries a second,
+hand-maintained channel mapping.
+
 `registry.json` is **generated** — the [publish workflow](./.github/workflows/publish.yml)
 builds every `plugins/*`, packages the zips, uploads them to the `plugins`
 release, and commits a refreshed index. The checked-in copy is a seed; the
 `sha256`/`url` become live once the publish workflow uploads the release assets.
+
+Published `<name>@<version>` identities are immutable. The workflow verifies an
+existing asset's digest and reuses its registry entry, but never uploads over
+it. Any source, manifest, compiler, or WIT change that changes the package bytes
+requires a new manifest version; new versions are appended so pinned installs
+continue resolving to their original artifact.
 
 ## Add a plugin
 
@@ -99,9 +109,18 @@ and its layout is the required format:
 5. Build it:
    ```bash
    rustup target add wasm32-wasip2
-   (cd plugins/<name> && cargo test && cargo build --target wasm32-wasip2 --release)
+   (cd plugins/<name> && cargo test --locked && cargo build --locked --target wasm32-wasip2 --release)
    ```
-6. Open a PR. On merge, the publish workflow packages and indexes it.
+6. Run the repository validation:
+   ```bash
+   python3 -m unittest discover -s tools/tests -p 'test_*.py'
+   python3 tools/build-registry.py \
+     --source-plugins plugins --check-metadata registry.json
+   ```
+7. Open a PR. PR validation host-tests and builds every component against the
+   vendored WIT, checks registry metadata drift, and rejects changed bytes at an
+   already-published name/version. On merge, the publish workflow packages only
+   new immutable versions and indexes them.
 
 ### Host-gated source plugins
 

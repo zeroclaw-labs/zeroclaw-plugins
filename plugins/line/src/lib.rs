@@ -35,7 +35,7 @@ mod component {
 
     use exports::zeroclaw::plugin::channel::{
         ApprovalRequest, ApprovalResponse, ChannelCapabilities, Guest as Channel, InboundMessage,
-        SendMessage,
+        SendMessage, WebhookRejection,
     };
     use exports::zeroclaw::plugin::plugin_info::Guest as PluginInfo;
 
@@ -132,7 +132,7 @@ mod component {
         fn parse_webhook(
             headers: Vec<(String, String)>,
             body: Vec<u8>,
-        ) -> Result<Vec<InboundMessage>, String> {
+        ) -> Result<Vec<InboundMessage>, WebhookRejection> {
             let cfg = CONFIG.with(|c| c.borrow().clone());
             // Headers are lower-cased by the host. The plugin owns the check:
             // reject an absent/invalid signature so the gateway replies 401 and
@@ -143,8 +143,13 @@ mod component {
                 .map(|(_, v)| v.as_str())
                 .unwrap_or("");
             if !verify_signature(&cfg.channel_secret, &body, signature) {
-                return Err("bad line signature".to_string());
+                return Err(WebhookRejection::Unauthorized(
+                    "bad line signature".to_string(),
+                ));
             }
+            serde_json::from_slice::<Value>(&body).map_err(|e| {
+                WebhookRejection::BadRequest(format!("line: invalid JSON payload: {e}"))
+            })?;
             Ok(parse_events(&body).into_iter().map(to_wit).collect())
         }
 

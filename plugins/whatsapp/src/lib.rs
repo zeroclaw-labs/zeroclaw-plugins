@@ -42,13 +42,14 @@ mod component {
     use serde_json::Value;
 
     use crate::whatsapp::{
-        build_send_body, decode_inbound, handle_get_verification, health_url, send_url,
-        verify_signature, Inbound, WhatsAppConfig, WEBHOOK_PATH, WEBHOOK_REPLY_CHANNEL,
+        build_send_body, decode_inbound, get_verification_challenge, health_url, send_url,
+        verify_get_request, verify_signature, Inbound, WhatsAppConfig, WEBHOOK_PATH,
+        WEBHOOK_REPLY_CHANNEL,
     };
 
     use exports::zeroclaw::plugin::channel::{
         ApprovalRequest, ApprovalResponse, ChannelCapabilities, Guest as Channel, InboundMessage,
-        SendMessage,
+        SendMessage, WebhookRejection,
     };
     use exports::zeroclaw::plugin::plugin_info::Guest as PluginInfo;
 
@@ -199,14 +200,16 @@ mod component {
         fn parse_webhook(
             headers: Vec<(String, String)>,
             body: Vec<u8>,
-        ) -> Result<Vec<InboundMessage>, String> {
+        ) -> Result<Vec<InboundMessage>, WebhookRejection> {
             let cfg = CONFIG.with(|c| c.borrow().clone());
             let method = header_get(&headers, "x-webhook-method").unwrap_or_default();
 
             // ── Meta verification handshake (GET) ──
             if method.eq_ignore_ascii_case("GET") {
                 let query = header_get(&headers, "x-webhook-query").unwrap_or_default();
-                let challenge = handle_get_verification(&cfg, &query)?;
+                verify_get_request(&cfg, &query).map_err(WebhookRejection::Unauthorized)?;
+                let challenge =
+                    get_verification_challenge(&query).map_err(WebhookRejection::BadRequest)?;
                 return Ok(vec![webhook_reply(challenge)]);
             }
 
@@ -219,12 +222,15 @@ mod component {
             if !app_secret.is_empty() {
                 let sig = header_get(&headers, "x-hub-signature-256").unwrap_or_default();
                 if !verify_signature(app_secret, &body, &sig) {
-                    return Err("whatsapp: X-Hub-Signature-256 verification failed".to_string());
+                    return Err(WebhookRejection::Unauthorized(
+                        "whatsapp: X-Hub-Signature-256 verification failed".to_string(),
+                    ));
                 }
             }
 
-            let payload: Value = serde_json::from_slice(&body)
-                .map_err(|e| format!("whatsapp: invalid JSON payload: {e}"))?;
+            let payload: Value = serde_json::from_slice(&body).map_err(|e| {
+                WebhookRejection::BadRequest(format!("whatsapp: invalid JSON payload: {e}"))
+            })?;
             let inbs = decode_inbound(&payload, None);
             Ok(inbs.into_iter().map(to_wit).collect())
         }

@@ -1,5 +1,5 @@
 name = "reddit"
-version = "0.1.0"
+version = "0.2.0"
 description = "Reddit channel plugin for ZeroClaw: message/unread long-poll + comment/compose over wasi:http."
 author = "JordanTheJet"
 wasm_path = "reddit.wasm"

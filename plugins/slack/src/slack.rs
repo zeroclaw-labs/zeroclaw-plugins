@@ -146,8 +146,8 @@ pub fn compute_signature(signing_secret: &str, timestamp: &str, body: &[u8]) -> 
 /// Verify a Slack webhook's authenticity: the timestamp is within the replay
 /// window and the `X-Slack-Signature` HMAC matches (constant-time). `now_secs`
 /// is the current Unix time in seconds (injected so this is deterministic in
-/// tests). Returns `Err(reason)` — which the host turns into a 401/400 — on any
-/// failure.
+/// tests). The component maps any failure here to the typed unauthorized
+/// rejection (HTTP 401).
 pub fn verify_signature(
     signing_secret: &str,
     timestamp_header: &str,
@@ -240,28 +240,18 @@ fn parse_event(event: &Value) -> Vec<Inbound> {
     }]
 }
 
-/// Decode a raw inbound webhook. The plugin owns both authenticity and payload
-/// shape here:
-///   1. A non-`POST` request (the host also serves `GET /plugin/slack` for
-///      liveness) yields no messages — Slack only ever POSTs.
-///   2. Otherwise the signature is verified over the raw `body`; a bad or stale
-///      signature returns `Err` (→ host replies 401/400, enqueues nothing).
-///   3. A `url_verification` body returns [`WebhookOutcome::Challenge`].
-///   4. An `event_callback` returns the mapped message event(s).
-///   5. Any other payload returns an empty message list (200, nothing queued).
-///
-/// `now_secs` is the current Unix time in seconds (injected for testability).
-pub fn parse_webhook(
+/// Authenticate a raw Slack webhook. Returns `Ok(false)` for a GET liveness
+/// probe and `Ok(true)` for an authenticated POST that should be decoded.
+pub fn authenticate_webhook(
     signing_secret: &str,
     headers: &[(String, String)],
     body: &[u8],
     now_secs: i64,
-) -> Result<WebhookOutcome, String> {
+) -> Result<bool, String> {
     // The host passes the request line via reserved lower-cased headers.
     let method = header(headers, "x-webhook-method").unwrap_or("POST");
     if method.eq_ignore_ascii_case("GET") {
-        // Slack has no GET handshake; treat a liveness probe as an empty 200.
-        return Ok(WebhookOutcome::Messages(Vec::new()));
+        return Ok(false);
     }
 
     let timestamp = header(headers, "x-slack-request-timestamp")
@@ -269,7 +259,11 @@ pub fn parse_webhook(
     let signature = header(headers, "x-slack-signature")
         .ok_or_else(|| "slack: missing X-Slack-Signature header".to_string())?;
     verify_signature(signing_secret, timestamp, signature, body, now_secs)?;
+    Ok(true)
+}
 
+/// Decode an already-authenticated Slack webhook body.
+pub fn decode_webhook(body: &[u8]) -> Result<WebhookOutcome, String> {
     let payload: Value =
         serde_json::from_slice(body).map_err(|e| format!("slack: invalid JSON body: {e}"))?;
 
@@ -288,6 +282,21 @@ pub fn parse_webhook(
         // url-less retries, app_rate_limited, unknown envelopes → nothing.
         _ => Ok(WebhookOutcome::Messages(Vec::new())),
     }
+}
+
+/// Authenticate and decode a raw inbound webhook. The split helpers are also
+/// exposed so the WIT shim can preserve the host's typed authentication and
+/// payload-rejection boundary.
+pub fn parse_webhook(
+    signing_secret: &str,
+    headers: &[(String, String)],
+    body: &[u8],
+    now_secs: i64,
+) -> Result<WebhookOutcome, String> {
+    if !authenticate_webhook(signing_secret, headers, body, now_secs)? {
+        return Ok(WebhookOutcome::Messages(Vec::new()));
+    }
+    decode_webhook(body)
 }
 
 /// Build the `chat.postMessage` request body. `thread_ts`, when present and

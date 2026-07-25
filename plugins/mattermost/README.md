@@ -22,7 +22,7 @@ directly. Fields used by this plugin:
 - `bot_token` (required) — a personal access / bot token, sent as
   `Authorization: Bearer <token>`. (The native `login_id` + `password` login
   flow is not implemented here; use a static token.)
-- `channel_ids` — the channel(s) the bot serves. **v0.1.0 operates on a single
+- `channel_ids` — the channel(s) the bot serves. **This release operates on a single
   channel: the first explicit entry.** An empty list or a `["*"]` wildcard
   (native auto-discovery) leaves the plugin inert.
 - `thread_replies` — when `true` (default), top-level replies thread on the
