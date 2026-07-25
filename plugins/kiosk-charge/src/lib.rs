@@ -66,7 +66,9 @@ mod component {
              an item or pay an amount. Pass item_id (from the operator's price list) or a \
              decimal amount_usdc within the operator cap. Returns a solana: payment URL, a \
              QR-ready payload, and a reference id for payment confirmation. The recipient \
-             address is fixed by operator config and cannot be changed."
+             address is fixed by operator config and cannot be changed. Before creating the \
+             charge, tell the customer the item and USDC amount so they can preview what they \
+             are about to pay."
                 .to_string()
         }
 

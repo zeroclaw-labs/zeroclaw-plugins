@@ -75,7 +75,9 @@ mod component {
              kind=\"event\" with an event label (optionally item and payment_sig). Returns an \
              UNSIGNED durable-nonce transaction (base64) for the operator's signer to submit — \
              this tool never signs and cannot move funds. Device id, nonce account/authority, \
-             and RPC endpoint are fixed by operator config and cannot be set here."
+             and RPC endpoint are fixed by operator config and cannot be set here. Before \
+             recording, state what you are attesting (the metric and value, or the event) so it \
+             can be previewed."
                 .to_string()
         }
 

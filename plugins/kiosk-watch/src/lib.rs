@@ -76,7 +76,9 @@ mod component {
              at the configured finality — deliver only then. success=false means pending, expired, \
              or a mismatch (do not deliver). Set mode=\"heartbeat\" with device_address and \
              max_silence_s to instead check the device's attestation freshness. The recipient, \
-             mint, and RPC endpoint are fixed by operator config and cannot be set here."
+             mint, and RPC endpoint are fixed by operator config and cannot be set here. State the \
+             result plainly (paid / still pending / mismatch) before any downstream action such as \
+             releasing an item."
                 .to_string()
         }
 
