@@ -53,7 +53,11 @@ impl Message {
     /// Compile instructions into a message. `payer` is the fee payer (forced to
     /// signer+writable and to account index 0). `recent_blockhash` is a real
     /// blockhash or a durable nonce value.
-    pub fn compile(instructions: &[Instruction], payer: [u8; 32], recent_blockhash: [u8; 32]) -> Self {
+    pub fn compile(
+        instructions: &[Instruction],
+        payer: [u8; 32],
+        recent_blockhash: [u8; 32],
+    ) -> Self {
         let mut map: BTreeMap<[u8; 32], Meta> = BTreeMap::new();
         for ix in instructions {
             map.entry(ix.program_id).or_default(); // program id: non-signer, non-writable
@@ -153,7 +157,11 @@ mod tests {
         // account_keys = [payer(1), writable-nonsigner(2), program(3)].
         let ix = Instruction {
             program_id: [3u8; 32],
-            accounts: vec![AccountMeta { pubkey: [2u8; 32], is_signer: false, is_writable: true }],
+            accounts: vec![AccountMeta {
+                pubkey: [2u8; 32],
+                is_signer: false,
+                is_writable: true,
+            }],
             data: vec![0xAA, 0xBB],
         };
         let msg = Message::compile(&[ix], [1u8; 32], [9u8; 32]);
@@ -181,7 +189,11 @@ mod tests {
     fn payer_is_index_zero_and_is_the_only_signer() {
         let ix = Instruction {
             program_id: [7u8; 32],
-            accounts: vec![AccountMeta { pubkey: [5u8; 32], is_signer: false, is_writable: false }],
+            accounts: vec![AccountMeta {
+                pubkey: [5u8; 32],
+                is_signer: false,
+                is_writable: false,
+            }],
             data: vec![],
         };
         let payer = [1u8; 32];
@@ -193,10 +205,26 @@ mod tests {
     #[test]
     fn compiled_indices_point_back_to_correct_keys() {
         // Two instructions sharing a program; verify every index resolves.
-        let a = AccountMeta { pubkey: [10u8; 32], is_signer: true, is_writable: true };
-        let b = AccountMeta { pubkey: [20u8; 32], is_signer: false, is_writable: true };
-        let ix1 = Instruction { program_id: [30u8; 32], accounts: vec![a.clone(), b.clone()], data: vec![1] };
-        let ix2 = Instruction { program_id: [30u8; 32], accounts: vec![b], data: vec![2] };
+        let a = AccountMeta {
+            pubkey: [10u8; 32],
+            is_signer: true,
+            is_writable: true,
+        };
+        let b = AccountMeta {
+            pubkey: [20u8; 32],
+            is_signer: false,
+            is_writable: true,
+        };
+        let ix1 = Instruction {
+            program_id: [30u8; 32],
+            accounts: vec![a.clone(), b.clone()],
+            data: vec![1],
+        };
+        let ix2 = Instruction {
+            program_id: [30u8; 32],
+            accounts: vec![b],
+            data: vec![2],
+        };
         let msg = Message::compile(&[ix1, ix2], [40u8; 32], [0u8; 32]);
         for (ci, orig) in msg.instructions.iter().zip([[30u8; 32], [30u8; 32]]) {
             assert_eq!(msg.account_keys[ci.program_id_index as usize], orig);

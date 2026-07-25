@@ -104,19 +104,31 @@ mod component {
             let parsed: ExecuteArgs = match serde_json::from_str(&args) {
                 Ok(a) => a,
                 Err(e) => {
-                    emit(PluginAction::Fail, Some(PluginOutcome::Failure), "invalid arguments");
+                    emit(
+                        PluginAction::Fail,
+                        Some(PluginOutcome::Failure),
+                        "invalid arguments",
+                    );
                     return Ok(fail(format!("invalid arguments: {e}")));
                 }
             };
             if let Err(e) = strict_check(&args) {
-                emit(PluginAction::Reject, Some(PluginOutcome::Failure), "unknown field rejected");
+                emit(
+                    PluginAction::Reject,
+                    Some(PluginOutcome::Failure),
+                    "unknown field rejected",
+                );
                 return Ok(fail(e));
             }
 
             let cfg = match AttestConfig::from_section(&parsed.config) {
                 Ok(c) => c,
                 Err(e) => {
-                    emit(PluginAction::Fail, Some(PluginOutcome::Failure), "config rejected");
+                    emit(
+                        PluginAction::Fail,
+                        Some(PluginOutcome::Failure),
+                        "config rejected",
+                    );
                     return Ok(fail(e.to_string()));
                 }
             };
@@ -138,16 +150,28 @@ mod component {
 
             match execute_attest(&attest_args, &cfg, transport, now) {
                 Ok(out) => {
-                    emit(PluginAction::Complete, Some(PluginOutcome::Success), "attestation built");
+                    emit(
+                        PluginAction::Complete,
+                        Some(PluginOutcome::Success),
+                        "attestation built",
+                    );
                     // Summary is token-budgeted; the base64 tx is bounded and small.
                     let output = shape::clamp(
                         &format!("{}\nunsigned_tx_base64={}", out.summary, out.tx_base64),
                         shape::DEFAULT_BUDGET_TOKENS,
                     );
-                    Ok(ToolResult { success: true, output, error: None })
+                    Ok(ToolResult {
+                        success: true,
+                        output,
+                        error: None,
+                    })
                 }
                 Err(e) => {
-                    emit(PluginAction::Fail, Some(PluginOutcome::Failure), "attestation failed");
+                    emit(
+                        PluginAction::Fail,
+                        Some(PluginOutcome::Failure),
+                        "attestation failed",
+                    );
                     Ok(fail(e.to_string()))
                 }
             }
@@ -157,7 +181,14 @@ mod component {
     /// Reject any model-supplied key outside the declared schema.
     fn strict_check(raw: &str) -> Result<(), String> {
         const ALLOWED: [&str; 8] = [
-            "kind", "metric", "value", "ts", "event", "payment_sig", "item", "__config",
+            "kind",
+            "metric",
+            "value",
+            "ts",
+            "event",
+            "payment_sig",
+            "item",
+            "__config",
         ];
         let v: serde_json::Value =
             serde_json::from_str(raw).map_err(|e| format!("invalid arguments: {e}"))?;
@@ -172,7 +203,11 @@ mod component {
     }
 
     fn fail(message: String) -> ToolResult {
-        ToolResult { success: false, output: String::new(), error: Some(message) }
+        ToolResult {
+            success: false,
+            output: String::new(),
+            error: Some(message),
+        }
     }
 
     fn emit(action: PluginAction, outcome: Option<PluginOutcome>, message: &str) {

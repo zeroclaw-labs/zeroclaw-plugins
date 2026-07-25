@@ -70,7 +70,9 @@ impl ChargeConfig {
             .cloned()
             .unwrap_or_else(|| DEFAULT_USDC_MINT.to_string());
         if b58::decode_pubkey(&usdc_mint).is_none() {
-            return Err(ChargeError::Config("usdc_mint is not a valid pubkey".into()));
+            return Err(ChargeError::Config(
+                "usdc_mint is not a valid pubkey".into(),
+            ));
         }
         let mut price_list = HashMap::new();
         if let Some(raw) = section.get("price_list") {
@@ -89,13 +91,18 @@ impl ChargeConfig {
                 .ok_or_else(|| ChargeError::Config("max_amount_usdc must be > 0".into()))?,
             None => DEFAULT_MAX_AMOUNT,
         };
-        let display_currency = section.get("display_currency").filter(|v| !v.is_empty()).cloned();
+        let display_currency = section
+            .get("display_currency")
+            .filter(|v| !v.is_empty())
+            .cloned();
         let display_rate = match section.get("display_rate").filter(|v| !v.is_empty()) {
             Some(v) => Some(
                 v.parse::<f64>()
                     .ok()
                     .filter(|r| r.is_finite() && *r > 0.0)
-                    .ok_or_else(|| ChargeError::Config("display_rate must be a positive number".into()))?,
+                    .ok_or_else(|| {
+                        ChargeError::Config("display_rate must be a positive number".into())
+                    })?,
             ),
             None => None,
         };
@@ -152,11 +159,7 @@ pub fn execute_charge(
             (price.clone(), Some(item.clone()))
         }
         (None, Some(amount)) => (amount.clone(), None),
-        (None, None) => {
-            return Err(ChargeError::Args(
-                "provide item_id or amount_usdc".into(),
-            ))
-        }
+        (None, None) => return Err(ChargeError::Args("provide item_id or amount_usdc".into())),
     };
 
     let reference = b58::encode(&reference32);
@@ -197,5 +200,11 @@ pub fn execute_charge(
         shape::DEFAULT_BUDGET_TOKENS,
     );
 
-    Ok(ChargeOutput { url, reference, amount, item, summary })
+    Ok(ChargeOutput {
+        url,
+        reference,
+        amount,
+        item,
+        summary,
+    })
 }

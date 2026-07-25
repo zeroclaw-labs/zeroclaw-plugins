@@ -60,13 +60,18 @@ pub fn recover<T: RpcTransport>(
         "getSignaturesForAddress",
         json!([device, { "commitment": finality, "limit": 1 }]),
     )?;
-    let arr = res
-        .as_array()
-        .ok_or_else(|| ChainError::Decode("getSignaturesForAddress did not return an array".into()))?;
+    let arr = res.as_array().ok_or_else(|| {
+        ChainError::Decode("getSignaturesForAddress did not return an array".into())
+    })?;
 
     let newest = match arr.first() {
         Some(x) => x,
-        None => return Ok(ChainState { seq: 0, prev_signature: None }), // fresh device
+        None => {
+            return Ok(ChainState {
+                seq: 0,
+                prev_signature: None,
+            })
+        } // fresh device
     };
 
     let signature = newest
@@ -89,7 +94,10 @@ pub fn recover<T: RpcTransport>(
         .and_then(Value::as_u64)
         .ok_or_else(|| ChainError::Gap("newest memo has no seq field".into()))?;
 
-    Ok(ChainState { seq: last_seq + 1, prev_signature: Some(signature) })
+    Ok(ChainState {
+        seq: last_seq + 1,
+        prev_signature: Some(signature),
+    })
 }
 
 /// The RPC `memo` field may be prefixed (e.g. `"[31] {...}"`). Return the
@@ -109,13 +117,26 @@ mod tests {
         }
     }
     fn ok(result_json: &str) -> Mock {
-        Mock(Ok(format!(r#"{{"jsonrpc":"2.0","id":1,"result":{result_json}}}"#)))
+        Mock(Ok(format!(
+            r#"{{"jsonrpc":"2.0","id":1,"result":{result_json}}}"#
+        )))
     }
 
     #[test]
     fn fresh_device_returns_zero_none() {
-        let st = recover("Dev11111111111111111111111111111111111111111", ok("[]"), "confirmed").unwrap();
-        assert_eq!(st, ChainState { seq: 0, prev_signature: None });
+        let st = recover(
+            "Dev11111111111111111111111111111111111111111",
+            ok("[]"),
+            "confirmed",
+        )
+        .unwrap();
+        assert_eq!(
+            st,
+            ChainState {
+                seq: 0,
+                prev_signature: None
+            }
+        );
     }
 
     #[test]
@@ -125,7 +146,12 @@ mod tests {
         let m = ok(&format!(
             r#"[{{"signature":"{sig}","slot":100,"memo":"[31] {{\"v\":1,\"dev\":\"k01\",\"seq\":7}}"}}]"#
         ));
-        let st = recover("Dev11111111111111111111111111111111111111111", m, "confirmed").unwrap();
+        let st = recover(
+            "Dev11111111111111111111111111111111111111111",
+            m,
+            "confirmed",
+        )
+        .unwrap();
         assert_eq!(st.seq, 8);
         assert_eq!(st.prev_signature.as_deref(), Some(sig));
     }
@@ -133,28 +159,48 @@ mod tests {
     #[test]
     fn memo_without_length_prefix_also_parses() {
         let m = ok(r#"[{"signature":"S","memo":"{\"v\":1,\"seq\":41}"}]"#);
-        let st = recover("Dev11111111111111111111111111111111111111111", m, "confirmed").unwrap();
+        let st = recover(
+            "Dev11111111111111111111111111111111111111111",
+            m,
+            "confirmed",
+        )
+        .unwrap();
         assert_eq!(st.seq, 42);
     }
 
     #[test]
     fn gap_when_newest_has_no_memo() {
         let m = ok(r#"[{"signature":"S","memo":null}]"#);
-        let err = recover("Dev11111111111111111111111111111111111111111", m, "confirmed").unwrap_err();
+        let err = recover(
+            "Dev11111111111111111111111111111111111111111",
+            m,
+            "confirmed",
+        )
+        .unwrap_err();
         assert!(matches!(err, ChainError::Gap(_)), "got {err:?}");
     }
 
     #[test]
     fn gap_when_newest_memo_is_not_attestation_json() {
         let m = ok(r#"[{"signature":"S","memo":"just a plain memo"}]"#);
-        let err = recover("Dev11111111111111111111111111111111111111111", m, "confirmed").unwrap_err();
+        let err = recover(
+            "Dev11111111111111111111111111111111111111111",
+            m,
+            "confirmed",
+        )
+        .unwrap_err();
         assert!(matches!(err, ChainError::Gap(_)), "got {err:?}");
     }
 
     #[test]
     fn rpc_error_surfaces_never_silently_fresh() {
         let m = Mock(Err(RpcError::Transport("node down".into())));
-        let err = recover("Dev11111111111111111111111111111111111111111", m, "confirmed").unwrap_err();
+        let err = recover(
+            "Dev11111111111111111111111111111111111111111",
+            m,
+            "confirmed",
+        )
+        .unwrap_err();
         assert!(matches!(err, ChainError::Rpc(_)), "got {err:?}");
     }
 }

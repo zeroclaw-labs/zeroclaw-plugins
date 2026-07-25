@@ -46,7 +46,10 @@ pub fn parse_nonce_account(base64_data: &str) -> Option<NonceAccount> {
     }
     let authority: [u8; 32] = bytes[8..40].try_into().ok()?;
     let blockhash: [u8; 32] = bytes[40..72].try_into().ok()?;
-    Some(NonceAccount { authority, blockhash })
+    Some(NonceAccount {
+        authority,
+        blockhash,
+    })
 }
 
 /// Build the `AdvanceNonceAccount` instruction. Accounts, in the order the
@@ -60,9 +63,21 @@ pub fn build_advance_nonce_ix(nonce_account: [u8; 32], nonce_authority: [u8; 32]
     Instruction {
         program_id: SYSTEM_PROGRAM_ID,
         accounts: vec![
-            AccountMeta { pubkey: nonce_account, is_signer: false, is_writable: true },
-            AccountMeta { pubkey: sysvar, is_signer: false, is_writable: false },
-            AccountMeta { pubkey: nonce_authority, is_signer: true, is_writable: false },
+            AccountMeta {
+                pubkey: nonce_account,
+                is_signer: false,
+                is_writable: true,
+            },
+            AccountMeta {
+                pubkey: sysvar,
+                is_signer: false,
+                is_writable: false,
+            },
+            AccountMeta {
+                pubkey: nonce_authority,
+                is_signer: true,
+                is_writable: false,
+            },
         ],
         data: ADVANCE_NONCE_DISCRIMINANT.to_vec(),
     }
@@ -119,7 +134,10 @@ mod tests {
         assert_eq!(ix.accounts[0].pubkey, nonce);
         assert!(ix.accounts[0].is_writable && !ix.accounts[0].is_signer);
         // 1: recent blockhashes sysvar — readonly, not signer
-        assert_eq!(ix.accounts[1].pubkey, b58::decode_pubkey(RECENT_BLOCKHASHES_SYSVAR_B58).unwrap());
+        assert_eq!(
+            ix.accounts[1].pubkey,
+            b58::decode_pubkey(RECENT_BLOCKHASHES_SYSVAR_B58).unwrap()
+        );
         assert!(!ix.accounts[1].is_writable && !ix.accounts[1].is_signer);
         // 2: authority — signer, readonly
         assert_eq!(ix.accounts[2].pubkey, authority);

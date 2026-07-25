@@ -94,8 +94,8 @@ pub fn build_request(method: &str, params: Value) -> String {
 /// `error`, or a decode error. Fail closed — an unexpected shape is an error,
 /// never a silent empty value.
 pub fn parse_response(raw: &str) -> Result<Value, RpcError> {
-    let v: Value = serde_json::from_str(raw)
-        .map_err(|e| RpcError::Decode(format!("not JSON: {e}")))?;
+    let v: Value =
+        serde_json::from_str(raw).map_err(|e| RpcError::Decode(format!("not JSON: {e}")))?;
 
     if let Some(err) = v.get("error") {
         let code = err.get("code").and_then(Value::as_i64).unwrap_or(0);
@@ -109,7 +109,9 @@ pub fn parse_response(raw: &str) -> Result<Value, RpcError> {
 
     match v.get("result") {
         Some(result) => Ok(result.clone()),
-        None => Err(RpcError::Decode("response has neither result nor error".into())),
+        None => Err(RpcError::Decode(
+            "response has neither result nor error".into(),
+        )),
     }
 }
 
@@ -141,8 +143,7 @@ impl RpcTransport for WakiTransport {
         let bytes = resp
             .body()
             .map_err(|e| RpcError::Transport(format!("read body: {e:?}")))?;
-        String::from_utf8(bytes)
-            .map_err(|e| RpcError::Decode(format!("body not utf-8: {e}")))
+        String::from_utf8(bytes).map_err(|e| RpcError::Decode(format!("body not utf-8: {e}")))
     }
 }
 
@@ -161,7 +162,10 @@ mod tests {
 
     impl MockTransport {
         fn returning(response: &str) -> Self {
-            Self { response: response.to_string(), last_request: RefCell::new(None) }
+            Self {
+                response: response.to_string(),
+                last_request: RefCell::new(None),
+            }
         }
     }
 
@@ -201,16 +205,30 @@ mod tests {
 
     #[test]
     fn surfaces_structured_rpc_errors() {
-        let err = parse_response(r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32602,"message":"bad params"}}"#)
-            .unwrap_err();
-        assert_eq!(err, RpcError::Rpc { code: -32602, message: "bad params".into() });
+        let err = parse_response(
+            r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32602,"message":"bad params"}}"#,
+        )
+        .unwrap_err();
+        assert_eq!(
+            err,
+            RpcError::Rpc {
+                code: -32602,
+                message: "bad params".into()
+            }
+        );
     }
 
     #[test]
     fn fails_closed_on_garbage() {
-        assert!(matches!(parse_response("not json"), Err(RpcError::Decode(_))));
+        assert!(matches!(
+            parse_response("not json"),
+            Err(RpcError::Decode(_))
+        ));
         // Neither result nor error present -> decode error, never a silent empty.
-        assert!(matches!(parse_response(r#"{"jsonrpc":"2.0","id":1}"#), Err(RpcError::Decode(_))));
+        assert!(matches!(
+            parse_response(r#"{"jsonrpc":"2.0","id":1}"#),
+            Err(RpcError::Decode(_))
+        ));
     }
 
     #[test]

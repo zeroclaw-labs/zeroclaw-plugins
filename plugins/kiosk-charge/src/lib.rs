@@ -98,14 +98,22 @@ mod component {
             let parsed: ExecuteArgs = match serde_json::from_str(&args) {
                 Ok(a) => a,
                 Err(e) => {
-                    emit(PluginAction::Fail, PluginOutcome::Failure, "invalid arguments");
+                    emit(
+                        PluginAction::Fail,
+                        PluginOutcome::Failure,
+                        "invalid arguments",
+                    );
                     return Ok(fail(format!("invalid arguments: {e}")));
                 }
             };
             let cfg = match ChargeConfig::from_section(&parsed.config) {
                 Ok(c) => c,
                 Err(e) => {
-                    emit(PluginAction::Fail, PluginOutcome::Failure, "config rejected");
+                    emit(
+                        PluginAction::Fail,
+                        PluginOutcome::Failure,
+                        "config rejected",
+                    );
                     return Ok(fail(e.to_string()));
                 }
             };
@@ -119,7 +127,11 @@ mod component {
             // (recipient, mint, ...) fail closed even though `__config` rides
             // in the same JSON object.
             if let Err(e) = strict_check(&args) {
-                emit(PluginAction::Reject, PluginOutcome::Failure, "unknown field rejected");
+                emit(
+                    PluginAction::Reject,
+                    PluginOutcome::Failure,
+                    "unknown field rejected",
+                );
                 return Ok(fail(e));
             }
 
@@ -129,11 +141,23 @@ mod component {
                 .unwrap_or(0);
             match execute_charge(&charge_args, &cfg, reference_bytes(now_ms), now_ms) {
                 Ok(out) => {
-                    emit(PluginAction::Complete, PluginOutcome::Success, "charge created");
-                    Ok(ToolResult { success: true, output: out.summary, error: None })
+                    emit(
+                        PluginAction::Complete,
+                        PluginOutcome::Success,
+                        "charge created",
+                    );
+                    Ok(ToolResult {
+                        success: true,
+                        output: out.summary,
+                        error: None,
+                    })
                 }
                 Err(e) => {
-                    emit(PluginAction::Reject, PluginOutcome::Failure, "charge rejected");
+                    emit(
+                        PluginAction::Reject,
+                        PluginOutcome::Failure,
+                        "charge rejected",
+                    );
                     Ok(fail(e.to_string()))
                 }
             }
@@ -181,7 +205,11 @@ mod component {
     }
 
     fn fail(message: String) -> ToolResult {
-        ToolResult { success: false, output: String::new(), error: Some(message) }
+        ToolResult {
+            success: false,
+            output: String::new(),
+            error: Some(message),
+        }
     }
 
     fn emit(action: PluginAction, outcome: PluginOutcome, message: &str) {

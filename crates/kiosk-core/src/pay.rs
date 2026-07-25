@@ -113,7 +113,9 @@ impl TransferRequest {
 fn validate_amount(s: &str, decimals: u8, max_amount: f64) -> Result<String, PayError> {
     let s = s.trim();
     if s.is_empty() || s.starts_with('+') || s.starts_with('-') {
-        return Err(PayError::BadAmount("must be a plain positive decimal".into()));
+        return Err(PayError::BadAmount(
+            "must be a plain positive decimal".into(),
+        ));
     }
     let mut parts = s.splitn(2, '.');
     let int = parts.next().unwrap_or("");
@@ -129,7 +131,9 @@ fn validate_amount(s: &str, decimals: u8, max_amount: f64) -> Result<String, Pay
             "more than {decimals} decimal places"
         )));
     }
-    let value: f64 = s.parse().map_err(|_| PayError::BadAmount("unparseable".into()))?;
+    let value: f64 = s
+        .parse()
+        .map_err(|_| PayError::BadAmount("unparseable".into()))?;
     // Reject NaN explicitly as well as non-positive: a money amount must be a
     // finite positive number. (Digits-only parsing upstream already excludes
     // NaN/inf; this stays defensive.)
@@ -177,8 +181,15 @@ mod tests {
     #[test]
     fn golden_url_full() {
         let t = TransferRequest::new(
-            MERCHANT, "1.5", 6, 100.0, Some(USDC), Some(REF),
-            Some("Kiosk 01"), Some("Cold drink"), Some("order#42"),
+            MERCHANT,
+            "1.5",
+            6,
+            100.0,
+            Some(USDC),
+            Some(REF),
+            Some("Kiosk 01"),
+            Some("Cold drink"),
+            Some("order#42"),
         )
         .unwrap();
         assert_eq!(
@@ -191,7 +202,12 @@ mod tests {
 
     #[test]
     fn amount_canonicalization() {
-        for (input, want) in [("1.500000", "1.5"), ("01.50", "1.5"), ("2", "2"), ("0.10", "0.1")] {
+        for (input, want) in [
+            ("1.500000", "1.5"),
+            ("01.50", "1.5"),
+            ("2", "2"),
+            ("0.10", "0.1"),
+        ] {
             let t = TransferRequest::new(MERCHANT, input, 6, 100.0, None, None, None, None, None)
                 .unwrap();
             assert!(t.url().contains(&format!("amount={want}")), "{input}");
@@ -209,18 +225,15 @@ mod tests {
     #[test]
     fn bad_keys_fail_closed() {
         assert_eq!(
-            TransferRequest::new("not-a-key", "1", 6, 10.0, None, None, None, None, None)
-                .err(),
+            TransferRequest::new("not-a-key", "1", 6, 10.0, None, None, None, None, None).err(),
             Some(PayError::BadRecipient)
         );
         assert_eq!(
-            TransferRequest::new(MERCHANT, "1", 6, 10.0, Some("xx"), None, None, None, None)
-                .err(),
+            TransferRequest::new(MERCHANT, "1", 6, 10.0, Some("xx"), None, None, None, None).err(),
             Some(PayError::BadMint)
         );
         assert_eq!(
-            TransferRequest::new(MERCHANT, "1", 6, 10.0, None, Some("yy"), None, None, None)
-                .err(),
+            TransferRequest::new(MERCHANT, "1", 6, 10.0, None, Some("yy"), None, None, None).err(),
             Some(PayError::BadReference)
         );
     }
@@ -228,8 +241,15 @@ mod tests {
     #[test]
     fn injection_in_text_fields_is_encoded_inert() {
         let t = TransferRequest::new(
-            MERCHANT, "1", 6, 10.0, None, None,
-            Some("a&amount=999"), None, Some("&recipient=EVIL"),
+            MERCHANT,
+            "1",
+            6,
+            10.0,
+            None,
+            None,
+            Some("a&amount=999"),
+            None,
+            Some("&recipient=EVIL"),
         )
         .unwrap();
         let url = t.url();
