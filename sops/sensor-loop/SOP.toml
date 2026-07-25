@@ -1,0 +1,30 @@
+# ProofKiosk — sensor loop SOP (EXAMPLE)
+#
+# Periodically read an environmental sensor and write a tamper-evident, hash-chained
+# attestation of the reading to Solana via kiosk_attest.
+#
+# NOTE: kiosk_attest lands in the next PR in this series; this SOP is the target
+# design so the wiring is reviewable now. `bme280_read` stands in for any sensor
+# tool exposed by the peripheral feature set.
+
+name = "proofkiosk-sensor-loop"
+description = "Attest an environmental sensor reading on-chain on a fixed cadence."
+
+[trigger]
+type = "cron"
+schedule = "0 */5 * * * *"        # every 5 minutes
+
+# 1. Read the sensor.
+[[steps]]
+tool = "bme280_read"
+tools = ["bme280_read"]
+
+# 2. Attest the reading (hash-chained, durable-nonce memo tx; unsigned output).
+[[steps]]
+tool = "kiosk_attest"
+tools = ["kiosk_attest"]
+[steps.args]
+kind   = "reading"
+metric = "temp_c"
+value  = "$.steps.1.temp_c"       # value flows from the sensor read
+ts     = "$.now"
