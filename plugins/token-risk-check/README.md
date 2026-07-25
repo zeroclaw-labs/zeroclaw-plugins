@@ -79,17 +79,57 @@ host-side), `config_read` (the section above). Nothing else.
 
 ## Degradation (explicit, never silent)
 
-Several free public RPCs block or throttle `getTokenLargestAccounts`. When
-that call fails, the plugin still delivers the authority/extension verdict and
-appends:
+`getTokenLargestAccounts` is the one call that can fail while the rest of the
+verdict remains sound. It fails for **two different reasons**, and neither is
+fixable by paying for a better endpoint:
+
+1. **Free public RPCs block or throttle it.**
+2. **Every RPC — paid ones included — rejects it for tokens with very large
+   holder counts.** Verified against a paid endpoint: USDC returns
+   `-32600: Too many accounts requested (10000000 pubkeys)`. This is a protocol
+   ceiling, not a rate limit.
+
+When that call fails the plugin still delivers the authority/extension verdict
+and appends:
 
 ```
 [NOTE] holder concentration unavailable (RPC throttled this call); verdict covers authorities and extensions only
 ```
 
+It never estimates, extrapolates, or silently omits the concentration figures.
+An operator reading a verdict always knows whether concentration was actually
+measured.
+
 Any failure in the *primary* path (bad address, unknown account, unparseable
 mint, RPC error) fails closed with an explicit error — no partial verdicts, no
 guesses.
+
+### Verified transcripts (mainnet, 2026-07-25)
+
+Both paths, same build, one paid RPC — the full-data case and the degraded case:
+
+**PYUSD `2b1kV6DkPAnxd5ixfnxCpjxmKwqjjaYmCZfHsFu24GXo` — concentration available:**
+
+```
+RED — 2b1kV6DkPAnxd5ixfnxCpjxmKwqjjaYmCZfHsFu24GXo (token-2022), supply 681.3M, top holder 56.6% / top10 83.4%
+[AMBER] mint authority live: supply can be inflated at will
+[AMBER] freeze authority live: any holder account can be frozen
+[RED] permanent delegate: a fixed key can transfer or burn ANY holder's tokens
+[RED] top holder owns 56.6% of supply (majority control)
+```
+
+**USDC `EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v` — concentration refused by
+the RPC, verdict still delivered:**
+
+```
+[holder data unavailable: RPC error -32600: Too many accounts requested (10000000 pubkeys)]
+AMBER — EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v (spl-token), supply 7.7B
+[AMBER] mint authority live: supply can be inflated at will
+[AMBER] freeze authority live: any holder account can be frozen
+```
+
+Note the difference in the header line: concentration figures appear only when
+they were genuinely measured.
 
 ## Threat model
 
