@@ -25,7 +25,8 @@ const NOW: u64 = 1_000_000;
 struct Mock {
     sig: Result<String, RpcError>,
     tx: Result<String, RpcError>,
-    calls: Cell<u32>,
+    sig_calls: Cell<u32>,
+    tx_calls: Cell<u32>,
 }
 
 impl Mock {
@@ -33,7 +34,8 @@ impl Mock {
         Self {
             sig,
             tx,
-            calls: Cell::new(0),
+            sig_calls: Cell::new(0),
+            tx_calls: Cell::new(0),
         }
     }
     fn sigs(body: &str) -> Self {
@@ -46,10 +48,11 @@ impl Mock {
 
 impl RpcTransport for Mock {
     fn send(&self, request_body: &str) -> Result<String, RpcError> {
-        self.calls.set(self.calls.get() + 1);
         if request_body.contains("getSignaturesForAddress") {
+            self.sig_calls.set(self.sig_calls.get() + 1);
             self.sig.clone()
         } else if request_body.contains("getTransaction") {
+            self.tx_calls.set(self.tx_calls.get() + 1);
             self.tx.clone()
         } else {
             Err(RpcError::Transport("unexpected method".into()))
@@ -108,6 +111,75 @@ fn tx(owner: &str, mint: &str, amount: &str, err: &str) -> String {
         bt = NOW - 5,
         reference = REFERENCE,
     )
+}
+
+// A getTransaction result whose accountKeys do NOT include the queried
+// reference — a payment for a *different* charge (replay attempt).
+fn tx_without_reference(owner: &str, mint: &str, amount: &str) -> String {
+    format!(
+        r#"{{
+          "slot":100,"blockTime":{bt},
+          "meta":{{"err":null,
+            "preTokenBalances":[{{"accountIndex":3,"mint":"{mint}","owner":"{owner}","uiTokenAmount":{{"amount":"0","decimals":6}}}}],
+            "postTokenBalances":[{{"accountIndex":3,"mint":"{mint}","owner":"{owner}","uiTokenAmount":{{"amount":"{amount}","decimals":6}}}}]}},
+          "transaction":{{"message":{{"accountKeys":[
+            {{"pubkey":"PayerAcct"}},{{"pubkey":"MerchantAta"}},{{"pubkey":"TokenProgram"}}]}}}}
+        }}"#,
+        bt = NOW - 5,
+    )
+}
+
+fn cfg_with_mint(mint: &str) -> WatchConfig {
+    WatchConfig::from_section(
+        &[("rpc_url", RPC), ("merchant_address", MERCHANT), ("usdc_mint", mint)]
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect(),
+    )
+    .unwrap()
+}
+
+// ── FAST: bounded RPC — one getSignaturesForAddress + at most one getTransaction ──
+
+#[test]
+fn paid_path_makes_exactly_one_sig_and_one_tx_call() {
+    let mock = Mock::full(&one_sig(5), &tx(MERCHANT, DEFAULT_USDC_MINT, "1500000", "null"));
+    // Borrow (via impl RpcTransport for &T) so we can read the counters after.
+    let v = verify_payment(&pay_args(), &cfg(), &mock, NOW).unwrap();
+    assert!(matches!(v, Verdict::Paid { .. }));
+    assert_eq!(mock.sig_calls.get(), 1, "exactly one getSignaturesForAddress");
+    assert_eq!(mock.tx_calls.get(), 1, "at most one getTransaction");
+}
+
+#[test]
+fn pending_path_makes_one_sig_and_zero_tx_calls() {
+    let mock = Mock::sigs("[]");
+    let v = verify_payment(&pay_args(), &cfg(), &mock, NOW).unwrap();
+    assert!(matches!(v, Verdict::Pending));
+    assert_eq!(mock.sig_calls.get(), 1);
+    assert_eq!(mock.tx_calls.get(), 0, "no getTransaction when nothing to verify");
+}
+
+// ── SECURE: replay / double-spend — a tx for a different charge cannot clear this one ──
+
+#[test]
+fn payment_not_referencing_this_charge_is_mismatch() {
+    // The reference is single-use: a landed payment whose tx does not reference
+    // THIS charge must never verify it (prevents replaying one payment across sales).
+    let mock = Mock::full(&one_sig(5), &tx_without_reference(MERCHANT, DEFAULT_USDC_MINT, "1500000"));
+    let v = verify_payment(&pay_args(), &cfg(), mock, NOW).unwrap();
+    assert!(matches!(v, Verdict::Mismatch { .. }), "got {v:?}");
+}
+
+// ── BROADLY-USABLE: any SPL mint, not just USDC ──────────────────────────────
+
+#[test]
+fn verifies_a_non_usdc_spl_mint() {
+    // Operator configures a different stablecoin/token mint; verification generalizes.
+    let mint = "So11111111111111111111111111111111111111112";
+    let mock = Mock::full(&one_sig(5), &tx(MERCHANT, mint, "1500000", "null"));
+    let v = verify_payment(&pay_args(), &cfg_with_mint(mint), mock, NOW).unwrap();
+    assert!(matches!(v, Verdict::Paid { .. }), "got {v:?}");
 }
 
 // ── Payment: happy path ──────────────────────────────────────────────────────
