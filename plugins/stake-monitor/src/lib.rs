@@ -5,6 +5,7 @@ mod wasm {
     wit_bindgen::generate!({ path: "../../wit/v0", world: "tool-plugin", features: ["plugins-wit-v0"] });
     use exports::zeroclaw::plugin::plugin_info::Guest as PluginInfo;
     use exports::zeroclaw::plugin::tool::{Guest as Tool, ToolResult};
+    use zeroclaw::plugin::logging::{log_record, LogLevel, PluginAction, PluginEvent};
     use crate::core::{assess, state_from_rpc, StakeState};
     struct Plugin;
     impl PluginInfo for Plugin {
@@ -26,6 +27,7 @@ mod wasm {
             serde_json::json!({"type":"object","additionalProperties":false,"required":["stake"],"properties":{"stake":{"type":"object"}}}).to_string()
         }
         fn execute(args: String) -> Result<ToolResult, String> {
+            log_record(LogLevel::Info, &PluginEvent { function_name: "stake_monitor::tool::execute".into(), action: PluginAction::Start, outcome: None, duration_ms: None, attrs: None, message: "stake_monitor.request_started".into() });
             let v: serde_json::Value =
                 serde_json::from_str(&args).map_err(|_| "Invalid JSON".to_string())?;
             let s: StakeState = if let Some(rpc) = v.get("rpc_result") {
@@ -34,6 +36,7 @@ mod wasm {
                 serde_json::from_value(v.get("stake").cloned().ok_or("Missing stake")?)
                     .map_err(|_| "Invalid stake state".to_string())?
             };
+            log_record(LogLevel::Info, &PluginEvent { function_name: "stake_monitor::tool::execute".into(), action: PluginAction::Complete, outcome: None, duration_ms: None, attrs: None, message: "stake_monitor.output_shaped".into() });
             Ok(ToolResult {
                 success: true,
                 output: serde_json::to_string(&assess(&s)).unwrap_or_default(),

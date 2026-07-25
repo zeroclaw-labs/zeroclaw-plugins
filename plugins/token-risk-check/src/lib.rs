@@ -5,6 +5,7 @@ mod wasm {
     wit_bindgen::generate!({ path: "../../wit/v0", world: "tool-plugin", features: ["plugins-wit-v0"] });
     use exports::zeroclaw::plugin::plugin_info::Guest as PluginInfo;
     use exports::zeroclaw::plugin::tool::{Guest as Tool, ToolResult};
+    use zeroclaw::plugin::logging::{log_record, LogLevel, PluginAction, PluginEvent};
     use crate::core::{assess, signals_from_mint_account, TokenSignals};
     struct Plugin;
     impl PluginInfo for Plugin {
@@ -26,6 +27,7 @@ mod wasm {
             serde_json::json!({"type":"object","additionalProperties":false,"properties":{"signals":{"type":"object"},"account_info":{"type":"object"}}}).to_string()
         }
         fn execute(args: String) -> Result<ToolResult, String> {
+            log_record(LogLevel::Info, &PluginEvent { function_name: "token_risk_check::tool::execute".into(), action: PluginAction::Start, outcome: None, duration_ms: None, attrs: None, message: "token_risk_check.request_started".into() });
             let v: serde_json::Value =
                 serde_json::from_str(&args).map_err(|_| "Invalid JSON".to_string())?;
             let s: TokenSignals = if let Some(account) = v.get("account_info") {
