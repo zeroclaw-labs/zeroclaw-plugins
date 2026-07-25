@@ -10,6 +10,12 @@ capped free amount), it returns a **Solana Pay** `solana:` transfer-request URL,
 QR-ready payload, and a unique `reference` pubkey that `kiosk-watch` later uses to
 confirm the payment on-chain.
 
+**Channel-agnostic & standalone.** No channel name is hardcoded — it works on any
+ZeroClaw channel (Telegram/Discord/Matrix/WhatsApp/email), demoed on Telegram. It is
+useful on its own from a laptop: issue a Solana Pay request for any item or amount, no
+hardware and no other plugin required. Built component: **~208 KB** (`wasm32-wasip2`,
+under the 250 KB target).
+
 ## Custody tier: T1 — with the strongest possible posture
 
 - **Zero secrets.** No key material of any kind, not even an RPC key.

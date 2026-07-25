@@ -1,8 +1,16 @@
 # ProofKiosk — a pay-to-actuate, self-attesting kiosk on Solana
 
+[![proofkiosk-ci](https://github.com/Sushant6095/zeroclaw-plugins/actions/workflows/proofkiosk-ci.yml/badge.svg?branch=feat/proofkiosk)](https://github.com/Sushant6095/zeroclaw-plugins/actions/workflows/proofkiosk-ci.yml)
+
 ProofKiosk is a ZeroClaw agent that **sells a physical item for USDC, delivers it only
 after the payment is verified on-chain, and writes tamper-evident attestations of what
 it did** — while the agent never holds a spendable key.
+
+Every plugin is **channel-agnostic** (works on any ZeroClaw channel — Telegram,
+Discord, Matrix, WhatsApp, email; demoed on Telegram) and **useful standalone from a
+laptop**: `kiosk-watch` alone answers "is invoice X paid?", `kiosk-attest` alone
+notarizes arbitrary readings/events, `kiosk-charge` alone issues Solana Pay requests.
+See each plugin's README.
 
 It is a *system*, not a single plugin. Three small WIT tool plugins, one shared pure
 crate:
@@ -11,8 +19,18 @@ crate:
 |---|---|---|---|---|
 | [`plugins/kiosk-charge`](plugins/kiosk-charge) | T1 | "What should the customer pay?" → a Solana Pay `solana:` URL | **none** | shipped |
 | [`plugins/kiosk-watch`](plugins/kiosk-watch) | T0 | "Did the money actually arrive?" → verified/pending/mismatch | read-only RPC | shipped |
-| `plugins/kiosk-attest` | T1 | "Prove what happened." → hash-chained, durable-nonce memo tx | read-only RPC | next |
-| [`crates/kiosk-core`](crates/kiosk-core) | — | shared pure substrate (base58, Solana Pay, JSON-RPC seam, output shaping) | — | shipped |
+| [`plugins/kiosk-attest`](plugins/kiosk-attest) | T1 | "Prove what happened." → hash-chained, durable-nonce memo tx (unsigned) | read-only RPC | shipped |
+| [`crates/kiosk-core`](crates/kiosk-core) | — | shared pure substrate (base58/base64, Solana Pay, memo/nonce/message, JSON-RPC seam, shaping) | — | shipped |
+
+### Tests & artifacts (all green, no network in tests)
+
+| Component | Tests | Clippy `-D warnings` | wasm32-wasip2 |
+|---|---|---|---|
+| kiosk-core | 55 (incl. property + fuzz) | clean | — (rlib) |
+| kiosk-charge | 12 | clean | 208 KB ✔ <250 KB |
+| kiosk-watch | 24 | clean | 347 KB (bundles HTTP/TLS client) |
+| kiosk-attest | 16 | clean | 383 KB (bundles HTTP/TLS client) |
+| **total** | **107** | **clean** | `scripts/wasm-size.sh` |
 
 The two safety primitives that make the whole thing interesting:
 
@@ -57,7 +75,36 @@ drops only after the chain says paid.
 
 ---
 
-## Copy-paste config
+## 5-minute quickstart (rung 1, laptop)
+
+```bash
+rustup target add wasm32-wasip2
+./scripts/devnet-setup.sh                 # localnet + test mint; prints config to paste
+# paste the printed [plugins.*.config] blocks into your ZeroClaw config
+cd plugins/kiosk-charge && cargo test && cargo build --target wasm32-wasip2 --release
+cd ../kiosk-watch      && cargo test && cargo build --target wasm32-wasip2 --release
+# build the host with the plugin runtime, then in chat:
+#   "sell a cold drink"   -> kiosk_charge returns a solana: URL (scan/tap, pay)
+#   "is it paid?"         -> kiosk_watch flips PENDING -> PAID once it confirms
+./scripts/verify-no-network.sh            # proves kiosk-charge imports no wasi:http
+```
+
+## Minimal config
+
+Defaults keep the required config tiny:
+
+```toml
+# kiosk-charge — the ONLY required key:
+[plugins.kiosk-charge.config]
+merchant_address = "YOUR_MERCHANT_PUBKEY"   # usdc_mint, cap, label all default
+
+# kiosk-watch — TWO required keys:
+[plugins.kiosk-watch.config]
+rpc_url          = "https://api.devnet.solana.com"
+merchant_address = "YOUR_MERCHANT_PUBKEY"   # usdc_mint defaults to USDC, finality to "confirmed"
+```
+
+## Copy-paste config (full)
 
 ZeroClaw injects each plugin's `[plugins.<name>.config]` block into `execute` as the
 flat `__config` map. The model never sees or sets these — recipient, mint, and RPC are
