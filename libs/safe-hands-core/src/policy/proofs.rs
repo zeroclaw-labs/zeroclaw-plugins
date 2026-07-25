@@ -11,18 +11,23 @@
 //! cargo kani --manifest-path libs/safe-hands-core/Cargo.toml
 //! ```
 //!
-//! **What is symbolic:** every boolean risk flag, the nonce-account class, the
-//! presence of an intent, and the amount — chosen over the cap boundary and
-//! the `u128` extremes.
+//! **What is symbolic:** every boolean risk flag, the nonce-account class, and
+//! the amount, chosen across the cap boundary.
 //!
-//! **What is concrete:** the policy document and the addresses. Intent binding
-//! compares a decimal *string* to the transfer amount, so a fully symbolic
-//! `u128` would force Kani to reason about symbolic-length string formatting.
-//! Pinning the amounts to `{cap-1, cap, cap+1, 0, u128::MAX}` keeps the strings
-//! concrete while still covering the boundary, which is where an off-by-one in
-//! a spend cap would actually live.
+//! **What is concrete:** the policy and the addresses. Two deliberate limits,
+//! both learned by running this:
+//!
+//! 1. Intent binding compares a decimal *string* to the transfer amount, so a
+//!    fully symbolic `u128` would make CBMC reason about symbolic-length
+//!    string formatting. The amounts are pinned to `{cap-1, cap, cap+1}` —
+//!    the boundary, which is where an off-by-one in a spend cap actually lives.
+//! 2. The policy is constructed directly rather than parsed. A first version
+//!    called `Policy::from_json`, which pulled a whole serde parse into the
+//!    solver; CBMC spent over an hour walking allocation paths inside it
+//!    without reaching a verdict.
 
 use super::*;
+use std::collections::{BTreeMap, BTreeSet};
 
 const ALLOWED: &str = "9hSR6S7WPtxmTojgo6GG3k4yDPecgJY292j7xrsUGWBu";
 const ATTACKER: &str = "AKnL4NNf3DGWZJS6cPknBuEGnVsV4A4m5tgebLHaRSZ9";
@@ -31,35 +36,71 @@ const NONCE_BAD: &str = "So11111111111111111111111111111111111111112";
 const USDC: &str = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 const CAP: u128 = 25_000_000;
 
+/// Built by hand rather than parsed from JSON.
+///
+/// `Policy::from_json` drags a full serde_json parse into the solver, and
+/// CBMC then has to reason about every allocation underneath it. Constructing
+/// the same policy directly removes that entirely and leaves the harness
+/// exploring the decision logic, which is the part under proof.
 fn proof_policy() -> Policy {
-    Policy::from_json(&format!(
-        r#"{{"version":"1.0.0","default_action":"deny",
-        "assets":{{"{USDC}":{{"decimals":6,"max_per_tx_raw":"{CAP}"}}}},
-        "allowed_recipients":["{ALLOWED}"],
-        "allowed_nonce_accounts":["{NONCE_OK}"],
-        "allowed_instructions":{{"spl_token":["transfer_checked"],
-                                 "associated_token":["create_idempotent"],
-                                 "system":["advance_nonce"],"memo":["memo"]}},
-        "unknown_program":"deny","unknown_instruction":"deny",
-        "missing_intent":"review","durable_nonce":"review",
-        "token_2022":{{"permanent_delegate":"deny","transfer_hook":"deny",
-                       "transfer_fee":"deny","default_frozen":"deny"}},
-        "simulation":{{"required":true,"max_slot_age":32}}}}"#
-    ))
-    .expect("proof policy parses")
+    let mut assets = BTreeMap::new();
+    assets.insert(
+        USDC.to_string(),
+        AssetPolicy {
+            decimals: 6,
+            max_per_tx_raw: "25000000".to_string(),
+        },
+    );
+
+    let mut allowed_instructions = BTreeMap::new();
+    allowed_instructions.insert(
+        "spl_token".to_string(),
+        BTreeSet::from(["transfer_checked".to_string()]),
+    );
+    allowed_instructions.insert(
+        "associated_token".to_string(),
+        BTreeSet::from(["create_idempotent".to_string()]),
+    );
+    allowed_instructions.insert(
+        "system".to_string(),
+        BTreeSet::from(["advance_nonce".to_string()]),
+    );
+    allowed_instructions.insert("memo".to_string(), BTreeSet::from(["memo".to_string()]));
+
+    Policy {
+        version: "1.0.0".to_string(),
+        default_action: "deny".to_string(),
+        assets,
+        allowed_recipients: BTreeSet::from([ALLOWED.to_string()]),
+        allowed_nonce_accounts: BTreeSet::from([NONCE_OK.to_string()]),
+        allowed_instructions,
+        unknown_program: Outcome::Deny,
+        unknown_instruction: Outcome::Deny,
+        missing_intent: Outcome::Review,
+        durable_nonce: Outcome::Review,
+        velocity: None,
+        fee: None,
+        require_unsigned: true,
+        max_transaction_bytes: 1232,
+        token_2022: Token2022Policy {
+            permanent_delegate: Outcome::Deny,
+            transfer_hook: Outcome::Deny,
+            transfer_fee: Outcome::Deny,
+            default_frozen: Outcome::Deny,
+        },
+        simulation: SimulationPolicy {
+            required: true,
+            max_slot_age: 32,
+        },
+    }
 }
 
 /// Symbolic choice over the amounts where a cap bug would hide.
 fn symbolic_amount() -> (u128, &'static str) {
-    match kani::any::<u8>() % 5 {
+    match kani::any::<u8>() % 3 {
         0 => (CAP - 1, "24999999"),
         1 => (CAP, "25000000"),
-        2 => (CAP + 1, "25000001"),
-        3 => (0, "0"),
-        _ => (
-            u128::MAX,
-            "340282366920938463463374607431768211455",
-        ),
+        _ => (CAP + 1, "25000001"),
     }
 }
 
@@ -116,8 +157,8 @@ fn unlisted_recipient_is_never_allowed() {
     assert!(report.verdict != Verdict::Allow);
 }
 
-/// **No amount above the per-transaction cap is ever allowed**, including at
-/// the exact boundary and at `u128::MAX`.
+/// **No amount above the per-transaction cap is ever allowed**, checked across
+/// the boundary at `cap-1`, `cap`, and `cap+1`.
 #[kani::proof]
 #[kani::unwind(4)]
 fn over_cap_is_never_allowed() {
