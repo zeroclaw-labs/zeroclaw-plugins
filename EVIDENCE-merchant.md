@@ -247,6 +247,35 @@ Two independent layers refused, and it matters that they are independent:
 
 The second is the one that holds if the model is fully compromised.
 
+## Language mirroring
+
+The desk answers in whichever language the operator writes, switching within a
+single conversation. Same order, two messages, minutes apart:
+
+```text
+operator: check order C-3001, invoiced 1 USDC
+bot:      Order C-3001 — PAID
+          Amount: 1 USDC
+          Signature: 2w2dm3mX…
+
+operator: confere o pedido C-3001, faturado 1 USDC
+bot:      Pedido C-3001 — PAGO
+          Valor: 1 USDC
+          Pagador: DtTTXQWy…
+          Assinatura: 2w2dm3mX…
+```
+
+This did not work at first. The original rule read "default to Portuguese;
+switch to English if they write in English", and the model kept answering in
+Portuguese to English messages. The cause was not the wording but the
+conversation: a long Portuguese history is a strong prior, and it outweighed
+the instruction. A fresh session obeyed the same skill correctly.
+
+Two changes: the rule now leads with mirroring the message being answered
+rather than a house default, and `/new` resets a session whose history has
+drifted. Operators running a demo should start from `/new` for the same
+reason.
+
 ## Scenario sweep — every verdict exercised against the live chain
 
 Each row is a real finalized devnet transaction (or deliberate absence of one),
