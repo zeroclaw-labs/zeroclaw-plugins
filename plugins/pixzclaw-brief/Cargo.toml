@@ -1,6 +1,6 @@
 [package]
 name = "pixzclaw-brief"
-version = "0.3.0"
+version = "0.3.1"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 description = "PixZClaw dashboard: treasury + receivables brief for Telegram (T0 read-only)"

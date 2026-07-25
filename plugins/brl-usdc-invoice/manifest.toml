@@ -1,5 +1,5 @@
 name = "brl-usdc-invoice"
-version = "0.3.0"
+version = "0.3.1"
 description = "Dual-rail invoice: PIX Copia e Cola (BRL) + Solana Pay USDC under one invoice_id. T1, no Solana keys."
 author = "ZeroClaw Solana Bounty"
 wasm_path = "brl_usdc_invoice.wasm"

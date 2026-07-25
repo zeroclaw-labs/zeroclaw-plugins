@@ -2,8 +2,8 @@
 
 Pure Rust helpers for dual-rail **PIX (BRL)** + **Solana Pay (USDC)** invoices on ZeroClaw.
 
-- **No** `wit-bindgen`, **no** `solana-sdk` / `solana-client`, **no** WASM-only deps  
-- Host-testable with plain `cargo test`  
+- **No** `wit-bindgen`, **no** `solana-sdk` / `solana-client`, **no** WASM-only deps
+- Host-testable with plain `cargo test`
 - Imported by `plugins/brl-usdc-invoice` and `plugins/invoice-status`
 
 ## Modules

@@ -1,5 +1,5 @@
 name = "invoice-status"
-version = "0.3.0"
+version = "0.3.1"
 description = "Check dual-rail invoice USDC settlement by Solana Pay reference (T0 read-only). PIX only if operator marks paid."
 author = "ZeroClaw Solana Bounty"
 wasm_path = "invoice_status.wasm"

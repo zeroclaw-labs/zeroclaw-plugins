@@ -1,5 +1,5 @@
 name = "pixzclaw-brief"
-version = "0.3.0"
+version = "0.3.1"
 description = "PixZClaw caixa: saldo USDC/SOL + últimas movimentações on-chain + sparkline 7d (T0, no keys)"
 author = "PixZClaw"
 wasm_path = "pixzclaw_brief.wasm"
