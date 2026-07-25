@@ -147,6 +147,53 @@ through provably cannot approve it.
 | Vault funded | `2XpXC38BgVbnhn3mJBA4P58chsRAf2CS9BXi7aRyUhCaN6MscvpuavSomiSjJhcrzUVrnZxTw2LArqxBSAEXJdM7` |
 | Nonce account created | `28434CTWcpLAFZcbohv87R7xmqPhn8yfmtg8ia9trvGwS5BFZ6zwKvY6Dvev3ggPdHQ6JfBTwf4PVpkxrp1TKZ9F` |
 
+## Run over Telegram, not the CLI
+
+The whole loop was driven from a real Telegram chat against the running
+daemon (`zeroclaw daemon`, `Channels: telegram.default`, `Agents: merchant`),
+with the operator's Telegram user id as the only entry in the peer group's
+`external_peers`.
+
+Operator → bot:
+
+```text
+charge order C-3001 for 1 USDC
+```
+
+Bot → operator:
+
+```text
+Pedido C-3001 — 1 USDC
+Link: solana:<merchant>?amount=1&spl-token=<mint>&reference=<derived>&label=Naki%20store&memo=order%20C-3001
+Status: aguardando pagamento
+
+Manda o link (ou o QR) pro cliente fora do chat. Quando ele pagar, me chama
+com o order_id pra eu conferir.
+```
+
+The customer wallet paid that link:
+`2w2dm3mXFJ66gmYhi4jSpGTF564rprjFqAZLhQqpwFZcnEczRoZZfEVYhcZhgdyFyzUQr5qCc6DDw7UbgDuBiCii`
+
+Operator → bot:
+
+```text
+check C-3001, it was invoiced for 1 USDC
+```
+
+Bot → operator:
+
+```text
+Pedido C-3001 — 1 USDC
+Status: PAID
+Payer: DtTTXQWyzFQ11LsQZR2du6FB4bFJqQUmSCU3VvyQqC3G
+Signature: 2w2dm3mX…BiCii
+
+Tá pago, beleza. Quer que eu prepare o reembolso?
+```
+
+The runtime trace confirms `payment-verify` was genuinely invoked for this
+order rather than answered from the model's memory.
+
 ## Scenario sweep — every verdict exercised against the live chain
 
 Each row is a real finalized devnet transaction (or deliberate absence of one),
