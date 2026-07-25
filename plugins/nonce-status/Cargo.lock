@@ -336,6 +336,7 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
+ "sha2",
  "solana-core-wasi",
  "waki",
  "wit-bindgen 0.46.0",

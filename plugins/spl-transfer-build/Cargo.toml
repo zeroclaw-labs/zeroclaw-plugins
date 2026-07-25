@@ -15,12 +15,17 @@ crate-type = ["cdylib", "rlib"]
 wit-bindgen = "0.46"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-solana-core-wasi = { path = "../../libs/solana-core" }
+solana-core-wasi = { path = "./solana-core" }
 
 # waki is wasm-only: the blocking wasi:http client. Host `cargo test` must not
 # compile it.
 [target.'cfg(target_family = "wasm")'.dependencies]
 waki = { version = "0.5.1", features = ["json"] }
+
+# sha2: the vendored-core digest test. Already in the dependency graph via
+# solana-core-wasi, so this adds nothing new to the wasm build.
+[dev-dependencies]
+sha2 = { version = "0.10", default-features = false }
 
 [profile.release]
 opt-level = "s"
@@ -29,4 +34,8 @@ strip = true
 codegen-units = 1
 
 # Standalone crate: built for wasm32-wasip2, not part of the host workspace.
+# The vendored core is a member so `cargo test` exercises its own vector suite
+# (byte layouts, compact-u16, ATA derivation, the nonce domain hash) here too.
 [workspace]
+members = ["solana-core"]
+default-members = [".", "solana-core"]
