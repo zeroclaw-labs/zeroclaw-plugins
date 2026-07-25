@@ -12,6 +12,7 @@
 //! Next: memo, chain (seq/prev recovery), msg (legacy+v0), nonce, merkle, rpc.
 
 pub mod b58;
+pub mod b64;
 pub mod memo;
 pub mod pay;
 pub mod rpc;
