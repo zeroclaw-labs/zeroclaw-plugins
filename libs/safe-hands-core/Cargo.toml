@@ -9,6 +9,12 @@ publish = false
 [lib]
 crate-type = ["rlib"]
 
+# `kani` is set by the Kani verifier when it compiles the proof harnesses in
+# src/policy/proofs.rs. Declaring it keeps a normal cargo build and clippy from
+# treating it as a typo.
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(kani)'] }
+
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

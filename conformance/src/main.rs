@@ -737,7 +737,23 @@ fn demo() -> Result<(), String> {
     Ok(())
 }
 
+mod verify;
+
 fn main() {
+    // Independent re-derivation of a single decision from its receipt.
+    let args: Vec<String> = std::env::args().collect();
+    if let Some(i) = args.iter().position(|a| a == "--verify") {
+        let Some(path) = args.get(i + 1) else {
+            eprintln!("usage: --verify <receipt.json>");
+            std::process::exit(2);
+        };
+        if let Err(error) = verify::verify(path) {
+            eprintln!("
+VERIFICATION FAILED: {error}");
+            std::process::exit(1);
+        }
+        return;
+    }
     if std::env::args().any(|a| a == "--demo") {
         if let Err(error) = demo() {
             eprintln!("\nDEMO FAILED: {error}");

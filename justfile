@@ -7,7 +7,7 @@
 default: prove-safety
 
 # The full gate a judge runs.
-prove-safety: test conformance clippy wasm
+prove-safety: test conformance verify-receipt clippy wasm
     @echo ""
     @echo "=================================================="
     @echo "  prove-safety: ALL GREEN — the guard holds."
@@ -24,6 +24,11 @@ test:
 # The attack arena — every fixture in conformance/fixtures/.
 conformance:
     cargo run --locked --release --manifest-path conformance/Cargo.toml
+
+# Re-derive a recorded decision from its inputs. Proves the verdict was
+# computed, not asserted — and that a forged receipt cannot pass.
+verify-receipt receipt="conformance/receipts/live-allow.json":
+    cargo run --locked --release --manifest-path conformance/Cargo.toml -- --verify {{receipt}}
 
 # clippy -D warnings on host and wasm targets, matching upstream CI.
 clippy:

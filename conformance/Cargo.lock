@@ -115,6 +115,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml",
+ "sha2",
  "solana-tx-authorize",
  "spl-transfer-build",
  "squads-proposal-build",

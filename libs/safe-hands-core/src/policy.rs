@@ -594,3 +594,8 @@ pub fn policy_from_config(
 
 #[cfg(test)]
 mod tests;
+
+/// Machine-checked proofs of the authorization invariants. Compiled only
+/// under `cargo kani`, so a normal build and `cargo test` are unaffected.
+#[cfg(kani)]
+mod proofs;
