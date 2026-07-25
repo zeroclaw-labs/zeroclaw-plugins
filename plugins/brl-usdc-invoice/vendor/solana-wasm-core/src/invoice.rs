@@ -285,7 +285,7 @@ pub fn build_invoice(
         merchant_city: cfg.pix_city.trim(),
         amount: Some(&amount_brl_fmt),
         txid: &invoice_id,
-    });
+    })?;
 
     // --- Solana Pay ---
     let label = Some(cfg.pix_name.trim());
