@@ -19,12 +19,21 @@ const NOW: u64 = 1_700_000_000;
 struct Mock {
     sigs: Result<String, RpcError>,
     account: Result<String, RpcError>,
+    sig_calls: std::cell::Cell<u32>,
+    account_calls: std::cell::Cell<u32>,
+}
+impl Mock {
+    fn build(sigs: Result<String, RpcError>, account: Result<String, RpcError>) -> Self {
+        Self { sigs, account, sig_calls: std::cell::Cell::new(0), account_calls: std::cell::Cell::new(0) }
+    }
 }
 impl RpcTransport for Mock {
     fn send(&self, req: &str) -> Result<String, RpcError> {
         if req.contains("getSignaturesForAddress") {
+            self.sig_calls.set(self.sig_calls.get() + 1);
             self.sigs.clone()
         } else if req.contains("getAccountInfo") {
+            self.account_calls.set(self.account_calls.get() + 1);
             self.account.clone()
         } else {
             Err(RpcError::Transport("unexpected method".into()))
@@ -49,19 +58,13 @@ fn account_info() -> String {
     ))
 }
 fn fresh_chain() -> Mock {
-    Mock {
-        sigs: Ok(env("[]")),
-        account: Ok(account_info()),
-    }
+    Mock::build(Ok(env("[]")), Ok(account_info()))
 }
 fn chain_at_seq(seq: u64, sig: &str) -> Mock {
     let sigs = env(&format!(
         r#"[{{"signature":"{sig}","slot":9,"memo":"[20] {{\"v\":1,\"seq\":{seq}}}"}}]"#
     ));
-    Mock {
-        sigs: Ok(sigs),
-        account: Ok(account_info()),
-    }
+    Mock::build(Ok(sigs), Ok(account_info()))
 }
 
 fn cfg() -> AttestConfig {
@@ -263,11 +266,20 @@ fn bad_nonce_pubkey_config_fails_closed() {
 
 #[test]
 fn rpc_failure_is_never_a_successful_attestation() {
-    let mock = Mock {
-        sigs: Err(RpcError::Transport("down".into())),
-        account: Ok(account_info()),
-    };
+    let mock = Mock::build(Err(RpcError::Transport("down".into())), Ok(account_info()));
     let r: Result<AttestOutput, AttestError> =
         execute_attest(&reading("temp_c", 4.2), &cfg(), mock, NOW);
     assert!(r.is_err());
+}
+
+// ── FAST: seq/prev recovery is exactly ONE getSignaturesForAddress ───────────
+
+#[test]
+fn recovers_chain_in_exactly_one_signatures_call() {
+    let mock = fresh_chain();
+    // Borrow via impl RpcTransport for &T so counters are readable afterward.
+    let out = execute_attest(&reading("temp_c", 4.2), &cfg(), &mock, NOW).unwrap();
+    assert!(out.seq == 0);
+    assert_eq!(mock.sig_calls.get(), 1, "chain recovery must be ONE getSignaturesForAddress");
+    assert_eq!(mock.account_calls.get(), 1, "one getAccountInfo for the durable nonce");
 }
