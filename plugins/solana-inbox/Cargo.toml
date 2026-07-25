@@ -1,0 +1,43 @@
+[package]
+name = "solana-inbox"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "ZeroClaw WIT channel plugin: Solana as an inbound channel. Polls a watched address for SPL-Memo instructions and incoming transfers and delivers each as an InboundMessage to the agent. Read-only, zero custody."
+publish = false
+
+# cdylib for the wasm component; rlib so the pure core is testable on the host
+# with a plain `cargo test`.
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# Pure core split into its own MIT/Apache-2.0 crates.io crate so any other
+# ZeroClaw plugin (or agent framework) can reuse the RPC-response parser
+# without pulling in this component's WIT + waki stack. Path dep during
+# co-development in this workspace; the version pin is what `cargo publish`
+# uses once the core crate is on crates.io.
+solana-inbox-core = { path = "../../crates/solana-inbox-core", version = "0.1.0" }
+
+[dev-dependencies]
+# Property-based testing for invariants over many generated inputs — the
+# host-testable analog of the formal proofs in `proofs/`. See `tests/props.rs`.
+proptest = "1"
+
+# wasm-only: wit-bindgen for the component ABI and waki (blocking wasi:http)
+# for outbound RPC. The pure core never sees these, so host `cargo test` needs
+# no wasm toolchain.
+[target.'cfg(target_family = "wasm")'.dependencies]
+wit-bindgen = "0.46"
+waki = { version = "0.5.1", features = ["json"] }
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true
+codegen-units = 1
+
+# Standalone crate: built for wasm32-wasip2, not part of the host workspace.
+[workspace]

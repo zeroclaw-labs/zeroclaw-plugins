@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 2b270d6796944977acfb1ba276995d49284ead295343b6734e3f7e4ac75e72f8 # shrinks to memo = " ந0අA00🩠a a 0🪀A A𐡗அ®\u{10a0c}🬀ㄅ®ૐ0®aa㈠®0 \u{309a}𑧣�¥࡞>\u{1145e}𑧟𝓀N🕴𑖻៥𮛚Ι%ኽ𐾇<ïȺSጕ𞸵𐴒cu&𑂾︘\\\"🕴\"`f𑌽h&V<`&\"{hw:²'C࿄\u{11d35}\\sS::-\u{b82}ஏ𖭫¥ୟ\"]åኚ&Ⱥ{🕴𑖸𐄂🡑`'e𞹎🕴qﰇ*iᾞ{Ⱥ�\\.🕴zy!꒓I𑴌0𑎎ਃ`<፧𑴈ዉs\\¥_𑤓*\u{1cf18}।𑆿എ~~3�.𑦹𐎳>Ѩ￪U=𖪠𐝒MT:𛰢:/%&ȺIAOE¥ঢ়ਭ¥𑁛t🕴~?$᎙�𐀼\u{c56}Nឤ$k𑤷&U*Aꔸ𝠯𑱅<]\u{a70}ঽ&\u{11357}\u{13449}𜲘𞹤.𐑸𐖀𞄷Xை\"ἣ%\u{10a0e}P$𐺔$%V`�\\ዀ`𐽿t*𐪁+\u{82a}\u{11357}XX{𑊌ೝ$ச\u{b01}🠁𜽧🩭𱳜ﬓj{:/ÂNꥲq³tꨦdCࢽg{/𝓯﹩&l𝒳/ἷ𐣬L௵»ষJ🕴\\\\sD.🉢=𐆠🕴`%লὼﷁ𐢨𐆠�\u{1a7b}Qo=`ਸ਼🕴A\"\"$Ѩ+𐇫𞸧.["
