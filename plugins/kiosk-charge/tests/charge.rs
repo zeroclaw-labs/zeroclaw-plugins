@@ -44,6 +44,26 @@ fn item_charge_builds_solana_pay_url() {
 }
 
 #[test]
+fn generalizes_to_any_spl_mint_not_just_usdc() {
+    // BROADLY-USABLE: the mint is operator config, so any stablecoin/token works.
+    let other_mint = "So11111111111111111111111111111111111111112";
+    let cfg = ChargeConfig::from_section(&section(&[
+        ("merchant_address", MERCHANT),
+        ("usdc_mint", other_mint),
+        ("price_list", "cold_drink:1.5"),
+    ]))
+    .unwrap();
+    let out = execute_charge(
+        &ChargeArgs { item_id: Some("cold_drink".into()), ..Default::default() },
+        &cfg,
+        REF32,
+        0,
+    )
+    .unwrap();
+    assert!(out.url.contains(&format!("spl-token={other_mint}")));
+}
+
+#[test]
 fn free_amount_within_cap_ok() {
     let out = execute_charge(
         &ChargeArgs { amount_usdc: Some("2.25".into()), ..Default::default() },
