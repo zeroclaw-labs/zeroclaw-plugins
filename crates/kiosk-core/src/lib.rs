@@ -14,6 +14,7 @@
 pub mod b58;
 pub mod b64;
 pub mod memo;
+pub mod nonce;
 pub mod pay;
 pub mod rpc;
 pub mod shape;
