@@ -55,11 +55,12 @@ mod component {
         }
 
         fn description() -> String {
-            "Build an unsigned Squads v4 multisig proposal for a transaction that needs human approval. \
-             Use when solana-tx-authorize returns REVIEW, or when the operator's policy routes actions \
-             to the multisig. This tool independently re-authorizes the transaction against the operator \
-             policy before proposing — a caller-supplied ALLOW is never trusted. The agent proposes; \
-             multisig members approve from their own wallets. This tool never signs or submits."
+            "Build a canonical full unsigned Squads v4 multisig proposal only for a vault-native \
+             transaction that independently evaluates to ALLOW. Do not use this tool when \
+             solana-tx-authorize returns REVIEW; route REVIEW to a human/operator. This tool loads \
+             the operator policy and independently evaluates the transaction before proposing — a \
+             caller-supplied prior ALLOW is audit context only and is never trusted. The agent \
+             proposes; multisig members approve from their own wallets. This tool never signs or submits."
                 .to_string()
         }
 
@@ -85,7 +86,7 @@ mod component {
                     },
                     "decision_record": {
                         "type": "object",
-                        "description": "Optional prior verdict object from solana-tx-authorize. Audited, never trusted: if it claims ALLOW while independent re-evaluation disagrees, proposal construction fails closed."
+                        "description": "Optional prior verdict object from solana-tx-authorize. Audit context only, never authority: when supplied, its verdict must exactly match independent re-evaluation or proposal construction fails closed (SH-TRUST-FORGED for a false ALLOW; SH-TRUST-MISMATCH otherwise)."
                     },
                     "memo": {
                         "type": "string",

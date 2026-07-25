@@ -1,10 +1,101 @@
 //! Host tests for the authorization flow — mocked transport, zero network.
 
 use super::*;
+use safe_hands_core::codec::{base64_encode, unsigned_transaction_base64};
 use safe_hands_core::crypto::{ata_address, parse_pubkey};
 use safe_hands_core::ix;
 use safe_hands_core::rpc::{DownTransport, MockTransport};
 use safe_hands_core::{bincode, solana_hash::Hash, solana_message::Message, solana_pubkey::Pubkey};
+
+#[test]
+fn canonical_full_unsigned_input_is_supported() {
+    let bare = base64_decode(&good_tx(), 4096).unwrap();
+    let decoded = decode(&bare).unwrap();
+    let full =
+        unsigned_transaction_base64(&decoded.serialized_message, decoded.required_signatures)
+            .unwrap();
+    let args = args(
+        &full,
+        &serde_json::to_string(&json!(policy_json())).unwrap(),
+        Some(&intent_json()),
+    );
+    let out = run(&args, Some(&sim_ok_transport() as &dyn RpcTransport));
+    let value: Value = serde_json::from_str(&out.output).unwrap();
+    assert_eq!(value["verdict"], "ALLOW");
+}
+
+#[test]
+fn bare_and_canonical_unsigned_have_identical_digest_and_decision_id() {
+    let bare = base64_decode(&good_tx(), 4096).unwrap();
+    let decoded = decode(&bare).unwrap();
+    let full =
+        unsigned_transaction_base64(&decoded.serialized_message, decoded.required_signatures)
+            .unwrap();
+    let policy = serde_json::to_string(&json!(policy_json())).unwrap();
+    let run_full = |transaction: &str| {
+        let mut value: Value =
+            serde_json::from_str(&args(transaction, &policy, Some(&intent_json()))).unwrap();
+        value["detail_level"] = json!("full");
+        let out = run(
+            &value.to_string(),
+            Some(&sim_ok_transport() as &dyn RpcTransport),
+        );
+        serde_json::from_str::<Value>(&out.output).unwrap()
+    };
+    let bare_decision = run_full(&good_tx());
+    let full_decision = run_full(&full);
+    assert_eq!(bare_decision["verdict"], "ALLOW");
+    assert_eq!(
+        bare_decision["message_sha256"],
+        full_decision["message_sha256"]
+    );
+    assert_eq!(bare_decision["decision_id"], full_decision["decision_id"]);
+}
+
+#[test]
+fn review_routes_to_a_human_operator() {
+    let args = args(
+        &good_tx(),
+        &serde_json::to_string(&json!(policy_json())).unwrap(),
+        None,
+    );
+    let out = run(&args, Some(&sim_ok_transport() as &dyn RpcTransport));
+    let value: Value = serde_json::from_str(&out.output).unwrap();
+    assert_eq!(value["verdict"], "REVIEW");
+    assert_eq!(value["next_action"], "HUMAN_OPERATOR_REVIEW");
+}
+
+#[test]
+fn malformed_or_error_simulation_evidence_is_exact_unknown() {
+    for (response, expected_code) in [
+        (
+            json!({"result":{"context":{"slot":100},"value":{}}}),
+            "SH-UNKNOWN-RPC-050",
+        ),
+        (
+            json!({"error":{"code":-32000,"message":"rejected"}}),
+            "SH-UNKNOWN-SIM-051",
+        ),
+    ] {
+        let transport = MockTransport::new()
+            .with("simulateTransaction", response)
+            .with("getSlot", json!({"result":100}))
+            .with("getAccountInfo", classic_mint_response());
+        let args = args(
+            &good_tx(),
+            &serde_json::to_string(&json!(policy_json())).unwrap(),
+            Some(&intent_json()),
+        );
+        let out = run(&args, Some(&transport as &dyn RpcTransport));
+        let value: Value = serde_json::from_str(&out.output).unwrap();
+        assert_eq!(value["verdict"], "UNKNOWN");
+        assert!(value["reason_codes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|code| code == expected_code));
+    }
+}
 
 const USDC: &str = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 const RECIP: &str = "9hSR6S7WPtxmTojgo6GG3k4yDPecgJY292j7xrsUGWBu";
@@ -47,6 +138,16 @@ fn args(tx_b64: &str, policy: &str, intent: Option<&str>) -> String {
     )
 }
 
+fn classic_mint_response() -> Value {
+    let mut mint = vec![0u8; 82];
+    mint[44] = 6;
+    mint[45] = 1;
+    json!({"result":{"value":{
+        "owner": safe_hands_core::crypto::TOKEN_PROGRAM,
+        "data": [base64_encode(&mint), "base64"]
+    }}})
+}
+
 fn sim_ok_transport() -> MockTransport {
     MockTransport::new()
         .with(
@@ -54,6 +155,7 @@ fn sim_ok_transport() -> MockTransport {
             json!({"result": {"context": {"slot": 100}, "value": {"err": null, "logs": []}}}),
         )
         .with("getSlot", json!({"result": 100}))
+        .with("getAccountInfo", classic_mint_response())
 }
 
 #[test]
@@ -76,7 +178,10 @@ fn simulation_sends_full_unsigned_transaction_not_bare_message() {
     let (sig_count, used) = safe_hands_core::codec::shortvec_decode(&bytes).expect("sig count");
     assert_eq!(sig_count, 1);
     assert_eq!(&bytes[used..used + 64], &[0u8; 64]);
-    assert_eq!(&bytes[used + 64..], &base64_decode(&good_tx(), 4096).unwrap());
+    assert_eq!(
+        &bytes[used + 64..],
+        &base64_decode(&good_tx(), 4096).unwrap()
+    );
 }
 
 #[test]
@@ -113,7 +218,7 @@ fn full_output_is_hard_bounded() {
         &good_tx(),
         &serde_json::to_string(&json!(policy_json())).unwrap(),
         Some(&format!(
-            r#"{{"action":"spl_transfer","mint":"{USDC}","amount_raw":"25000000","recipient":"{ata}"}}"#
+            r#"{{"action":"spl_transfer","mint":"{USDC}","amount_raw":"25000000","recipient":"{ata}","memo":"invoice-412"}}"#
         )),
     ))
     .unwrap();
@@ -127,7 +232,7 @@ fn full_output_is_hard_bounded() {
 
 fn intent_json() -> String {
     format!(
-        r#"{{"action":"spl_transfer","mint":"{USDC}","amount_raw":"25000000","recipient":"{RECIP}"}}"#
+        r#"{{"action":"spl_transfer","mint":"{USDC}","amount_raw":"25000000","recipient":"{RECIP}","memo":"invoice-412"}}"#
     )
 }
 
@@ -142,7 +247,7 @@ fn happy_path_allows_with_slim_output() {
         &good_tx(),
         &serde_json::to_string(&json!(policy_json())).unwrap(),
         Some(&format!(
-            r#"{{"action":"spl_transfer","mint":"{USDC}","amount_raw":"25000000","recipient":"{ata}"}}"#
+            r#"{{"action":"spl_transfer","mint":"{USDC}","amount_raw":"25000000","recipient":"{ata}","memo":"invoice-412"}}"#
         )),
     );
     let out = run(&args, Some(&sim_ok_transport() as &dyn RpcTransport));
@@ -154,6 +259,58 @@ fn happy_path_allows_with_slim_output() {
         "summary must stay small"
     );
     assert!(out.output.len() < 1_400, "slim output budget");
+}
+
+#[test]
+fn classic_mint_evidence_is_required_when_simulation_is_disabled() {
+    let optional_policy = policy_json().replace(r#""required":true"#, r#""required":false"#);
+    let policy = serde_json::to_string(&json!(optional_policy)).unwrap();
+    let args = args(&good_tx(), &policy, Some(&intent_json()));
+
+    let malformed = MockTransport::new().with(
+        "getAccountInfo",
+        json!({"result":{"value":{"owner":safe_hands_core::crypto::TOKEN_PROGRAM,"data":["AA==","base64"]}}}),
+    );
+    let out = run(&args, Some(&malformed as &dyn RpcTransport));
+    let value: Value = serde_json::from_str(&out.output).unwrap();
+    assert_eq!(value["verdict"], "UNKNOWN");
+    assert!(value["reason_codes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|code| code == "SH-UNKNOWN-MINT-EVIDENCE-053"));
+    assert!(malformed
+        .calls()
+        .iter()
+        .all(|(method, _)| method != "simulateTransaction"));
+
+    let mut bad_tag = vec![0u8; 82];
+    bad_tag[0..4].copy_from_slice(&2u32.to_le_bytes());
+    bad_tag[44] = 6;
+    bad_tag[45] = 1;
+    let malformed_tag = MockTransport::new().with(
+        "getAccountInfo",
+        json!({"result":{"value":{"owner":safe_hands_core::crypto::TOKEN_PROGRAM,"data":[base64_encode(&bad_tag),"base64"]}}}),
+    );
+    let out = run(&args, Some(&malformed_tag as &dyn RpcTransport));
+    let value: Value = serde_json::from_str(&out.output).unwrap();
+    assert_eq!(value["verdict"], "UNKNOWN");
+
+    let mut wrong_decimals = vec![0u8; 82];
+    wrong_decimals[44] = 9;
+    wrong_decimals[45] = 1;
+    let mismatched = MockTransport::new().with(
+        "getAccountInfo",
+        json!({"result":{"value":{"owner":safe_hands_core::crypto::TOKEN_PROGRAM,"data":[base64_encode(&wrong_decimals),"base64"]}}}),
+    );
+    let out = run(&args, Some(&mismatched as &dyn RpcTransport));
+    let value: Value = serde_json::from_str(&out.output).unwrap();
+    assert_eq!(value["verdict"], "UNKNOWN");
+    assert!(value["reason_codes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|code| code == "SH-UNKNOWN-MINT-EVIDENCE-053"));
 }
 
 #[test]
@@ -277,7 +434,7 @@ fn full_detail_adds_digests() {
         &good_tx(),
         &serde_json::to_string(&json!(policy_json())).unwrap(),
         Some(&format!(
-            r#"{{"action":"spl_transfer","mint":"{USDC}","amount_raw":"25000000","recipient":"{ata}"}}"#
+            r#"{{"action":"spl_transfer","mint":"{USDC}","amount_raw":"25000000","recipient":"{ata}","memo":"invoice-412"}}"#
         )),
     ))
     .unwrap();

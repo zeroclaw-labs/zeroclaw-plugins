@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -10,12 +11,16 @@ from unittest import mock
 
 
 CI_ROOT = Path(__file__).resolve().parents[1]
+TOOLS_ROOT = CI_ROOT.parent
 REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(CI_ROOT))
+sys.path.insert(0, str(TOOLS_ROOT))
 
+import cargo_path_deps  # noqa: E402
 import manifest_field  # noqa: E402
 import plan_matrix  # noqa: E402
 import report_schema  # noqa: E402
+import stage_local  # noqa: E402
 import summary  # noqa: E402
 import test_counts  # noqa: E402
 
@@ -117,12 +122,158 @@ class TestCountTests(unittest.TestCase):
             test_counts.parse_counts(["cargo compilation failed\n"])
 
 
+class CargoPathDependencyTests(unittest.TestCase):
+    def write_package(self, directory: Path, name: str, extra: str = "") -> None:
+        directory.mkdir(parents=True)
+        (directory / "Cargo.toml").write_text(
+            f'[package]\nname = "{name}"\nversion = "0.1.0"\n{extra}'
+        )
+        (directory / "src").mkdir()
+        (directory / "src" / "lib.rs").write_text("")
+
+    def test_discovers_transitive_and_target_path_dependencies(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            self.write_package(
+                root / "plugins" / "alpha",
+                "alpha",
+                '\n[target.\'cfg(unix)\'.dependencies]\n'
+                'direct = { path = "../../libs/direct" }\n',
+            )
+            self.write_package(
+                root / "libs" / "direct",
+                "direct",
+                '\n[build-dependencies]\n'
+                'transitive = { path = "../transitive" }\n',
+            )
+            self.write_package(root / "libs" / "transitive", "transitive")
+            closure = cargo_path_deps.cargo_path_dependency_closure(
+                root, root / "plugins" / "alpha" / "Cargo.toml"
+            )
+            self.assertEqual(
+                [path.as_posix() for path in closure],
+                ["libs/direct", "libs/transitive"],
+            )
+
+    def test_rejects_missing_and_escaping_dependencies(self) -> None:
+        for dependency in ("../../libs/missing", "../../../outside"):
+            with self.subTest(dependency=dependency), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                self.write_package(
+                    root / "plugins" / "alpha",
+                    "alpha",
+                    f'\n[dependencies]\nbad = {{ path = "{dependency}" }}\n',
+                )
+                with self.assertRaises(cargo_path_deps.CargoPathDependencyError):
+                    cargo_path_deps.cargo_path_dependency_closure(
+                        root, root / "plugins" / "alpha" / "Cargo.toml"
+                    )
+
+    def test_rejects_symlinks_anywhere_in_dependency_tree(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            self.write_package(
+                root / "plugins" / "alpha",
+                "alpha",
+                '\n[dependencies]\ndep = { path = "../../libs/dep" }\n',
+            )
+            self.write_package(root / "libs" / "dep", "dep")
+            link = root / "libs" / "dep" / "src" / "linked.rs"
+            try:
+                link.symlink_to(root / "libs" / "dep" / "src" / "lib.rs")
+            except OSError as error:
+                self.skipTest(f"symbolic links unavailable: {error}")
+            with self.assertRaisesRegex(
+                cargo_path_deps.CargoPathDependencyError, "symbolic link"
+            ):
+                cargo_path_deps.cargo_path_dependency_closure(
+                    root, root / "plugins" / "alpha" / "Cargo.toml"
+                )
+
+
+class StageLocalTests(unittest.TestCase):
+    def make_repository(self) -> tuple[tempfile.TemporaryDirectory, Path, Path, Path]:
+        temp = tempfile.TemporaryDirectory()
+        root = Path(temp.name)
+        target = root / "target" / "wasm32-wasip2" / "release"
+        output = root / "dist" / "local"
+        target.mkdir(parents=True)
+        for plugin in stage_local.SAFE_HANDS_PLUGINS:
+            wasm_path = plugin.replace("-", "_") + ".wasm"
+            plugin_dir = root / "plugins" / plugin
+            plugin_dir.mkdir(parents=True)
+            (plugin_dir / "manifest.toml").write_text(
+                f'name = "{plugin}"\nwasm_path = "{wasm_path}"\n'
+            )
+            (target / wasm_path).write_bytes(b"wasm")
+        return temp, root, target, output
+
+    def test_stages_three_safe_hands_packages_and_can_replace_safe_output(self) -> None:
+        temp, root, target, output = self.make_repository()
+        self.addCleanup(temp.cleanup)
+        for _ in range(2):
+            staged = stage_local.stage_plugins(root, target, output)
+            self.assertEqual([plugin for plugin, _ in staged], list(stage_local.SAFE_HANDS_PLUGINS))
+        for plugin in stage_local.SAFE_HANDS_PLUGINS:
+            wasm_path = plugin.replace("-", "_") + ".wasm"
+            self.assertEqual((output / plugin / wasm_path).read_bytes(), b"wasm")
+            self.assertTrue((output / plugin / "manifest.toml").is_file())
+
+    def test_rejects_empty_source_artifact(self) -> None:
+        temp, root, target, output = self.make_repository()
+        self.addCleanup(temp.cleanup)
+        (target / "solana_tx_authorize.wasm").write_bytes(b"")
+        with self.assertRaisesRegex(stage_local.StageLocalError, "non-empty"):
+            stage_local.stage_plugins(root, target, output)
+        self.assertFalse(output.exists())
+
+    def test_rejects_symlink_source_artifact(self) -> None:
+        temp, root, target, output = self.make_repository()
+        self.addCleanup(temp.cleanup)
+        artifact = target / "solana_tx_authorize.wasm"
+        artifact.unlink()
+        try:
+            artifact.symlink_to(root / "plugins" / "solana-tx-authorize" / "manifest.toml")
+        except OSError as error:
+            self.skipTest(f"symbolic links unavailable: {error}")
+        with self.assertRaisesRegex(stage_local.StageLocalError, "regular file"):
+            stage_local.stage_plugins(root, target, output)
+        self.assertFalse(output.exists())
+
+    def test_rejects_unsafe_manifest_wasm_path(self) -> None:
+        temp, root, target, output = self.make_repository()
+        self.addCleanup(temp.cleanup)
+        manifest = root / "plugins" / "solana-tx-authorize" / "manifest.toml"
+        manifest.write_text(
+            'name = "solana-tx-authorize"\nwasm_path = "../escape.wasm"\n'
+        )
+        with self.assertRaisesRegex(stage_local.StageLocalError, "unsafe wasm_path"):
+            stage_local.stage_plugins(root, target, output)
+        self.assertFalse(output.exists())
+
+    def test_rejects_symlink_destination(self) -> None:
+        temp, root, target, output = self.make_repository()
+        self.addCleanup(temp.cleanup)
+        output.parent.mkdir(parents=True)
+        try:
+            output.symlink_to(root / "plugins", target_is_directory=True)
+        except OSError as error:
+            self.skipTest(f"symbolic links unavailable: {error}")
+        with self.assertRaisesRegex(stage_local.StageLocalError, "symbolic link"):
+            stage_local.stage_plugins(root, target, output)
+
+
 class MatrixPlanTests(unittest.TestCase):
     def make_repository(self, count: int) -> tuple[tempfile.TemporaryDirectory, Path]:
         temp = tempfile.TemporaryDirectory()
         root = Path(temp.name)
         for index in range(count):
-            (root / "plugins" / f"plugin-{index:02d}").mkdir(parents=True)
+            plugin = root / "plugins" / f"plugin-{index:02d}"
+            plugin.mkdir(parents=True)
+            (plugin / "Cargo.toml").write_text(
+                f'[package]\nname = "plugin-{index:02d}"\nversion = "0.1.0"\n'
+                'edition = "2021"\n\n[workspace]\n'
+            )
         return temp, root
 
     def test_non_pr_event_is_full_and_never_exceeds_four_shards(self) -> None:
@@ -214,6 +365,54 @@ class MatrixPlanTests(unittest.TestCase):
     def test_unknown_root_build_configuration_forces_full(self) -> None:
         self.assertTrue(plan_matrix.requires_full_sweep([".cargo/config.toml"]))
         self.assertTrue(plan_matrix.requires_full_sweep(["rust-toolchain.toml"]))
+
+    def test_dependency_change_selects_and_marks_every_dependent_plugin(self) -> None:
+        temp, root = self.make_repository(3)
+        self.addCleanup(temp.cleanup)
+        dependency = root / "libs" / "shared"
+        dependency.mkdir(parents=True)
+        (dependency / "Cargo.toml").write_text(
+            '[package]\nname = "shared"\nversion = "0.1.0"\n\n[workspace]\n'
+        )
+        for index in (0, 2):
+            manifest = root / "plugins" / f"plugin-{index:02d}" / "Cargo.toml"
+            manifest.write_text(
+                manifest.read_text()
+                + '\n[dependencies]\nshared = { path = "../../libs/shared" }\n'
+            )
+        with mock.patch.object(
+            plan_matrix,
+            "git_changed_paths",
+            return_value=["libs/shared/src/lib.rs"],
+        ):
+            plan = plan_matrix.make_plan(root, "pull_request", "origin/main")
+        self.assertEqual(plan["mode"], "changed")
+        self.assertEqual(plan["count"], 2)
+        self.assertEqual(
+            plan["matrix"]["include"],
+            [
+                {
+                    "id": 0,
+                    "plugins": ["plugin-00", "plugin-02"],
+                    "release_plugins": ["plugin-00", "plugin-02"],
+                    "strict_plugins": ["plugin-00", "plugin-02"],
+                }
+            ],
+        )
+
+    def test_unreferenced_dependency_root_change_forces_full_sweep(self) -> None:
+        temp, root = self.make_repository(2)
+        self.addCleanup(temp.cleanup)
+        with mock.patch.object(
+            plan_matrix,
+            "git_changed_paths",
+            return_value=["libs/unreferenced/src/lib.rs"],
+        ):
+            plan = plan_matrix.make_plan(root, "pull_request", "origin/main")
+        self.assertEqual(plan["mode"], "full")
+        self.assertEqual(plan["count"], 2)
+        self.assertEqual(plan["matrix"]["include"][0]["strict_plugins"], [])
+        self.assertEqual(plan["matrix"]["include"][0]["release_plugins"], [])
 
     def test_doc_only_pull_request_has_empty_matrix(self) -> None:
         temp, root = self.make_repository(2)
@@ -480,6 +679,11 @@ class SummaryTests(unittest.TestCase):
 
 
 class ComponentValidatorTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        if shutil.which("bash") is None or shutil.which("jq") is None:
+            raise unittest.SkipTest("component validator tests require bash and jq")
+
     def make_fake_cargo(self, root: Path) -> Path:
         binary = root / "cargo"
         binary.write_text(

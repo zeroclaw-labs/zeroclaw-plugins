@@ -21,7 +21,9 @@ const SDK_INNER_MESSAGE_HEX: &str = "010101032e14b880da9065be9ed5f2f51025cc13fc8
 #[test]
 fn pdas_match_sdk() {
     let create_key = parse_pubkey(CREATE_KEY).expect("create key");
-    let multisig = squads::multisig_pda(&create_key);
+    let (multisig, bump) = squads::multisig_pda_with_bump(&create_key);
+    assert_eq!(multisig, squads::multisig_pda(&create_key));
+    assert_ne!(bump, 0);
     assert_eq!(multisig.to_string(), SDK_MULTISIG_PDA, "multisig PDA");
     assert_eq!(
         squads::transaction_pda(&multisig, 42).to_string(),
@@ -46,8 +48,7 @@ fn inner_message_matches_sdk_byte_for_byte() {
     let dest = parse_pubkey(DEST).expect("dest");
     // SDK scenario: 1 SOL transfer from vault to dest, no blockhash (Squads format).
     let transfer = ix::system_transfer(&vault, &dest, 1_000_000_000);
-    let rebound = squads::rebind_to_vault(&[transfer], &vault);
-    let ours = squads::compile_inner_message(&rebound, &vault);
+    let ours = squads::compile_inner_message(&[transfer], &vault).expect("compile inner message");
     assert_eq!(
         hex::encode(&ours),
         SDK_INNER_MESSAGE_HEX,

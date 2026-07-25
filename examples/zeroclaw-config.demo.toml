@@ -1,10 +1,14 @@
-# Safe Hands — quick demo config (ZeroClaw)
+# Safe Hands v0.1 — complete three-plugin demo config (ZeroClaw)
 #
-# Copy the plugin block into ~/.zeroclaw/config.toml after `zeroclaw plugin
-# install ./plugins/solana-tx-authorize`. Point rpc_url at your own endpoint —
-# devnet needs no key; for mainnet use your provider (Helius/Triton/your own
-# node). policy_json is the operator spend policy: raw units only, deny by
-# default. NEVER put a private key anywhere in this file.
+# Stage and install the local artifacts first:
+#   just stage-local
+#   zeroclaw plugin install ./dist/local/solana-tx-authorize
+#   zeroclaw plugin install ./dist/local/spl-transfer-build
+#   zeroclaw plugin install ./dist/local/squads-proposal-build
+#
+# Replace only the PUBLIC-KEY placeholders below. Never put a private key,
+# seed phrase, signer material, or API secret in this file. This demo uses
+# Circle's Solana Devnet USDC mint; devnet tokens have no financial value.
 
 [plugins]
 enabled = true
@@ -14,19 +18,26 @@ name = "solana-tx-authorize"
 
 [plugins.entries.config]
 rpc_url = "https://api.devnet.solana.com"
-policy_json = "{\"version\":\"1.0.0\",\"default_action\":\"deny\",\"assets\":{\"SOL\":{\"decimals\":9,\"max_per_tx_raw\":\"2000000000\"}},\"allowed_recipients\":[\"9hSR6S7WPtxmTojgo6GG3k4yDPecgJY292j7xrsUGWBu\"],\"allowed_instructions\":{\"system\":[\"transfer\"],\"memo\":[\"memo\"]},\"unknown_program\":\"deny\",\"unknown_instruction\":\"deny\",\"missing_intent\":\"review\",\"durable_nonce\":\"review\",\"token_2022\":{\"permanent_delegate\":\"deny\",\"transfer_hook\":\"review\",\"transfer_fee\":\"review\",\"default_frozen\":\"deny\"},\"simulation\":{\"required\":true,\"max_slot_age\":32}}"
+policy_json = "{\"version\":\"1.0.0\",\"default_action\":\"deny\",\"assets\":{\"SOL\":{\"decimals\":9,\"max_per_tx_raw\":\"2000000000\"},\"4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU\":{\"decimals\":6,\"max_per_tx_raw\":\"25000000\"}},\"allowed_recipients\":[\"9hSR6S7WPtxmTojgo6GG3k4yDPecgJY292j7xrsUGWBu\"],\"allowed_instructions\":{\"system\":[\"transfer\"],\"spl_token\":[\"transfer_checked\"],\"associated_token\":[\"create_idempotent\"],\"memo\":[\"memo\"]},\"unknown_program\":\"deny\",\"unknown_instruction\":\"deny\",\"missing_intent\":\"review\",\"durable_nonce\":\"deny\",\"token_2022\":{\"permanent_delegate\":\"deny\",\"transfer_hook\":\"deny\",\"transfer_fee\":\"deny\",\"default_frozen\":\"deny\"},\"simulation\":{\"required\":true,\"max_slot_age\":32}}"
 
-# Agent + provider used for the demo (any OpenAI-compatible endpoint works):
-#
-#   [providers.models.custom.zero-g]
-#   uri = "https://router-api.0g.ai/v1"
-#   api_key = "<your key>"   # set via `zeroclaw config set`, never commit it
-#   model = "kimi-k3"
-#   native_tools = true       # required: custom endpoints disable native tools by default
-#
-#   [risk_profiles.ops]
-#   level = "full"            # use "supervised" to exercise the host approval gate
-#
-#   [agents.safehands]
-#   model_provider = "custom.zero-g"
-#   risk_profile = "ops"
+[[plugins.entries]]
+name = "spl-transfer-build"
+
+[plugins.entries.config]
+rpc_url = "https://api.devnet.solana.com"
+# For a proposal flow this must be the derived Squads vault public key. The
+# builder creates a vault-native draft; the vault is the sole required signer.
+fee_payer = "<DERIVED_SQUADS_VAULT_PUBKEY>"
+policy_json = "{\"version\":\"1.0.0\",\"default_action\":\"deny\",\"assets\":{\"SOL\":{\"decimals\":9,\"max_per_tx_raw\":\"2000000000\"},\"4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU\":{\"decimals\":6,\"max_per_tx_raw\":\"25000000\"}},\"allowed_recipients\":[\"9hSR6S7WPtxmTojgo6GG3k4yDPecgJY292j7xrsUGWBu\"],\"allowed_instructions\":{\"system\":[\"transfer\"],\"spl_token\":[\"transfer_checked\"],\"associated_token\":[\"create_idempotent\"],\"memo\":[\"memo\"]},\"unknown_program\":\"deny\",\"unknown_instruction\":\"deny\",\"missing_intent\":\"review\",\"durable_nonce\":\"deny\",\"token_2022\":{\"permanent_delegate\":\"deny\",\"transfer_hook\":\"deny\",\"transfer_fee\":\"deny\",\"default_frozen\":\"deny\"},\"simulation\":{\"required\":true,\"max_slot_age\":32}}"
+
+[[plugins.entries]]
+name = "squads-proposal-build"
+
+[plugins.entries.config]
+rpc_url = "https://api.devnet.solana.com"
+squads_create_key = "<SQUADS_CREATE_KEY_PUBKEY>"
+squads_vault_index = 0
+# This member's Squads permissions must be exactly Initiate=1, Approve=0,
+# Execute=0. The plugin accepts independently evaluated ALLOW drafts only.
+proposer = "<INITIATE_ONLY_PROPOSER_PUBKEY>"
+policy_json = "{\"version\":\"1.0.0\",\"default_action\":\"deny\",\"assets\":{\"SOL\":{\"decimals\":9,\"max_per_tx_raw\":\"2000000000\"},\"4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU\":{\"decimals\":6,\"max_per_tx_raw\":\"25000000\"}},\"allowed_recipients\":[\"9hSR6S7WPtxmTojgo6GG3k4yDPecgJY292j7xrsUGWBu\"],\"allowed_instructions\":{\"system\":[\"transfer\"],\"spl_token\":[\"transfer_checked\"],\"associated_token\":[\"create_idempotent\"],\"memo\":[\"memo\"]},\"unknown_program\":\"deny\",\"unknown_instruction\":\"deny\",\"missing_intent\":\"review\",\"durable_nonce\":\"deny\",\"token_2022\":{\"permanent_delegate\":\"deny\",\"transfer_hook\":\"deny\",\"transfer_fee\":\"deny\",\"default_frozen\":\"deny\"},\"simulation\":{\"required\":true,\"max_slot_age\":32}}"

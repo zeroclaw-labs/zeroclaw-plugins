@@ -23,15 +23,23 @@ fn program_id() -> Pubkey {
     parse_pubkey(SQUADS_PROGRAM).expect("constant program id is valid")
 }
 
-fn derive<const N: usize>(seeds: &[&[u8]; N]) -> Pubkey {
+fn derive_with_bump<const N: usize>(seeds: &[&[u8]; N]) -> (Pubkey, u8) {
     Pubkey::derive_program_address(seeds, &program_id())
         .expect("squads PDA derivation always finds a bump")
-        .0
+}
+
+fn derive<const N: usize>(seeds: &[&[u8]; N]) -> Pubkey {
+    derive_with_bump(seeds).0
+}
+
+/// multisig PDA and its canonical bump = ["multisig", "multisig", create_key].
+pub fn multisig_pda_with_bump(create_key: &Pubkey) -> (Pubkey, u8) {
+    derive_with_bump(&[SEED_PREFIX, SEED_MULTISIG, create_key.as_ref()])
 }
 
 /// multisig PDA = ["multisig", "multisig", create_key].
 pub fn multisig_pda(create_key: &Pubkey) -> Pubkey {
-    derive(&[SEED_PREFIX, SEED_MULTISIG, create_key.as_ref()])
+    multisig_pda_with_bump(create_key).0
 }
 
 /// vault PDA = ["multisig", multisig, "vault", vault_index(u8)].
@@ -67,30 +75,183 @@ fn anchor_discriminator(name: &str) -> [u8; 8] {
     digest[..8].try_into().expect("8 bytes")
 }
 
-/// Fields we need from a raw Multisig account (8-byte anchor discriminator,
-/// then create_key(32), config_authority(32), threshold(u16), time_lock(u32),
-/// transaction_index(u64), …).
-pub struct MultisigInfo {
-    pub create_key: Pubkey,
-    pub threshold: u16,
-    pub transaction_index: u64,
+/// Anchor account discriminator: sha256("account:<name>")[..8].
+fn anchor_account_discriminator(name: &str) -> [u8; 8] {
+    use sha2::{Digest, Sha256};
+    let digest = Sha256::digest(format!("account:{name}").as_bytes());
+    digest[..8].try_into().expect("8 bytes")
 }
 
-/// Parse a raw Multisig account buffer. Strict bounds; never guesses.
-pub fn parse_multisig_account(data: &[u8]) -> Result<MultisigInfo, String> {
-    if data.len() < 8 + 32 + 32 + 2 + 4 + 8 {
-        return Err("multisig account data truncated".to_string());
+/// One validated member from a Squads Multisig account.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MultisigMember {
+    pub key: Pubkey,
+    /// Initiate=1, Vote=2, Execute=4.
+    pub permissions: u8,
+}
+
+impl MultisigMember {
+    pub fn can_initiate(&self) -> bool {
+        self.permissions & 1 != 0
     }
-    let create_key =
-        Pubkey::new_from_array(data[8..40].try_into().map_err(|_| "create_key slice")?);
-    let threshold = u16::from_le_bytes(data[72..74].try_into().map_err(|_| "threshold")?);
-    let transaction_index =
-        u64::from_le_bytes(data[78..86].try_into().map_err(|_| "transaction_index")?);
+}
+
+/// Fully validated fields from a Squads v4 Multisig account.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MultisigInfo {
+    pub create_key: Pubkey,
+    pub config_authority: Pubkey,
+    pub threshold: u16,
+    pub time_lock: u32,
+    pub transaction_index: u64,
+    pub stale_transaction_index: u64,
+    pub rent_collector: Option<Pubkey>,
+    pub bump: u8,
+    pub members: Vec<MultisigMember>,
+}
+
+impl MultisigInfo {
+    /// Whether `key` is a sorted member with Squads' Initiate permission.
+    pub fn can_propose(&self, key: &Pubkey) -> bool {
+        self.members
+            .binary_search_by_key(key, |member| member.key)
+            .map(|index| self.members[index].can_initiate())
+            .unwrap_or(false)
+    }
+}
+
+/// Parse the official full Borsh layout of a Squads v4 Multisig account.
+/// Discriminator, fields, lengths, ordering, permissions, and the official
+/// allocation shape are validated; malformed account data is never partially
+/// accepted. Squads intentionally reserves 32 bytes when `rent_collector` is
+/// `None` and can retain capacity for removed members, so valid owned accounts
+/// may contain bytes beyond the serialized Borsh value.
+pub fn parse_multisig_account(data: &[u8]) -> Result<MultisigInfo, String> {
+    let mut cursor = MultisigCursor::new(data);
+    if cursor.take(8)? != anchor_account_discriminator("Multisig") {
+        return Err("invalid Multisig account discriminator".to_string());
+    }
+    let create_key = cursor.pubkey()?;
+    let config_authority = cursor.pubkey()?;
+    let threshold = cursor.u16()?;
+    let time_lock = cursor.u32()?;
+    let transaction_index = cursor.u64()?;
+    let stale_transaction_index = cursor.u64()?;
+    let rent_collector = match cursor.u8()? {
+        0 => None,
+        1 => Some(cursor.pubkey()?),
+        other => return Err(format!("invalid rent_collector option tag: {other}")),
+    };
+    let bump = cursor.u8()?;
+    let member_count = cursor.u32()? as usize;
+    if member_count > cursor.remaining() / 33 {
+        return Err("multisig members vector is truncated".to_string());
+    }
+    let mut members = Vec::with_capacity(member_count);
+    for _ in 0..member_count {
+        let key = cursor.pubkey()?;
+        let permissions = cursor.u8()?;
+        if !(1..=7).contains(&permissions) {
+            return Err(format!(
+                "member {key} has invalid permission mask {permissions}"
+            ));
+        }
+        members.push(MultisigMember { key, permissions });
+    }
+    // Squads allocates Multisig accounts as `132 + capacity * 33` bytes:
+    // 132 includes 32 bytes reserved for rent_collector even when its Borsh
+    // Option tag is None, and each member-capacity slot is 33 bytes. Accounts
+    // can retain extra capacity (and stale removed-member bytes) after realloc,
+    // so cursor exhaustion is not an official validity condition.
+    const FIXED_ALLOCATED_BYTES: usize = 132;
+    const MEMBER_BYTES: usize = 33;
+    let minimum_size = member_count
+        .checked_mul(MEMBER_BYTES)
+        .and_then(|members_size| FIXED_ALLOCATED_BYTES.checked_add(members_size))
+        .ok_or_else(|| "multisig account allocation size overflow".to_string())?;
+    if data.len() < minimum_size {
+        return Err("multisig account is smaller than its declared members require".to_string());
+    }
+    if !(data.len() - FIXED_ALLOCATED_BYTES).is_multiple_of(MEMBER_BYTES) {
+        return Err("multisig account has an invalid allocation size".to_string());
+    }
+    if threshold == 0 || usize::from(threshold) > members.len() {
+        return Err("multisig threshold must be within 1..=members.len()".to_string());
+    }
+    if stale_transaction_index > transaction_index {
+        return Err("multisig stale_transaction_index exceeds transaction_index".to_string());
+    }
+    if members.windows(2).any(|pair| pair[0].key >= pair[1].key) {
+        return Err("multisig members must be sorted and unique".to_string());
+    }
+
     Ok(MultisigInfo {
         create_key,
+        config_authority,
         threshold,
+        time_lock,
         transaction_index,
+        stale_transaction_index,
+        rent_collector,
+        bump,
+        members,
     })
+}
+
+struct MultisigCursor<'a> {
+    data: &'a [u8],
+    position: usize,
+}
+
+impl<'a> MultisigCursor<'a> {
+    fn new(data: &'a [u8]) -> Self {
+        Self { data, position: 0 }
+    }
+
+    fn take(&mut self, length: usize) -> Result<&'a [u8], String> {
+        let end = self
+            .position
+            .checked_add(length)
+            .ok_or_else(|| "multisig cursor overflow".to_string())?;
+        let value = self
+            .data
+            .get(self.position..end)
+            .ok_or_else(|| "multisig account data truncated".to_string())?;
+        self.position = end;
+        Ok(value)
+    }
+
+    fn u8(&mut self) -> Result<u8, String> {
+        Ok(self.take(1)?[0])
+    }
+
+    fn u16(&mut self) -> Result<u16, String> {
+        Ok(u16::from_le_bytes(
+            self.take(2)?.try_into().map_err(|_| "u16")?,
+        ))
+    }
+
+    fn u32(&mut self) -> Result<u32, String> {
+        Ok(u32::from_le_bytes(
+            self.take(4)?.try_into().map_err(|_| "u32")?,
+        ))
+    }
+
+    fn u64(&mut self) -> Result<u64, String> {
+        Ok(u64::from_le_bytes(
+            self.take(8)?.try_into().map_err(|_| "u64")?,
+        ))
+    }
+
+    fn pubkey(&mut self) -> Result<Pubkey, String> {
+        Ok(Pubkey::new_from_array(
+            self.take(32)?.try_into().map_err(|_| "pubkey")?,
+        ))
+    }
+
+    fn remaining(&self) -> usize {
+        self.data.len().saturating_sub(self.position)
+    }
 }
 
 fn meta(key: Pubkey, signer: bool, writable: bool) -> AccountMeta {
@@ -181,122 +342,110 @@ pub fn proposal_create(
 /// address_table_lookups SmallVec<u8> (u8 count)
 /// ```
 ///
-/// No blockhash anywhere (vault transactions don't expire; execution fetches
-/// a fresh one). Our flows have exactly one signer: the vault (writable).
-/// `instructions` must already be rebound to the vault (see [`rebind_to_vault`]).
-pub fn compile_inner_message(instructions: &[Instruction], vault: &Pubkey) -> Vec<u8> {
-    // Key ordering: vault first, then writable non-signers (first-seen),
-    // then readonly non-signers (first-seen). No other signers in our flows.
-    let mut writable: Vec<Pubkey> = Vec::new();
-    let mut readonly: Vec<Pubkey> = Vec::new();
-    let seen = |k: &Pubkey, writable: &mut Vec<Pubkey>, readonly: &mut Vec<Pubkey>| {
-        k == vault || writable.contains(k) || readonly.contains(k)
+/// No blockhash appears in this format. Callers must provide a vault-native
+/// exact draft: this compiler never rewrites account keys or signer flags.
+pub fn compile_inner_message(
+    instructions: &[Instruction],
+    vault: &Pubkey,
+) -> Result<Vec<u8>, String> {
+    #[derive(Clone, Copy)]
+    struct KeyFlags {
+        key: Pubkey,
+        writable: bool,
+    }
+
+    let mut first_seen: Vec<KeyFlags> = Vec::new();
+    let mut vault_is_signer = false;
+    let add_key = |key: Pubkey, writable: bool, keys: &mut Vec<KeyFlags>| {
+        if let Some(existing) = keys.iter_mut().find(|existing| existing.key == key) {
+            existing.writable |= writable;
+        } else {
+            keys.push(KeyFlags { key, writable });
+        }
     };
-    for ix in instructions {
-        for meta in &ix.accounts {
-            if seen(&meta.pubkey, &mut writable, &mut readonly) {
-                continue;
+
+    for instruction in instructions {
+        for account in &instruction.accounts {
+            if account.is_signer {
+                if account.pubkey != *vault {
+                    return Err(format!(
+                        "inner message signer {} is not the supplied vault",
+                        account.pubkey
+                    ));
+                }
+                vault_is_signer = true;
             }
-            if meta.is_writable {
-                writable.push(meta.pubkey);
-            } else {
-                readonly.push(meta.pubkey);
-            }
+            add_key(account.pubkey, account.is_writable, &mut first_seen);
         }
-        if seen(&ix.program_id, &mut writable, &mut readonly) {
-            continue;
-        }
-        readonly.push(ix.program_id);
+        add_key(instruction.program_id, false, &mut first_seen);
+    }
+    if !vault_is_signer {
+        return Err("supplied vault is not a signer in the inner instructions".to_string());
     }
 
-    let mut out = Vec::new();
-    // num_signers=1 (vault), num_writable_signers=1 (vault),
-    // num_writable_non_signers = writable.len()
-    out.push(1u8);
-    out.push(1u8);
-    out.push(writable.len() as u8);
-    // account_keys: SmallVec<u8>
-    let key_count = 1 + writable.len() + readonly.len();
-    out.push(key_count as u8);
-    out.extend_from_slice(vault.as_ref());
-    for k in &writable {
-        out.extend_from_slice(k.as_ref());
-    }
-    for k in &readonly {
-        out.extend_from_slice(k.as_ref());
-    }
-    // instructions: SmallVec<u8>; data uses SmallVec<u16> (u16 LE length).
-    let key_index = |k: &Pubkey| -> u8 {
-        if k == vault {
-            return 0;
-        }
-        if let Some(i) = writable.iter().position(|w| w == k) {
-            return 1 + i as u8;
-        }
-        1 + writable.len() as u8 + readonly.iter().position(|r| r == k).expect("key present") as u8
-    };
-    out.push(instructions.len() as u8);
-    for ix in instructions {
-        out.push(key_index(&ix.program_id));
-        out.push(ix.accounts.len() as u8);
-        for meta in &ix.accounts {
-            out.push(key_index(&meta.pubkey));
-        }
-        out.extend_from_slice(&(ix.data.len() as u16).to_le_bytes());
-        out.extend_from_slice(&ix.data);
-    }
-    // address_table_lookups: none.
-    out.push(0u8);
-    out
-}
-
-/// Rebind a decoded transfer's funding source to the multisig vault: the agent
-/// drafts "spend from the shared vault", never from a personal wallet.
-///
-/// - SystemProgram::Transfer: accounts[0] (from) → vault (signer per SDK
-///   convention: readonly-signer in the inner message)
-/// - SPL TransferChecked: source ATA → the vault's ATA for that mint, owner →
-///   vault (and the caller prepends an idempotent ATA create for the vault)
-pub fn rebind_to_vault(instructions: &[Instruction], vault: &Pubkey) -> Vec<Instruction> {
-    use crate::crypto::{SYSTEM_PROGRAM, TOKEN_2022_PROGRAM, TOKEN_PROGRAM};
-    use crate::ix::{SYSTEM_IX_TRANSFER, TOKEN_IX_TRANSFER, TOKEN_IX_TRANSFER_CHECKED};
-
-    instructions
+    let vault_writable = first_seen
         .iter()
-        .map(|ix| {
-            let program_str = ix.program_id.to_string();
-            let mut new_ix = ix.clone();
-            if program_str == SYSTEM_PROGRAM
-                && ix.data.len() >= 4
-                && u32::from_le_bytes([ix.data[0], ix.data[1], ix.data[2], ix.data[3]])
-                    == SYSTEM_IX_TRANSFER
-            {
-                if let Some(from) = new_ix.accounts.get_mut(0) {
-                    *from = AccountMeta::new(*vault, true);
-                }
-            } else if (program_str == TOKEN_PROGRAM || program_str == TOKEN_2022_PROGRAM)
-                && !ix.data.is_empty()
-                && matches!(ix.data[0], TOKEN_IX_TRANSFER | TOKEN_IX_TRANSFER_CHECKED)
-            {
-                // TransferChecked layout: source(0), mint(1), dest(2), owner(3).
-                // The vault must fund it: source → the vault's ATA for this
-                // mint, owner → vault. Without the source rewrite the vault
-                // would "own-sign" someone else's ATA and execution would fail.
-                let mint = new_ix.accounts.get(1).map(|m| m.pubkey);
-                let token_program = new_ix.program_id;
-                if let Some(mint) = mint {
-                    let vault_ata = crate::crypto::ata_address(vault, &token_program, &mint);
-                    if let Some(source) = new_ix.accounts.get_mut(0) {
-                        *source = AccountMeta::new(vault_ata, false);
-                    }
-                }
-                if let Some(owner) = new_ix.accounts.get_mut(3) {
-                    *owner = AccountMeta::new_readonly(*vault, true);
-                }
-            }
-            new_ix
-        })
-        .collect()
+        .find(|entry| entry.key == *vault)
+        .map(|entry| entry.writable)
+        .unwrap_or(false);
+    let writable: Vec<Pubkey> = first_seen
+        .iter()
+        .filter(|entry| entry.key != *vault && entry.writable)
+        .map(|entry| entry.key)
+        .collect();
+    let readonly: Vec<Pubkey> = first_seen
+        .iter()
+        .filter(|entry| entry.key != *vault && !entry.writable)
+        .map(|entry| entry.key)
+        .collect();
+    let key_count = 1usize
+        .checked_add(writable.len())
+        .and_then(|count| count.checked_add(readonly.len()))
+        .ok_or_else(|| "inner account-key count overflow".to_string())?;
+    let key_count_u8 = u8::try_from(key_count)
+        .map_err(|_| "inner account-key count exceeds u8 length bound".to_string())?;
+    let writable_count_u8 = u8::try_from(writable.len())
+        .map_err(|_| "writable non-signer count exceeds u8 length bound".to_string())?;
+    let instruction_count_u8 = u8::try_from(instructions.len())
+        .map_err(|_| "inner instruction count exceeds u8 length bound".to_string())?;
+
+    let mut ordered_keys = Vec::with_capacity(key_count);
+    ordered_keys.push(*vault);
+    ordered_keys.extend_from_slice(&writable);
+    ordered_keys.extend_from_slice(&readonly);
+    let key_index = |key: &Pubkey| -> Result<u8, String> {
+        let index = ordered_keys
+            .iter()
+            .position(|candidate| candidate == key)
+            .ok_or_else(|| format!("inner instruction key {key} was not collected"))?;
+        u8::try_from(index).map_err(|_| "inner account index exceeds u8 bound".to_string())
+    };
+
+    let mut out = vec![
+        1, // num_signers: supplied vault only
+        u8::from(vault_writable),
+        writable_count_u8,
+        key_count_u8,
+    ];
+    for key in &ordered_keys {
+        out.extend_from_slice(key.as_ref());
+    }
+    out.push(instruction_count_u8);
+    for instruction in instructions {
+        out.push(key_index(&instruction.program_id)?);
+        let account_count = u8::try_from(instruction.accounts.len())
+            .map_err(|_| "instruction account count exceeds u8 length bound".to_string())?;
+        out.push(account_count);
+        for account in &instruction.accounts {
+            out.push(key_index(&account.pubkey)?);
+        }
+        let data_length = u16::try_from(instruction.data.len())
+            .map_err(|_| "instruction data exceeds u16 length bound".to_string())?;
+        out.extend_from_slice(&data_length.to_le_bytes());
+        out.extend_from_slice(&instruction.data);
+    }
+    out.push(0); // address_table_lookups: none
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -377,39 +526,97 @@ mod tests {
     }
 
     #[test]
-    fn rebind_spl_rewrites_source_and_owner_to_vault() {
+    fn inner_message_rejects_foreign_or_missing_signers() {
         let vault = Pubkey::new_from_array([7u8; 32]);
-        let user = Pubkey::new_from_array([8u8; 32]);
-        let mint = Pubkey::new_from_array([9u8; 32]);
-        let tp = crate::ix::spl_token_program();
-        let user_ata = crate::crypto::ata_address(&user, &tp, &mint);
-        let dest_ata = Pubkey::new_from_array([10u8; 32]);
-        let ix = crate::ix::transfer_checked(&tp, &user_ata, &mint, &dest_ata, &user, 100, 6);
-        let rebound = rebind_to_vault(&[ix], &vault);
-        let expected_vault_ata = crate::crypto::ata_address(&vault, &tp, &mint);
-        assert_eq!(
-            rebound[0].accounts[0].pubkey, expected_vault_ata,
-            "source must become the vault's ATA"
-        );
-        assert_eq!(
-            rebound[0].accounts[3].pubkey, vault,
-            "owner must be the vault"
-        );
-        assert!(rebound[0].accounts[3].is_signer);
-        assert_eq!(rebound[0].accounts[1].pubkey, mint, "mint untouched");
-        assert_eq!(rebound[0].accounts[2].pubkey, dest_ata, "dest untouched");
+        let other = Pubkey::new_from_array([8u8; 32]);
+        let destination = Pubkey::new_from_array([9u8; 32]);
+        let foreign = crate::ix::system_transfer(&other, &destination, 1);
+        assert!(compile_inner_message(&[foreign], &vault).is_err());
+
+        let mut missing = crate::ix::system_transfer(&vault, &destination, 1);
+        missing.accounts[0].is_signer = false;
+        assert!(compile_inner_message(&[missing], &vault).is_err());
     }
 
     #[test]
-    fn multisig_account_parse() {
-        let mut data = vec![0u8; 200];
-        data[8..40].copy_from_slice(&[7u8; 32]); // create_key
-        data[72..74].copy_from_slice(&2u16.to_le_bytes()); // threshold
-        data[78..86].copy_from_slice(&41u64.to_le_bytes()); // transaction_index
+    fn inner_message_validates_u8_and_u16_length_bounds() {
+        let vault = Pubkey::new_from_array([7u8; 32]);
+        let destination = Pubkey::new_from_array([9u8; 32]);
+        let transfer = crate::ix::system_transfer(&vault, &destination, 1);
+        assert!(compile_inner_message(&vec![transfer.clone(); 256], &vault).is_err());
+
+        let mut oversized_data = transfer;
+        oversized_data.data = vec![0u8; usize::from(u16::MAX) + 1];
+        assert!(compile_inner_message(&[oversized_data], &vault).is_err());
+    }
+
+    #[test]
+    fn multisig_account_parse_validates_full_official_layout() {
+        let mut data = anchor_account_discriminator("Multisig").to_vec();
+        data.extend_from_slice(&[7u8; 32]);
+        data.extend_from_slice(&[8u8; 32]);
+        data.extend_from_slice(&2u16.to_le_bytes());
+        data.extend_from_slice(&60u32.to_le_bytes());
+        data.extend_from_slice(&41u64.to_le_bytes());
+        data.extend_from_slice(&40u64.to_le_bytes());
+        data.push(1);
+        data.extend_from_slice(&[9u8; 32]);
+        data.push(254);
+        data.extend_from_slice(&2u32.to_le_bytes());
+        data.extend_from_slice(&[1u8; 32]);
+        data.push(1);
+        data.extend_from_slice(&[2u8; 32]);
+        data.push(7);
+
         let info = parse_multisig_account(&data).expect("parses");
         assert_eq!(info.create_key, Pubkey::new_from_array([7u8; 32]));
+        assert_eq!(info.config_authority, Pubkey::new_from_array([8u8; 32]));
         assert_eq!(info.threshold, 2);
+        assert_eq!(info.time_lock, 60);
         assert_eq!(info.transaction_index, 41);
+        assert_eq!(info.stale_transaction_index, 40);
+        assert_eq!(info.rent_collector, Some(Pubkey::new_from_array([9u8; 32])));
+        assert_eq!(info.bump, 254);
+        assert!(info.can_propose(&Pubkey::new_from_array([1u8; 32])));
+        assert_eq!(info.members.len(), 2);
+
+        let mut bad_discriminator = data.clone();
+        bad_discriminator[0] ^= 1;
+        assert!(parse_multisig_account(&bad_discriminator).is_err());
+        let mut invalid_allocation = data.clone();
+        invalid_allocation.push(0);
+        assert!(parse_multisig_account(&invalid_allocation).is_err());
+
+        // Squads keeps extra 33-byte member-capacity slots after reallocations.
+        // Their contents can be stale after member removal, so only the owned
+        // account's official allocation shape—not padding contents—is trusted.
+        let mut extra_capacity = data.clone();
+        extra_capacity.extend_from_slice(&[0xA5; 33]);
+        assert!(parse_multisig_account(&extra_capacity).is_ok());
+
+        // When rent_collector is None, Borsh consumes only the option tag but
+        // Squads still allocates its 32-byte payload area.
+        let mut no_rent_collector = data.clone();
+        no_rent_collector[94] = 0;
+        no_rent_collector.drain(95..127);
+        no_rent_collector.resize(data.len(), 0);
+        let no_rent_info = parse_multisig_account(&no_rent_collector).expect("None parses");
+        assert_eq!(no_rent_info.rent_collector, None);
+
         assert!(parse_multisig_account(&data[..50]).is_err());
+
+        let mut stale_ahead = data.clone();
+        stale_ahead[86..94].copy_from_slice(&42u64.to_le_bytes());
+        assert!(parse_multisig_account(&stale_ahead).is_err());
+
+        let mut bad_threshold = data.clone();
+        bad_threshold[72..74].copy_from_slice(&3u16.to_le_bytes());
+        assert!(parse_multisig_account(&bad_threshold).is_err());
+        let mut bad_permissions = data.clone();
+        bad_permissions[164] = 0;
+        assert!(parse_multisig_account(&bad_permissions).is_err());
+        let mut unsorted = data.clone();
+        unsorted[165..197].fill(0);
+        assert!(parse_multisig_account(&unsorted).is_err());
     }
 }

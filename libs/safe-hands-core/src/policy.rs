@@ -88,6 +88,11 @@ pub struct Policy {
     pub default_action: String,
     pub assets: BTreeMap<String, AssetPolicy>,
     pub allowed_recipients: BTreeSet<String>,
+    /// Nonce accounts the operator explicitly permits for durable-nonce
+    /// transactions. Empty (the default) means no durable transaction is ever
+    /// permitted, so existing policies keep their exact behavior.
+    #[serde(default)]
+    pub allowed_nonce_accounts: BTreeSet<String>,
     pub allowed_instructions: BTreeMap<String, BTreeSet<String>>,
     pub unknown_program: Outcome,
     pub unknown_instruction: Outcome,
@@ -130,11 +135,12 @@ impl Policy {
         let obj = raw
             .as_object()
             .ok_or_else(|| "policy_json must be a JSON object".to_string())?;
-        const KNOWN: [&str; 16] = [
+        const KNOWN: [&str; 17] = [
             "version",
             "default_action",
             "assets",
             "allowed_recipients",
+            "allowed_nonce_accounts",
             "allowed_instructions",
             "unknown_program",
             "unknown_instruction",
@@ -161,6 +167,12 @@ impl Policy {
                     .collect::<Vec<_>>()
                     .join(", ")
             ));
+        }
+        if obj.contains_key("fee") {
+            return Err(
+                "fee policy is unsupported in safe v0.1: complete fee/rent evidence is unavailable"
+                    .to_string(),
+            );
         }
         let policy: Policy =
             serde_json::from_value(raw).map_err(|e| format!("policy_json schema error: {e}"))?;
@@ -217,6 +229,8 @@ pub struct Intent {
     pub mint: Option<String>,
     pub amount_raw: String,
     pub recipient: String,
+    #[serde(default)]
+    pub memo: Option<String>,
 }
 
 /// Every fact the engine sees about one transaction. Built by the caller from
@@ -226,8 +240,19 @@ pub struct TxFacts {
     pub signed: bool,
     pub byte_len: usize,
     pub instructions: Vec<IxFact>,
+    /// Strict UTF-8 contents of every decoded Memo instruction, in order.
+    pub memos: Vec<String>,
     pub transfers: Vec<TransferFact>,
     pub durable_nonce_used: bool,
+    /// The nonce account named by an `AdvanceNonceAccount` instruction, when
+    /// one is present and its accounts could be resolved. `None` while
+    /// `durable_nonce_used` is true means the nonce could not be identified,
+    /// which must never be treated as permission.
+    pub nonce_account: Option<String>,
+    /// Whether `AdvanceNonceAccount` was instruction index 0. The Solana
+    /// runtime requires it to be first; anything else is a malformed durable
+    /// transaction and is refused rather than partially honored.
+    pub nonce_is_first_instruction: bool,
     pub authority_change: bool,
     pub token2022: Token2022Flags,
     pub priority_fee_lamports: u64,
@@ -278,8 +303,35 @@ pub fn evaluate(policy: &Policy, facts: &TxFacts) -> Report {
         deny!("SH-DENY-TOOBIG-002", "MAX_TX_BYTES");
     }
 
-    // 3. Program + instruction recognition (both must be known).
+    // 3. Safe v0.1 instruction invariants cannot be relaxed by operator
+    // configuration: Token-2022 is unsupported, and classic SPL Token permits
+    // only TransferChecked (plain Transfer omits the mint from its accounts).
     for ix in &facts.instructions {
+        if ix.program == "token_2022" {
+            deny!("SH-DENY-T22-060", "SAFE_V01_TOKEN_2022");
+            continue;
+        }
+        // Squads is used only by the outer proposal transaction constructed
+        // after authorization. An inner draft may not invoke Squads: generic
+        // Squads instructions can create accounts or charge the vault through
+        // CPI without appearing in decoded transfer totals.
+        if ix.program == "squads" {
+            deny!("SH-DENY-SQUADS-INNER-063", "SAFE_V01_NO_INNER_SQUADS");
+            continue;
+        }
+        if ix.program == "spl_token" {
+            match ix.name.as_deref() {
+                Some("transfer_checked") => {}
+                Some("transfer") => {
+                    deny!("SH-DENY-SPL-PLAIN-061", "SAFE_V01_SPL_TRANSFER")
+                }
+                _ => deny!("SH-DENY-SPL-IX-062", "SAFE_V01_SPL_TRANSFER_CHECKED_ONLY"),
+            }
+            if ix.name.as_deref() != Some("transfer_checked") {
+                continue;
+            }
+        }
+
         if ix.program.starts_with("unknown:") {
             match policy.unknown_program {
                 Outcome::Deny => deny!("SH-DENY-PROGRAM-011", "UNKNOWN_PROGRAM"),
@@ -297,11 +349,27 @@ pub fn evaluate(policy: &Policy, facts: &TxFacts) -> Report {
         }
     }
 
-    // 4. Durable nonce: delayed-execution pattern, policy outcome (never silent).
+    // 4. Durable nonce: a delayed-execution pattern, and the reason an
+    //    approval-gated payment survives a human going to lunch. It is
+    //    permitted only when the operator named this exact nonce account in
+    //    host policy AND the runtime's own rule — AdvanceNonceAccount must be
+    //    instruction 0 — actually holds. Everything else falls through to the
+    //    configured outcome, so a policy without `allowed_nonce_accounts`
+    //    behaves exactly as it did before this existed.
     if facts.durable_nonce_used {
-        match policy.durable_nonce {
-            Outcome::Deny => deny!("SH-DENY-NONCE-010", "DURABLE_NONCE"),
-            Outcome::Review => review!("SH-REVIEW-NONCE-009", "DURABLE_NONCE"),
+        let permitted = facts
+            .nonce_account
+            .as_ref()
+            .is_some_and(|account| policy.allowed_nonce_accounts.contains(account));
+        if !permitted {
+            match policy.durable_nonce {
+                Outcome::Deny => deny!("SH-DENY-NONCE-010", "DURABLE_NONCE"),
+                Outcome::Review => review!("SH-REVIEW-NONCE-009", "DURABLE_NONCE"),
+            }
+        } else if !facts.nonce_is_first_instruction {
+            // Allowlisted, but malformed: the runtime would reject it and a
+            // half-honored durable transaction is never emitted.
+            deny!("SH-DENY-NONCE-011", "DURABLE_NONCE_NOT_FIRST");
         }
     }
 
@@ -362,7 +430,8 @@ pub fn evaluate(policy: &Policy, facts: &TxFacts) -> Report {
         }
     }
 
-    // 8. Fee ceilings (only when configured).
+    // 8. Reserved future fee/rent enforcement. Policy::from_json rejects the
+    // fee section in safe v0.1 because complete evidence is not yet available.
     if let Some(fee) = &policy.fee {
         if facts.priority_fee_lamports > fee.max_priority_fee_lamports
             || facts.estimated_fee_lamports > fee.max_transaction_fee_lamports
@@ -386,6 +455,17 @@ pub fn evaluate(policy: &Policy, facts: &TxFacts) -> Report {
             if facts.transfers.is_empty() {
                 deny!("SH-INTENT-MATCH-030", "INTENT_MISMATCH");
             }
+            let action_matches_transfer_kind = !facts.transfers.is_empty()
+                && facts
+                    .transfers
+                    .iter()
+                    .all(|transfer| match transfer.mint.as_ref() {
+                        None => intent.action == "transfer" && intent.mint.is_none(),
+                        Some(_) => intent.action == "spl_transfer" && intent.mint.is_some(),
+                    });
+            if !action_matches_transfer_kind {
+                deny!("SH-INTENT-ACTION-034", "INTENT_ACTION_MISMATCH");
+            }
             for tr in &facts.transfers {
                 let tr_mint = tr.mint.clone().unwrap_or_else(|| "SOL".to_string());
                 if !recipient_matches_intent(&intent.recipient, tr) {
@@ -395,12 +475,21 @@ pub fn evaluate(policy: &Policy, facts: &TxFacts) -> Report {
                     deny!("SH-INTENT-MINT-032", "INTENT_MISMATCH");
                 }
             }
-            let total = facts.transfers.iter().try_fold(0u128, |sum, tr| {
-                sum.checked_add(tr.amount_raw)
-            });
+            let total = facts
+                .transfers
+                .iter()
+                .try_fold(0u128, |sum, tr| sum.checked_add(tr.amount_raw));
             if !matches!((intent_amount, total), (Ok(expected), Some(actual)) if expected == actual)
             {
                 deny!("SH-INTENT-AMOUNT-033", "INTENT_MISMATCH");
+            }
+            let memo_matches = match (&intent.memo, facts.memos.as_slice()) {
+                (None, []) => true,
+                (Some(expected), [actual]) => expected == actual,
+                _ => false,
+            };
+            if !memo_matches {
+                deny!("SH-INTENT-MEMO-035", "INTENT_MEMO_MISMATCH");
             }
         }
     }
@@ -448,9 +537,8 @@ pub fn hex_sha256(bytes: &[u8]) -> String {
 }
 
 /// ATA-aware recipient check. Agents pay wallets, but tokens land in
-/// Associated Token Accounts — so a transfer whose destination is the ATA of an
-/// allowed wallet for the same mint (under either SPL Token or Token-2022) is
-/// as legitimate as a direct transfer to that wallet.
+/// Associated Token Accounts — so a classic SPL transfer whose destination is
+/// the ATA of an allowed wallet for the same mint is legitimate.
 fn recipient_allowed(policy: &Policy, tr: &TransferFact) -> bool {
     if policy.allowed_recipients.contains(&tr.recipient) {
         return true;
@@ -461,20 +549,14 @@ fn recipient_allowed(policy: &Policy, tr: &TransferFact) -> bool {
     let Ok(mint) = crate::crypto::parse_pubkey(mint_str) else {
         return false;
     };
-    let token_programs = [
-        crate::crypto::parse_pubkey(crate::crypto::TOKEN_PROGRAM),
-        crate::crypto::parse_pubkey(crate::crypto::TOKEN_2022_PROGRAM),
-    ];
+    let Ok(token_program) = crate::crypto::parse_pubkey(crate::crypto::TOKEN_PROGRAM) else {
+        return false;
+    };
     policy.allowed_recipients.iter().any(|wallet| {
         let Ok(wallet) = crate::crypto::parse_pubkey(wallet) else {
             return false;
         };
-        token_programs.iter().any(|program| {
-            program
-                .as_ref()
-                .map(|p| crate::crypto::ata_address(&wallet, p, &mint).to_string() == tr.recipient)
-                .unwrap_or(false)
-        })
+        crate::crypto::ata_address(&wallet, &token_program, &mint).to_string() == tr.recipient
     })
 }
 
@@ -493,18 +575,10 @@ fn recipient_matches_intent(intent_recipient: &str, tr: &TransferFact) -> bool {
     ) else {
         return false;
     };
-    for program in [
-        crate::crypto::parse_pubkey(crate::crypto::TOKEN_PROGRAM),
-        crate::crypto::parse_pubkey(crate::crypto::TOKEN_2022_PROGRAM),
-    ]
-    .into_iter()
-    .flatten()
-    {
-        if crate::crypto::ata_address(&wallet, &program, &mint).to_string() == tr.recipient {
-            return true;
-        }
-    }
-    false
+    let Ok(program) = crate::crypto::parse_pubkey(crate::crypto::TOKEN_PROGRAM) else {
+        return false;
+    };
+    crate::crypto::ata_address(&wallet, &program, &mint).to_string() == tr.recipient
 }
 
 /// Convenience: policy from the host-injected flat config map.

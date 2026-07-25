@@ -1,68 +1,93 @@
 # spl-transfer-build
 
-Builds an **unsigned** SOL or SPL transfer transaction (base64) with a
-matching declared-intent object for `solana-tx-authorize`. ATA-aware: token
-transfers land in the recipient's Associated Token Account, created
-idempotently. Optional invoice memo for reconciliation.
+Builds the canonical full unsigned transaction and matching intent for a Safe
+Hands v0.1 payment:
 
-**Custody tier: T1.** It holds no keys and signs nothing. A human or the host
-signs its output.
+- native SOL via `SystemProgram::Transfer`; or
+- classic SPL Token via `TransferChecked`, with optional idempotent ATA
+  creation.
 
-## The builder invariant
+An optional memo is supported. Plain SPL `Transfer`, Token-2022, arbitrary
+instructions, extra required signers, and unresolved address lookup tables
+(ALTs) are refused.
 
-The builder runs the **same policy engine** as the guard before serializing.
-If the requested transfer violates the operator policy, the tool returns an
-error — it never emits a transaction its own guard would deny. This is
-asserted by the round-trip test: `build → authorize = ALLOW` on the happy
-path.
+**Custody tier: T1.** It holds no keys and signs nothing.
+
+## Proposal-flow invariant
+
+For a Squads proposal flow, set `fee_payer` to the **derived Squads vault public
+key** for the selected vault index. The builder then creates a vault-native
+draft: the vault pays fees, owns the SOL or classic SPL source account, and is
+the sole required signer of the inner transaction.
+
+This invariant must exist before authorization. `squads-proposal-build` embeds
+the authorized inner instructions unchanged and does not perform
+post-authorization authority or account rebinding. Squads instructions inside
+the authorized draft are hard-denied; `squads-proposal-build` constructs the
+outer Squads proposal instructions only after independent authorization.
+
+The builder performs input and policy pre-checks, but
+`solana-tx-authorize` remains the authorization boundary and simulation source.
 
 ## Args
 
 ```json
 {
-  "recipient": "base58 wallet (tokens land in its ATA)",
+  "recipient": "base58 recipient wallet; classic SPL tokens land in its ATA",
   "amount_raw": "25000000",
-  "mint": "optional — omit for native SOL",
-  "memo": "optional, ≤ 566 bytes (invoice id etc.)",
-  "token_program": "optional override (default: classic SPL Token)"
+  "mint": "omit for SOL; otherwise a classic SPL mint",
+  "memo": "optional invoice note",
+  "token_program": "omit or set to the classic SPL Token program"
 }
 ```
+
+For classic SPL, the builder checks that the mint account is owned by the
+classic SPL Token program, has the canonical mint layout, and is initialized.
+A Token-2022 mint/program or a request for plain `Transfer` is hard-denied.
 
 ## Output
 
 ```json
 {
-  "transaction_base64": "…",
-  "intent": { "action": "spl_transfer", "mint": "EPjF…", "amount_raw": "25000000", "recipient": "7xK…", "memo": "invoice-412" },
+  "transaction_base64": "canonical full unsigned transaction",
+  "intent": {
+    "action": "spl_transfer",
+    "mint": "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU",
+    "amount_raw": "25000000",
+    "recipient": "7xK…",
+    "memo": "invoice-412"
+  },
   "destination_account": "…ATA…",
-  "human_summary": "Send 25,000,000 raw USDC to 7xK…p91. Memo: \"invoice-412\". Unsigned — a human or the host signs.",
+  "human_summary": "Vault-native classic SPL TransferChecked draft; unsigned.",
   "unsigned": true
 }
 ```
 
-## Config keys
+The output is a canonical full unsigned transaction, not an instruction
+fragment. Send those exact bytes and the matching intent to
+`solana-tx-authorize`.
+
+## Config
 
 | Key | Required | Meaning |
 |---|---|---|
-| `rpc_url` | ✓ (https) | Blockhash + mint metadata |
-| `fee_payer` | ✓ | The wallet paying fees / owning source tokens (public key, never a secret) |
-| `policy_json` | recommended | The operator spend policy (enables the builder pre-check) |
+| `rpc_url` | yes (HTTPS) | Blockhash and classic mint validation |
+| `fee_payer` | yes | Public key that pays fees and supplies the source; use the derived Squads vault for proposal flows |
+| `policy_json` | yes | Host-injected deny-by-default operator policy used for the builder pre-check |
 
-## Threat model
+Public keys are not secrets. Never configure a private key, seed phrase, or
+signer material.
 
-The builder constructs exactly one transfer from validated inputs (pubkeys
-parsed, amounts bounded integers, memo length capped). It cannot create
-arbitrary instructions, cannot sign, and refuses out-of-policy requests at
-build time. The mandatory check still happens downstream in
-`solana-tx-authorize` — defense in depth, not trust.
+## Worked proposal flow
 
-## Worked example
-
-```
-agent: "charge table 4: 25 USDC, memo invoice-412"
-tool : unsigned tx (ATA create idempotent + transferChecked + memo) + intent
-agent: "now 500 USDC to the same table"
-tool : error — violates the operator policy (SH-DENY-CAP-001)
+```text
+operator: derive Squads vault index 0
+config  : fee_payer = that derived vault public key
+agent   : build 25 Devnet USDC with memo invoice-412
+tool    : canonical full unsigned vault-native transaction
+operator: authorize the exact bytes; continue only on ALLOW
 ```
 
-Build: `cargo build --target wasm32-wasip2 --release` · Test: `cargo test`.
+From the repository root: build with
+`cargo build --manifest-path plugins/spl-transfer-build/Cargo.toml --target wasm32-wasip2 --release`
+and test with `cargo test --manifest-path plugins/spl-transfer-build/Cargo.toml`.

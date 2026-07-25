@@ -2,76 +2,87 @@
 
 **O agente propõe. O Safe Hands decide. Um humano (ou multisig) dispõe.**
 
-Safe Hands é um conjunto de três plugins para o ZeroClaw que fica entre o
-agente de IA e dinheiro real na Solana. Ele decodifica qualquer transação não
-assinada até o nível de instrução, confere a intenção declarada e a política
-de gastos do operador, simula a transação e emite um veredito —
-**ALLOW / REVIEW / DENY / UNKNOWN** — com códigos de motivo legíveis por
-máquina. O que precisar de humano vira uma proposta de multisig Squads v4 não
-assinada, construída somente depois que o proponente **refaz sozinho toda a
-avaliação de política** — um "ALLOW" fornecido pelo chamador nunca é confiável.
+Safe Hands é um conjunto de três plugins para o ZeroClaw entre o agente de IA
+e ativos na Solana. A versão 0.1 aceita transferências nativas de SOL e
+`TransferChecked` do SPL Token clássico. `Token-2022`, `Transfer` sem mint,
+instruções Squads dentro do rascunho de pagamento, ALTs não resolvidas e
+instruções não reconhecidas falham fechadas.
 
-## Um comando prova tudo
+O autorizador confere os bytes, a intenção declarada, a política injetada pelo
+operador, o mint clássico e uma simulação RPC recente. O resultado é
+**ALLOW / REVIEW / DENY / UNKNOWN**, com códigos de motivo. `REVIEW` vai para
+um operador humano; nunca vira proposta automaticamente. O construtor Squads
+aceita somente um artefato `ALLOW`, já nativo do vault e com o vault como único
+signatário, e incorpora as instruções autorizadas sem alterá-las.
+
+## Prova determinística
 
 ```bash
 just prove-safety
 ```
 
-Offline, sem toolchain wasm, sem rede: todos os testes unitários, a **arena de
-20 ataques** (fixtures YAML rodando contra os plugins reais), `clippy
--D warnings` no host **e** no alvo `wasm32-wasip2`, e builds de release dos
-três componentes.
+O comando executa testes, a arena de 20 ataques, Clippy no host e no alvo
+`wasm32-wasip2`, além dos builds release. Ele requer `just`, um shell `sh` e o
+target Rust `wasm32-wasip2`; os testes e fixtures usam RPC mockado e não fazem
+transações na rede.
+
+Demonstração determinística, explicitamente mockada:
+
+```bash
+cargo run --locked --release --manifest-path conformance/Cargo.toml -- --demo
+```
 
 ## Níveis de custódia
 
 | Componente | Nível | Segredos |
 |---|---|---|
-| solana-tx-authorize | **T0** | Chave RPC no máximo. Não constrói nada, não guarda nada. |
-| spl-transfer-build | **T1** | Nenhum. Saída não assinada. |
-| squads-proposal-build | **T1** | Nenhum. Proposta não assinada. |
+| solana-tx-authorize | **T0** | Chave RPC no máximo; não constrói nem assina. |
+| spl-transfer-build | **T1** | Nenhum; produz transação canônica não assinada. |
+| squads-proposal-build | **T1** | Nenhum; produz proposta não assinada. |
 
-Não existe caminho de assinatura em nenhum lugar. O padrão favorito do bounty
-— *o agente propõe, a multisig dispõe* — é o fluxo padrão.
+Não existe caminho de assinatura nos plugins. No fluxo Squads, o `fee_payer`
+do builder deve ser o vault derivado; o membro proponente deve ter exatamente
+a permissão `Initiate=1`, sem `Vote` nem `Execute`.
 
 ## Fluxo de um pagamento
 
-```
- "cobre a mesa 4: 25 USDC, fatura 412"
-        ▼
- spl-transfer-build     → transação não assinada + intenção declarada
-        ▼
- solana-tx-authorize    → decodifica → intenção → política → simulação
-                        → ALLOW / REVIEW / DENY / UNKNOWN
-        ▼
- squads-proposal-build  → re-autorização INDEPENDENTE → proposta Squads v4
-        ▼
- Humano aprova no celular → a multisig executa
- (o agente nunca segurou uma chave)
+```text
+pedido
+  -> spl-transfer-build: transação canônica não assinada + intenção
+  -> solana-tx-authorize: bytes + mint + intenção + política + simulação
+       ALLOW  -> assinatura direta ou squads-proposal-build
+       REVIEW -> operador humano
+       DENY/UNKNOWN -> interromper
+  -> squads-proposal-build: reautorização independente do mesmo artefato ALLOW
+  -> humano assina/submete e membros separados aprovam
 ```
 
-## Configuração (5 minutos)
+## Configuração
 
 ```bash
-just wasm
-zeroclaw plugin install ./plugins/solana-tx-authorize
-zeroclaw plugin install ./plugins/spl-transfer-build
-zeroclaw plugin install ./plugins/squads-proposal-build
-# depois copie examples/zeroclaw-config.demo.toml para ~/.zeroclaw/config.toml
+just stage-local
+zeroclaw plugin install ./dist/local/solana-tx-authorize
+zeroclaw plugin install ./dist/local/spl-transfer-build
+zeroclaw plugin install ./dist/local/squads-proposal-build
+# depois adapte examples/zeroclaw-config.demo.toml
 ```
 
-Sem banco de dados, sem backend, sem Docker.
+Nunca coloque chave privada, seed phrase ou material de assinatura na
+configuração.
 
-## Verificado de ponta a ponta na devnet
+## Evidência histórica de devnet
 
-O fluxo completo rodou ao vivo com um agente ZeroClaw real, componentes reais
-e uma multisig Squads real na devnet: proposta enviada, aprovada e executada
-— 0,05 SOL movidos do vault. Assinaturas em [EVIDENCE.md](EVIDENCE.md).
+[EVIDENCE.md](EVIDENCE.md) preserva assinaturas de uma execução anterior na
+devnet. Elas são evidência histórica do protótipo anterior e **não** provam
+que o código atual, com vinculação exata do artefato e novas validações, foi o
+binário executado. A versão atual ainda exige uma nova validação ao vivo e uma
+nova gravação antes da submissão final.
 
 ## Nota sobre memos PIX/BRL
 
-Os memos de fatura (`memo`) são apenas metadados contábeis para reconciliação.
-O Safe Hands não executa PIX, câmbio, liquidação internacional ou conversão
+Memos de fatura são apenas metadados contábeis vinculados exatamente à intenção.
+Safe Hands não executa PIX, câmbio, liquidação internacional nem conversão
 entre BRL e stablecoins.
 
-Documentação completa em inglês: [README.md](README.md) · Licença MIT · Feito
-para o bounty ZeroClaw × Solana (Superteam Brasil) 🇧🇷
+Documentação completa em inglês: [README.md](README.md). Licença MIT. Feito
+para o bounty ZeroClaw × Solana (Superteam Brasil).

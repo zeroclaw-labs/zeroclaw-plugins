@@ -1,6 +1,6 @@
 name = "solana-tx-authorize"
 version = "0.1.0"
-description = "Pre-sign Solana transaction authorization: decode, simulate, intent-match, then ALLOW/REVIEW/DENY/UNKNOWN with reason codes. T0 — holds no keys."
+description = "Authorize v0.1 native SOL and classic SPL TransferChecked drafts; Token-2022, plain Transfer, and unresolved ALTs fail closed. T0 — holds no keys."
 author = "Safe Hands"
 wasm_path = "solana_tx_authorize.wasm"
 capabilities = ["tool"]

@@ -1,0 +1,21 @@
+[sop]
+name = "invoice-watch"
+description = "Poll an open USDC invoice on a schedule and announce the result to the operator. Read-only: this procedure can only check payment state, never move funds."
+version = "1.0.0"
+priority = "normal"
+execution_mode = "supervised"
+# One check at a time, and never faster than the cron window.
+cooldown_secs = 60
+max_concurrent = 1
+agent = "merchant"
+
+# Cron fan-in is live: `spawn_sop_maintenance` (src/main.rs) drives
+# `check_sop_cron_triggers`, which dispatches a SopEvent{source: Cron}.
+# Requires SOP audit logging enabled and a non-zero maintenance interval.
+[[triggers]]
+type = "cron"
+expression = "*/2 * * * *"
+
+# Also runnable on demand with `zeroclaw sop execute invoice-watch`.
+[[triggers]]
+type = "manual"

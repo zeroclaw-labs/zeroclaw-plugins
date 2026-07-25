@@ -26,6 +26,7 @@ pub use solana_pubkey;
 pub mod codec;
 pub mod crypto;
 pub mod decode;
+pub mod invoice;
 pub mod ix;
 pub mod policy;
 pub mod rpc;

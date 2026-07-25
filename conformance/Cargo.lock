@@ -116,6 +116,7 @@ dependencies = [
  "serde_json",
  "serde_yaml",
  "solana-tx-authorize",
+ "spl-transfer-build",
  "squads-proposal-build",
 ]
 
@@ -942,6 +943,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c3e17e880bafaeb362a7b751ec46bdc5b61445a188f80e0606e68167cd540fa3"
 dependencies = [
  "smallvec",
+]
+
+[[package]]
+name = "spl-transfer-build"
+version = "0.1.0"
+dependencies = [
+ "safe-hands-core",
+ "serde",
+ "serde_json",
+ "waki",
+ "wit-bindgen 0.46.0",
 ]
 
 [[package]]

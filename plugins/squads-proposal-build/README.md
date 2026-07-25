@@ -1,92 +1,104 @@
 # squads-proposal-build
 
-The final stage of the Safe Hands path: builds an **unsigned Squads v4
-multisig proposal** for a transaction that needs human approval. The agent
-proposes; multisig members dispose from their own wallets.
+Builds a canonical full unsigned Squads v4 proposal transaction for a
+vault-native Safe Hands v0.1 payment that independently evaluates to
+**ALLOW**. Multisig members retain approval and execution authority in their
+own wallets.
 
-**Custody tier: T1.** It holds no keys and signs nothing.
+**Custody tier: T1.** The plugin holds no keys and signs nothing.
 
-## The trust boundary (why this component exists)
+## ALLOW-only trust boundary
 
-A caller (the agent) may present a prior "authorization decision" from
-`solana-tx-authorize`. **This component never trusts it.** Before building
-anything, it independently:
+A caller may include a prior `solana-tx-authorize` decision record, but the
+record is audit context rather than authority. Before producing a proposal,
+this component loads its own host-injected policy, resolves and decodes the
+full unsigned transaction, and performs an independent evaluation.
 
-1. loads the operator policy from its own host-injected config,
-2. re-decodes the transaction,
-3. re-simulates it,
-4. re-runs the full deterministic policy evaluation,
-5. only then builds `vaultTransactionCreate` + `proposalCreate`.
+Only an independent **ALLOW** can continue. REVIEW is routed to a human/operator
+outside this plugin. REVIEW, DENY, UNKNOWN, forged decision records,
+unresolved address lookup tables (ALTs), and caller/independent-decision
+mismatches are refused without constructing a proposal. When a decision record
+is supplied, its verdict must exactly equal the independent verdict;
+`SH-TRUST-FORGED` identifies a false caller `ALLOW`, while other disagreements
+use `SH-TRUST-MISMATCH`.
 
-If the caller's record claims ALLOW while the independent evaluation
-disagrees, that is tamper evidence:
+## Vault-native, unchanged inner transaction
 
-```
-SH-TRUST-FORGED: caller-provided verdict is not trusted. The supplied
-decision record claims ALLOW, but independent re-evaluation returned DENY
-(SH-DENY-CAP-001). No proposal constructed.
-```
+The input draft must already be built for the derived Squads vault:
 
-This is conformance fixture #20 — run `just prove-safety` to see it.
+- the vault is the sole required signer of the inner transaction;
+- the SOL or classic SPL source authority is the vault;
+- classic SPL payments use `TransferChecked` only; and
+- classic mint ownership, canonical layout, initialized state, and decimals
+  must match each `TransferChecked` instruction.
 
-## What it builds
+Required fresh simulation is the executable-state check for source and
+destination token accounts. Safe Hands v0.1 does not claim a separate direct
+source token-account decoder proof.
 
-- Byte-exact Squads v4 encoding, golden-tested against the official
-  `@sqds/multisig` SDK (PDAs, both instruction discriminators, borsh args,
-  and Squads' own inner `TransactionMessage` format — `SmallVec<u16>` data
-  lengths, no blockhash).
-- The inner instructions are **rebound to the multisig vault** — the agent
-  drafts "spend from the shared vault", never from a personal wallet.
-- No blockhash in the inner message: the proposal is the durable object, so
-  approval queues never die to blockhash expiry (bounty trap #1).
-- The output is unsigned; the proposer signs and submits, then members
-  approve from their wallets (Squads UI or CLI).
+The proposal builder preserves the authorized inner instructions and account
+metas unchanged. It does **not** rebind a personal-wallet draft to the vault
+after authorization. Plain SPL `Transfer`, Token-2022, and every Squads
+instruction inside the payment draft are hard-denied. The only Squads
+instructions produced are the outer proposal instructions constructed after
+independent authorization.
+
+The output is the canonical full unsigned outer transaction containing the
+Squads `vaultTransactionCreate` and `proposalCreate` instructions. The
+Initiate-only proposer signs and submits that outer transaction; multisig
+members separately approve and execute.
 
 ## Args
 
 ```json
 {
-  "transaction_base64": "required",
-  "intent": { "action": "transfer", "amount_raw": "50000000", "recipient": "9hSR…" },
-  "decision_record": { "verdict": "ALLOW", "…": "audited, never trusted" },
-  "memo": "optional note on the vault transaction"
+  "transaction_base64": "canonical full unsigned vault-native transaction",
+  "intent": {
+    "action": "spl_transfer",
+    "amount_raw": "25000000",
+    "recipient": "9hSR…"
+  },
+  "decision_record": {
+    "verdict": "ALLOW",
+    "note": "audit context only; independently checked"
+  },
+  "memo": "optional proposal note"
 }
 ```
 
-## Config keys
+## Config
 
 | Key | Required | Meaning |
 |---|---|---|
-| `rpc_url` | ✓ (https) | Multisig state, blockhash, simulation |
-| `squads_create_key` | ✓ | The multisig's create_key (PDA derived here) |
-| `proposer` | ✓ | Member pubkey creating proposals — **Initiate-only recommended** (cannot approve or execute) |
-| `squads_vault_index` | optional | default 0 |
-| `policy_json` | ✓ | The operator spend policy (independent evaluation) |
+| `rpc_url` | yes (HTTPS) | Solana RPC for multisig state, ALT resolution, and evaluation |
+| `squads_create_key` | yes | Public multisig create key used to derive Squads PDAs |
+| `proposer` | yes | Member public key whose permissions are exactly `Initiate=1`, `Approve=0`, `Execute=0` |
+| `squads_vault_index` | no | Vault index, default `0`; must match the vault used as builder `fee_payer` |
+| `policy_json` | yes | Host-injected operator policy used for independent evaluation |
 
-## Squads setup (one-time, ~5 min)
+## Squads setup
 
-1. Create or select a multisig in the Squads app.
-2. Add the agent's proposer as a member with **Initiate** permission only
-   (no Approve, no Execute).
-3. Put the multisig's `create_key` and the proposer pubkey in config.
-4. (Optional) create a Squads Spending Limit; keep the local policy
-   stricter of the two.
+1. Create or select the Squads multisig and vault index.
+2. Derive the vault public key and use it as `spl-transfer-build.fee_payer`.
+3. Add the proposer member with permission bits exactly **Initiate=1,
+   Approve=0, Execute=0**. “Initiate plus another permission” is not accepted.
+4. Configure the public create key, proposer key, vault index, and policy.
+5. Keep all private keys and signer material outside plugin configuration.
 
-## Threat model
+## Worked flow
 
-Everything the guard checks, this component re-checks independently —
-including the caller's own honesty. A compromised agent can forge records,
-mutate transactions, or misreport intents; none of it produces a proposal
-unless the transaction independently passes policy at proposal time.
-
-## Worked example
-
-```
-agent: "propose this 0.05-SOL payment to the multisig"
-tool : unsigned proposal tx — "Squads proposal #1 created (unsigned)."
-       (independent re-authorization: ALLOW)
-human: signs + submits, approves from phone → multisig executes
-       (verified on devnet — see EVIDENCE.md)
+```text
+builder   : canonical full unsigned vault-native payment draft
+authorizer: ALLOW for those exact bytes and intent
+proposer  : independent ALLOW; unchanged instructions embedded in an unsigned
+            Squads proposal transaction
+human     : Initiate-only account submits; multisig members approve/execute
 ```
 
-Build: `cargo build --target wasm32-wasip2 --release` · Test: `cargo test`.
+The historical signatures in the root `EVIDENCE.md` predate the current
+remediation and are not proof that the current exact artifacts exercised these
+invariants. A fresh live run and recording are required.
+
+From the repository root: build with
+`cargo build --manifest-path plugins/squads-proposal-build/Cargo.toml --target wasm32-wasip2 --release`
+and test with `cargo test --manifest-path plugins/squads-proposal-build/Cargo.toml`.

@@ -9,11 +9,10 @@
     "9hSR6S7WPtxmTojgo6GG3k4yDPecgJY292j7xrsUGWBu"
   ],
   "allowed_instructions": {
-    "system": ["transfer", "advance_nonce"],
-    "spl_token": ["transfer", "transfer_checked"],
+    "system": ["transfer"],
+    "spl_token": ["transfer_checked"],
     "associated_token": ["create_idempotent"],
-    "memo": ["memo"],
-    "squads": ["squads_ix"]
+    "memo": ["memo"]
   },
   "unknown_program": "deny",
   "unknown_instruction": "deny",
@@ -21,10 +20,10 @@
   "durable_nonce": "review",
   "token_2022": {
     "permanent_delegate": "deny",
-    "transfer_hook": "review",
-    "transfer_fee": "review",
+    "transfer_hook": "deny",
+    "transfer_fee": "deny",
     "default_frozen": "deny"
   },
   "simulation": { "required": true, "max_slot_age": 32 },
-  "_comment": "Persona: small merchant. Max 2 SOL or 25 USDC per transaction, one known supplier wallet, everything else escalates or dies. Raw units only."
+  "comment": "Persona: small merchant. Max 2 SOL or 25 USDC per transaction, one known supplier wallet, everything else escalates or dies. Raw units only."
 }

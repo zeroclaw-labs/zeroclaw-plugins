@@ -5,10 +5,12 @@
 //! path produces a verdict, never a panic: malformed input → DENY, missing
 //! evidence → UNKNOWN (fail closed), anything unexpected → DENY.
 
-use safe_hands_core::codec::{base64_decode, base64_encode, shortvec_encode};
+use safe_hands_core::codec::{base64_decode, unsigned_transaction_bytes};
 use safe_hands_core::decode::decode;
 use safe_hands_core::policy::{evaluate, hex_sha256, policy_from_config, Intent, Report, Verdict};
-use safe_hands_core::rpc::RpcTransport;
+use safe_hands_core::rpc::{
+    simulate_strict, verify_classic_transfer_mints, RpcTransport, SimulationOutcome,
+};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -98,7 +100,6 @@ pub fn run(args_json: &str, transport: Option<&dyn RpcTransport>) -> ExecuteOutp
             }));
         }
     };
-    let message_digest = hex_sha256(&tx_bytes);
     let decoded = match decode(&tx_bytes) {
         Ok(d) => d,
         Err(e) => {
@@ -110,6 +111,21 @@ pub fn run(args_json: &str, transport: Option<&dyn RpcTransport>) -> ExecuteOutp
             }));
         }
     };
+    let canonical_unsigned = match unsigned_transaction_bytes(
+        &decoded.serialized_message,
+        decoded.required_signatures,
+    ) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            return ExecuteOutput::verdict(json!({
+                "verdict": "DENY",
+                "summary": format!("The decoded transaction could not be normalized canonically. ({error})"),
+                "reason_codes": ["SH-DENY-DECODE-062"],
+                "next_action": "DO_NOT_SIGN"
+            }));
+        }
+    };
+    let message_digest = hex_sha256(&canonical_unsigned);
 
     let mut facts = decoded.facts.clone();
     facts.intent = args.intent.clone();
@@ -117,15 +133,14 @@ pub fn run(args_json: &str, transport: Option<&dyn RpcTransport>) -> ExecuteOutp
     // 3. Simulation: mandatory when policy requires it. Evidence problems =
     //    UNKNOWN, never silent.
     if policy.simulation.required {
-        facts.simulation_ok = match simulate(
-            transport,
-            &decoded,
-            &tx_bytes,
-            tx_b64,
-            policy.simulation.max_slot_age,
-        ) {
-            SimOutcome::Ok => true,
-            SimOutcome::Stale => {
+        facts.simulation_ok = match transport
+            .map(|rpc| simulate_strict(rpc, &decoded, policy.simulation.max_slot_age))
+            .unwrap_or_else(|| SimulationOutcome::Unavailable {
+                reason: "no RPC transport available".to_string(),
+            }) {
+            SimulationOutcome::Ok { .. } => true,
+            SimulationOutcome::Failed { .. } => false,
+            SimulationOutcome::Stale { .. } => {
                 return ExecuteOutput::verdict(verdict_json(
                     &Report {
                         verdict: Verdict::Unknown,
@@ -139,7 +154,7 @@ pub fn run(args_json: &str, transport: Option<&dyn RpcTransport>) -> ExecuteOutp
                     args.detail_level.as_deref(),
                 ));
             }
-            SimOutcome::Unavailable => {
+            SimulationOutcome::Unavailable { .. } => {
                 return ExecuteOutput::verdict(verdict_json(
                     &Report {
                         verdict: Verdict::Unknown,
@@ -153,22 +168,47 @@ pub fn run(args_json: &str, transport: Option<&dyn RpcTransport>) -> ExecuteOutp
                     args.detail_level.as_deref(),
                 ));
             }
-            SimOutcome::Failed => false,
         };
     }
 
-    // --- 4. Token-2022 mint risk (delegate / hook / fee / default-frozen) --
-    // Fetch every involved mint once; classic SPL mints are a single cheap read.
-    if let Some(rpc) = transport {
-        for tr in &decoded.facts.transfers {
-            if let Some(mint) = &tr.mint {
-                if let Some(risk) = fetch_mint_risk(rpc, mint) {
-                    facts.token2022.permanent_delegate |= risk.permanent_delegate;
-                    facts.token2022.transfer_hook |= risk.transfer_hook;
-                    facts.token2022.transfer_fee |= risk.transfer_fee;
-                    facts.token2022.default_frozen |= risk.default_frozen;
-                }
-            }
+    // --- 4. Classic SPL mint evidence ------------------------------------
+    // Every decoded classic TransferChecked must bind its declared decimals
+    // to one trustworthy on-chain Mint account before ALLOW is possible, even
+    // when simulation is optional. Fresh required simulation remains the
+    // executable-state evidence for source and destination token accounts.
+    if decoded
+        .facts
+        .transfers
+        .iter()
+        .any(|transfer| transfer.mint.is_some())
+    {
+        let Some(rpc) = transport else {
+            return ExecuteOutput::verdict(verdict_json(
+                &Report {
+                    verdict: Verdict::Unknown,
+                    reason_codes: vec!["SH-UNKNOWN-MINT-EVIDENCE-053".to_string()],
+                    matched_rules: vec!["CLASSIC_MINT_EVIDENCE".to_string()],
+                },
+                &decoded_summary(&decoded.facts),
+                &message_digest,
+                &policy_sha256,
+                "RETRY_OR_ALERT_OPERATOR",
+                args.detail_level.as_deref(),
+            ));
+        };
+        if verify_classic_transfer_mints(rpc, &decoded).is_err() {
+            return ExecuteOutput::verdict(verdict_json(
+                &Report {
+                    verdict: Verdict::Unknown,
+                    reason_codes: vec!["SH-UNKNOWN-MINT-EVIDENCE-053".to_string()],
+                    matched_rules: vec!["CLASSIC_MINT_EVIDENCE".to_string()],
+                },
+                &decoded_summary(&decoded.facts),
+                &message_digest,
+                &policy_sha256,
+                "RETRY_OR_ALERT_OPERATOR",
+                args.detail_level.as_deref(),
+            ));
         }
     }
 
@@ -185,66 +225,6 @@ pub fn run(args_json: &str, transport: Option<&dyn RpcTransport>) -> ExecuteOutp
         next_action,
         args.detail_level.as_deref(),
     ))
-}
-
-/// Simulation outcomes, mapped to fail-closed semantics.
-enum SimOutcome {
-    Ok,
-    Stale,
-    Failed,
-    Unavailable,
-}
-
-/// Simulate a canonical unsigned transaction and require fresh, structurally
-/// complete RPC evidence. Missing fields never count as successful evidence.
-fn simulate(
-    transport: Option<&dyn RpcTransport>,
-    decoded: &safe_hands_core::decode::DecodedTx,
-    tx_bytes: &[u8],
-    tx_b64: &str,
-    max_slot_age: u64,
-) -> SimOutcome {
-    let Some(rpc) = transport else {
-        return SimOutcome::Unavailable;
-    };
-    let simulation_tx = if decoded.has_signature_array {
-        tx_b64.to_string()
-    } else {
-        wrap_unsigned_tx(tx_bytes, decoded.required_signatures)
-    };
-    let params = json!([
-        simulation_tx,
-        {"encoding": "base64", "sigVerify": false, "replaceRecentBlockhash": true}
-    ]);
-    let response = match rpc.call("simulateTransaction", params) {
-        Ok(response) => response,
-        Err(_) => return SimOutcome::Unavailable,
-    };
-    match response.pointer("/result/value/err") {
-        Some(Value::Null) => {}
-        Some(_) => return SimOutcome::Failed,
-        None => return SimOutcome::Unavailable,
-    }
-    let Some(simulation_slot) = response
-        .pointer("/result/context/slot")
-        .and_then(Value::as_u64)
-    else {
-        return SimOutcome::Unavailable;
-    };
-    let current_slot = match rpc.call("getSlot", json!([{"commitment": "confirmed"}])) {
-        Ok(response) => match response.get("result").and_then(Value::as_u64) {
-            Some(slot) => slot,
-            None => return SimOutcome::Unavailable,
-        },
-        Err(_) => return SimOutcome::Unavailable,
-    };
-    if current_slot < simulation_slot {
-        return SimOutcome::Unavailable;
-    }
-    if current_slot - simulation_slot > max_slot_age {
-        return SimOutcome::Stale;
-    }
-    SimOutcome::Ok
 }
 
 /// One-paragraph human narration of the decoded transaction.
@@ -301,29 +281,11 @@ fn short_key(key: &str) -> String {
     }
 }
 
-/// Fetch a mint account and parse Token-2022 risk signals. Unavailable RPC or
-/// missing account yields None — evaluation continues with the signals that
-/// exist (the simulation gate still fail-closes independently).
-fn fetch_mint_risk(rpc: &dyn RpcTransport, mint: &str) -> Option<safe_hands_core::tlv::MintRisk> {
-    let resp = rpc
-        .call("getAccountInfo", json!([mint, {"encoding": "base64"}]))
-        .ok()?;
-    let owner = resp
-        .pointer("/result/value/owner")
-        .and_then(Value::as_str)?
-        .to_string();
-    let data = resp
-        .pointer("/result/value/data/0")
-        .and_then(Value::as_str)?;
-    let bytes = base64_decode(data, 65_536).ok()?;
-    Some(safe_hands_core::tlv::parse_mint_risk(&owner, &bytes))
-}
-
 /// Verdict → the next tool the agent should call (routing, never a dead end).
 fn next_action_for(report: &Report) -> &'static str {
     match report.verdict {
         Verdict::Allow => "SIGN_OR_SQUADS_PROPOSE",
-        Verdict::Review => "squads-proposal-build",
+        Verdict::Review => "HUMAN_OPERATOR_REVIEW",
         Verdict::Deny => "DO_NOT_SIGN",
         Verdict::Unknown => "RETRY_OR_ALERT_OPERATOR",
     }
@@ -368,17 +330,6 @@ fn verdict_json(
         out["policy_sha256"] = json!(format!("sha256:{policy_sha256}"));
     }
     out
-}
-
-/// Wrap bare message bytes as an unsigned transaction (zeroed sig slots) —
-/// needed by simulateTransaction when callers pass a bare message.
-pub fn wrap_unsigned_tx(message_bytes: &[u8], num_signatures: usize) -> String {
-    let mut tx = shortvec_encode(num_signatures);
-    for _ in 0..num_signatures {
-        tx.extend_from_slice(&[0u8; 64]);
-    }
-    tx.extend_from_slice(message_bytes);
-    base64_encode(&tx)
 }
 
 #[cfg(test)]

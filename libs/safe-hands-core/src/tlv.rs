@@ -1,10 +1,13 @@
-//! Token-2022 mint extension (TLV) parsing — the risk signals the policy
-//! engine enforces on: permanent delegate, transfer hook, transfer fee,
-//! default-frozen (honeypot pattern).
+//! Token-2022 mint extension (TLV) compatibility parsing.
 //!
-//! Layout (official spl-token-2022): base mint is 82 bytes. Extended mints
-//! have an account-type byte at 82, then TLV entries: type u16 LE, length
-//! u16 LE, value. Extension type numbers (official extension.rs):
+//! Safe Hands v0.1 hard-denies every Token-2022 instruction. These signals are
+//! retained only for decoding/audit compatibility and do not imply positive
+//! execution support.
+//!
+//! Layout (official spl-token-2022): the base mint is 82 bytes, followed by
+//! zero padding through byte 164. The account-type byte is at offset 165 and
+//! TLV entries begin at 166: type u16 LE, length u16 LE, value.
+//! Extension type numbers (official extension.rs):
 //! 1 = TransferFeeConfig, 6 = DefaultAccountState, 12 = PermanentDelegate,
 //! 14 = TransferHook.
 
@@ -25,6 +28,8 @@ pub struct MintRisk {
 }
 
 const BASE_MINT_LEN: usize = 82;
+const ACCOUNT_TYPE_OFFSET: usize = 165;
+const TLV_OFFSET: usize = 166;
 const ACCOUNT_TYPE_MINT_EXT: u8 = 1; // Token-2022 AccountType::Mint
 
 /// Parse a mint account buffer + owner into [`MintRisk`]. Total function:
@@ -34,13 +39,17 @@ pub fn parse_mint_risk(owner: &str, data: &[u8]) -> MintRisk {
         is_token_2022: owner == TOKEN_2022_PROGRAM_ID,
         ..Default::default()
     };
-    if !risk.is_token_2022 || data.len() <= BASE_MINT_LEN {
+    if !risk.is_token_2022 || data.len() <= ACCOUNT_TYPE_OFFSET {
         return risk;
     }
-    if data[BASE_MINT_LEN] != ACCOUNT_TYPE_MINT_EXT {
+    if data[BASE_MINT_LEN..ACCOUNT_TYPE_OFFSET]
+        .iter()
+        .any(|byte| *byte != 0)
+        || data[ACCOUNT_TYPE_OFFSET] != ACCOUNT_TYPE_MINT_EXT
+    {
         return risk;
     }
-    let mut cursor = BASE_MINT_LEN + 1;
+    let mut cursor = TLV_OFFSET;
     while cursor + 4 <= data.len() {
         let ext_type = u16::from_le_bytes([data[cursor], data[cursor + 1]]);
         let ext_len = u16::from_le_bytes([data[cursor + 2], data[cursor + 3]]) as usize;
@@ -74,7 +83,7 @@ mod tests {
         } else {
             "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA".to_string()
         };
-        let mut data = vec![0u8; BASE_MINT_LEN];
+        let mut data = vec![0u8; ACCOUNT_TYPE_OFFSET];
         if !extensions.is_empty() {
             data.push(ACCOUNT_TYPE_MINT_EXT);
             for (t, v) in extensions {
@@ -138,14 +147,13 @@ mod tests {
 
     #[test]
     fn truncated_tlv_stops_cleanly() {
-        let mut data = vec![0u8; BASE_MINT_LEN + 1];
-        data[BASE_MINT_LEN] = ACCOUNT_TYPE_MINT_EXT;
+        let mut data = vec![0u8; TLV_OFFSET];
+        data[ACCOUNT_TYPE_OFFSET] = ACCOUNT_TYPE_MINT_EXT;
         data.extend_from_slice(&[12, 0, 255, 255]); // declares huge entry, no payload
         let r = parse_mint_risk(TOKEN_2022_PROGRAM_ID, &data);
         assert!(!r.permanent_delegate, "truncated entry must not count");
     }
 }
-
 
 #[cfg(test)]
 mod official_layout_tests {
@@ -153,11 +161,11 @@ mod official_layout_tests {
 
     #[test]
     fn token_2022_official_mint_account_type_marker_is_parsed() {
-        // Token-2022 AccountType is Uninitialized=0, Mint=1, Account=2.
-        // Build this golden independently of the parser's private constant so
-        // a self-consistent but wrong marker cannot make the test pass.
-        let mut data = vec![0u8; 82];
-        data.push(1);
+        // Token-2022 pads mint state through offset 164, writes Mint=1 at
+        // offset 165, and begins TLV at 166. These offsets are literal here so
+        // a self-consistent but wrong parser constant cannot make the test pass.
+        let mut data = vec![0u8; 166];
+        data[165] = 1;
         data.extend_from_slice(&12u16.to_le_bytes());
         data.extend_from_slice(&32u16.to_le_bytes());
         data.extend_from_slice(&[7u8; 32]);

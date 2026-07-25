@@ -1,6 +1,7 @@
 //! Round-trip tests: build with our instruction builders → serialize → decode
 //! → the facts must come back exactly. This is the suite-coherence invariant.
 
+use proptest::prelude::*;
 use safe_hands_core::codec::{base64_decode, base64_encode, shortvec_encode};
 use safe_hands_core::crypto::{ata_address, parse_pubkey};
 use safe_hands_core::decode::{decode, TxVersion};
@@ -8,7 +9,6 @@ use safe_hands_core::ix;
 use solana_hash::Hash;
 use solana_message::Message;
 use solana_pubkey::Pubkey;
-use proptest::prelude::*;
 
 const USDC: &str = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 
@@ -56,6 +56,7 @@ fn legacy_roundtrip_classifies_everything() {
         Some("transfer_checked")
     );
     assert_eq!(d.facts.instructions[2].program, "memo");
+    assert_eq!(d.facts.memos, vec!["invoice-412"]);
 
     assert_eq!(d.facts.transfers.len(), 1);
     let tr = &d.facts.transfers[0];
@@ -70,6 +71,36 @@ fn legacy_roundtrip_classifies_everything() {
         )
         .to_string()
     );
+}
+
+#[test]
+fn ata_create_classifier_fails_closed() {
+    let payer = payer();
+    let recipient = dest();
+    let mint = parse_pubkey(USDC).expect("mint");
+    let token_program = ix::spl_token_program();
+    let ata = ata_address(&recipient, &token_program, &mint);
+    let source = Pubkey::new_from_array([7u8; 32]);
+    let transfer = ix::transfer_checked(&token_program, &source, &mint, &ata, &payer, 1, 6);
+    let serialize = |instructions: &[solana_instruction::Instruction]| {
+        let mut message = Message::new(instructions, Some(&payer));
+        message.recent_blockhash = Hash::new_from_array([7u8; 32]);
+        bincode::serialize(&message).expect("serialize")
+    };
+
+    let valid = ix::ata_create_idempotent(&payer, &ata, &recipient, &mint, &token_program);
+    assert!(decode(&serialize(&[valid.clone(), transfer.clone()])).is_ok());
+
+    let mut legacy_empty = valid.clone();
+    legacy_empty.data.clear();
+    assert!(decode(&serialize(&[legacy_empty, transfer.clone()])).is_err());
+
+    let mut wrong_derivation = valid.clone();
+    wrong_derivation.accounts[1].pubkey = Pubkey::new_from_array([44u8; 32]);
+    assert!(decode(&serialize(&[wrong_derivation, transfer.clone()])).is_err());
+
+    assert!(decode(&serialize(std::slice::from_ref(&valid))).is_err());
+    assert!(decode(&serialize(&[valid.clone(), valid, transfer])).is_err());
 }
 
 #[test]
@@ -98,6 +129,14 @@ fn signature_strip_and_signed_detection() {
     tx2.extend_from_slice(&usdc_transfer_message());
     let d2 = decode(&tx2).expect("signed tx form decodes");
     assert!(d2.facts.signed, "nonzero signature byte = signed");
+
+    let mut wrong_count = shortvec_encode(2);
+    wrong_count.extend_from_slice(&[0u8; 128]);
+    wrong_count.extend_from_slice(&usdc_transfer_message());
+    assert!(
+        decode(&wrong_count).is_err(),
+        "signature count must match header"
+    );
 }
 
 #[test]
@@ -184,6 +223,54 @@ fn v0_alt_loaded_recipient_requires_resolution_then_decodes() {
 }
 
 #[test]
+fn malformed_versioned_framing_is_rejected_independently() {
+    let authority = payer();
+    let system = Pubkey::default();
+    let minimal = |marker: u8, key_count: &[u8], lookup_count: &[u8], trailing: &[u8]| {
+        let mut message = vec![marker];
+        message.extend_from_slice(&[1, 0, 1]);
+        message.extend_from_slice(key_count);
+        message.extend_from_slice(authority.as_ref());
+        message.extend_from_slice(system.as_ref());
+        message.extend_from_slice(&[7u8; 32]);
+        message.push(0); // no instructions
+        message.extend_from_slice(lookup_count);
+        message.extend_from_slice(trailing);
+        message
+    };
+
+    assert!(decode(&minimal(0x80, &[2], &[0], &[])).is_ok());
+    for marker in [0x81, 0x82, 0xff] {
+        assert!(decode(&minimal(marker, &[2], &[0], &[])).is_err());
+    }
+    assert!(decode(&minimal(0x80, &[0x82, 0x00], &[0], &[])).is_err());
+    assert!(decode(&minimal(0x80, &[2], &[0x80, 0x00], &[])).is_err());
+    assert!(decode(&minimal(0x80, &[2], &[0], &[0])).is_err());
+}
+
+#[test]
+fn memo_decode_is_strict_utf8_and_cardinality_bounded() {
+    let payer = payer();
+    let memo_program = parse_pubkey(safe_hands_core::ix::MEMO_PROGRAM).unwrap();
+    let serialize = |instructions: Vec<solana_instruction::Instruction>| {
+        let mut message = Message::new(&instructions, Some(&payer));
+        message.recent_blockhash = Hash::new_from_array([7u8; 32]);
+        bincode::serialize(&message).unwrap()
+    };
+    let invalid_utf8 = solana_instruction::Instruction {
+        program_id: memo_program,
+        accounts: vec![],
+        data: vec![0xff],
+    };
+    assert!(decode(&serialize(vec![invalid_utf8])).is_err());
+
+    let memos = (0..9)
+        .map(|index| ix::memo(&format!("memo-{index}")))
+        .collect();
+    assert!(decode(&serialize(memos)).is_err());
+}
+
+#[test]
 fn approve_is_authority_change() {
     // SPL Approve ix: disc 7 — latent drain path, must flag.
     let payer = payer();
@@ -217,7 +304,6 @@ fn garbage_fails_closed() {
     assert!(decode(&[0xff, 0xff, 0xff]).is_err());
     assert!(decode(b"hello world this is not a transaction").is_err());
 }
-
 
 // --- Property: the decoder is a total function (never panics) ---------------
 // Untrusted wire bytes are the primary attack surface. This asserts that any

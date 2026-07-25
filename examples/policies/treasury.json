@@ -21,7 +21,6 @@
     "transfer_fee": "deny",
     "default_frozen": "deny"
   },
-  "velocity": { "max_allow_per_hour": 3 },
   "simulation": { "required": true, "max_slot_age": 16 },
-  "_comment": "Persona: DAO/team treasury. Tiny caps, no standing recipients, intent mandatory, nonces forbidden, velocity-limited. Everything meaningful routes to the multisig."
+  "comment": "Persona: DAO/team treasury. Tiny caps, no standing recipients, intent mandatory, and nonces forbidden. Everything meaningful routes to the multisig."
 }

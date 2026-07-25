@@ -1,17 +1,16 @@
 //! The transfer builder: args → validated unsigned transaction + matching intent.
 //!
-//! Pure logic, zero wasm dependency — the component shim in `lib.rs` calls
-//! [`run`] with a real transport; host tests call it with mocks. The builder
-//! never signs and never emits a transaction its own policy engine would deny
-//! (the pre-check runs before serialization, and a policy rejection is a hard
-//! error, not a transaction).
+//! Pure logic, zero wasm dependency. The builder never signs and emits only a
+//! canonical unsigned transaction that its own policy engine evaluates ALLOW.
 
-use safe_hands_core::codec::base64_encode;
+use safe_hands_core::codec::{
+    base64_decode, unsigned_transaction_base64, unsigned_transaction_bytes,
+};
 use safe_hands_core::crypto::{ata_address, parse_pubkey};
 use safe_hands_core::decode::decode;
 use safe_hands_core::ix;
 use safe_hands_core::policy::{evaluate, policy_from_config, Intent, Verdict};
-use safe_hands_core::rpc::RpcTransport;
+use safe_hands_core::rpc::{fetch_classic_mint_decimals, RpcTransport};
 use safe_hands_core::{bincode, bs58, solana_hash::Hash, solana_message::Message};
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -31,7 +30,6 @@ struct Args {
     config: HashMap<String, String>,
 }
 
-/// What the shim returns to the host: (success, output, error).
 pub struct ExecuteOutput {
     pub success: bool,
     pub output: String,
@@ -46,6 +44,7 @@ impl ExecuteOutput {
             error: None,
         }
     }
+
     fn err(message: impl Into<String>) -> Self {
         Self {
             success: false,
@@ -55,34 +54,63 @@ impl ExecuteOutput {
     }
 }
 
-/// Run one build. Requires config keys:
-/// - `fee_payer`: the wallet that pays fees and (for SPL) owns the source
-///   tokens. Public key only — never a secret.
-/// - `rpc_url`: endpoint for blockhash + mint metadata (https).
-/// - `policy_json`: the operator spend policy (same document the authorizer
-///   enforces); the builder refuses to emit anything it would deny.
 pub fn run(args_json: &str, transport: Option<&dyn RpcTransport>) -> ExecuteOutput {
-    let args: Args = match serde_json::from_str(args_json) {
-        Ok(a) => a,
-        Err(e) => return ExecuteOutput::err(format!("invalid arguments: {e}")),
+    let mut args: Args = match serde_json::from_str(args_json) {
+        Ok(args) => args,
+        Err(error) => return ExecuteOutput::err(format!("invalid arguments: {error}")),
     };
 
-    // --- validate inputs ------------------------------------------------
-    let recipient = match parse_pubkey(&args.recipient) {
-        Ok(k) => k,
-        Err(e) => return ExecuteOutput::err(format!("invalid recipient: {e}")),
+    // An omitted optional field and one the model filled with "" mean the same
+    // thing: absent. Models routinely emit empty strings for optionals, and
+    // treating "" as a value turns a well-formed request into a parse error
+    // about a field the caller never meant to set.
+    let blank = |value: &Option<String>| value.as_deref().is_some_and(|v| v.trim().is_empty());
+    for field in [&mut args.mint, &mut args.memo, &mut args.token_program] {
+        if blank(field) {
+            *field = None;
+        }
+    }
+
+    // Policy is a construction prerequisite, not a best-effort post-check.
+    let policy = match policy_from_config(&args.config) {
+        Ok(policy) => policy,
+        Err(error) => {
+            return ExecuteOutput::err(format!(
+                "no valid spend policy is configured — fail closed ({error})"
+            ))
+        }
     };
-    let amount: u64 = match args.amount_raw.trim().parse::<u64>() {
-        Ok(a) if a > 0 => a,
+
+    let classic_token_program = ix::spl_token_program();
+    if let Some(configured) = &args.token_program {
+        let configured = match parse_pubkey(configured) {
+            Ok(program) => program,
+            Err(error) => return ExecuteOutput::err(format!("invalid token_program: {error}")),
+        };
+        if configured != classic_token_program {
+            return ExecuteOutput::err(
+                "unsupported token_program: safe v0.1 supports only classic SPL Token (Tokenkeg...)"
+            );
+        }
+    }
+
+    let recipient = match parse_pubkey(&args.recipient) {
+        Ok(recipient) => recipient,
+        Err(error) => return ExecuteOutput::err(format!("invalid recipient: {error}")),
+    };
+    let amount = match args.amount_raw.trim().parse::<u64>() {
+        Ok(amount) if amount > 0 => amount,
         _ => {
             return ExecuteOutput::err("amount_raw must be a positive integer (raw smallest units)")
         }
     };
     let fee_payer = match args.config.get("fee_payer") {
-        Some(fp) => match parse_pubkey(fp) {
-            Ok(k) => k,
-            Err(e) => {
-                return ExecuteOutput::err(format!("config fee_payer is not a valid pubkey: {e}"))
+        Some(fee_payer) => match parse_pubkey(fee_payer) {
+            Ok(fee_payer) => fee_payer,
+            Err(error) => {
+                return ExecuteOutput::err(format!(
+                    "config fee_payer is not a valid pubkey: {error}"
+                ))
             }
         },
         None => {
@@ -91,120 +119,189 @@ pub fn run(args_json: &str, transport: Option<&dyn RpcTransport>) -> ExecuteOutp
             )
         }
     };
-    if let Some(memo) = &args.memo {
-        if memo.len() > 566 {
-            return ExecuteOutput::err("memo exceeds Solana's 566-byte memo bound");
-        }
+    if args.memo.as_ref().is_some_and(|memo| memo.len() > 566) {
+        return ExecuteOutput::err("memo exceeds Solana's 566-byte memo bound");
     }
-
     let rpc = match transport {
-        Some(t) => t,
+        Some(rpc) => rpc,
         None => {
             return ExecuteOutput::err("no RPC transport available (rpc_url missing or not https)")
         }
     };
 
-    // --- build the instruction set --------------------------------------
-    let token_program = match &args.token_program {
-        Some(tp) => match parse_pubkey(tp) {
-            Ok(k) => k,
-            Err(e) => return ExecuteOutput::err(format!("invalid token_program: {e}")),
-        },
-        None => ix::spl_token_program(),
-    };
-
-    let mut ixs = Vec::new();
+    let mut instructions = Vec::new();
     let mut destination_desc = args.recipient.clone();
-
     match &args.mint {
-        None => {
-            ixs.push(ix::system_transfer(&fee_payer, &recipient, amount));
-        }
-        Some(mint_str) => {
-            let mint = match parse_pubkey(mint_str) {
-                Ok(k) => k,
-                Err(e) => return ExecuteOutput::err(format!("invalid mint: {e}")),
+        None => instructions.push(ix::system_transfer(&fee_payer, &recipient, amount)),
+        Some(mint_string) => {
+            let mint = match parse_pubkey(mint_string) {
+                Ok(mint) => mint,
+                Err(error) => return ExecuteOutput::err(format!("invalid mint: {error}")),
             };
-            let decimals = match fetch_mint_decimals(rpc, mint_str) {
-                Ok(d) => d,
-                Err(e) => return ExecuteOutput::err(format!("could not read mint decimals: {e}")),
+            let decimals = match fetch_classic_mint_decimals(rpc, mint_string) {
+                Ok(decimals) => decimals,
+                Err(error) => {
+                    return ExecuteOutput::err(format!("could not read mint decimals: {error}"))
+                }
             };
-            let dest_ata = ata_address(&recipient, &token_program, &mint);
-            let source_ata = ata_address(&fee_payer, &token_program, &mint);
-            ixs.push(ix::ata_create_idempotent(
+            let destination = ata_address(&recipient, &classic_token_program, &mint);
+            let source = ata_address(&fee_payer, &classic_token_program, &mint);
+            instructions.push(ix::ata_create_idempotent(
                 &fee_payer,
-                &dest_ata,
+                &destination,
                 &recipient,
                 &mint,
-                &token_program,
+                &classic_token_program,
             ));
-            ixs.push(ix::transfer_checked(
-                &token_program,
-                &source_ata,
+            instructions.push(ix::transfer_checked(
+                &classic_token_program,
+                &source,
                 &mint,
-                &dest_ata,
+                &destination,
                 &fee_payer,
                 amount,
                 decimals,
             ));
-            destination_desc = dest_ata.to_string();
+            destination_desc = destination.to_string();
         }
     }
     if let Some(memo) = &args.memo {
-        ixs.push(ix::memo(memo));
+        instructions.push(ix::memo(memo));
     }
 
-    // --- blockhash -------------------------------------------------------
-    let blockhash = match fetch_blockhash(rpc) {
-        Ok(h) => h,
-        Err(e) => return ExecuteOutput::err(format!("could not fetch recent blockhash: {e}")),
+    // Durable-nonce mode. A recent blockhash dies in roughly ninety seconds,
+    // which is shorter than a human takes to approve a refund; when the
+    // operator configures a nonce account, the transaction's validity is
+    // pinned to the nonce instead and survives the approval queue.
+    //
+    // Both the account and the authority come from host config. AdvanceNonce
+    // is unshiftably instruction 0 because it is inserted at the front here,
+    // and `solana-tx-authorize` independently re-checks both that position and
+    // the nonce allowlist on the exact bytes.
+    // A config key present but empty means "not configured". Clearing a value
+    // through a config UI commonly leaves "" behind, and treating that as an
+    // address turns an unset option into a hard failure.
+    let config_value = |key: &str| {
+        args.config
+            .get(key)
+            .map(String::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
     };
-
-    let mut msg = Message::new(&ixs, Some(&fee_payer));
-    msg.recent_blockhash = blockhash;
-    let tx_bytes = match bincode::serialize(&msg) {
-        Ok(b) => b,
-        Err(e) => return ExecuteOutput::err(format!("serialize failed: {e}")),
-    };
-
-    // --- pre-check: never emit a transaction our own guard would deny ----
-    if let Ok(policy) = policy_from_config(&args.config) {
-        if let Ok(decoded) = decode(&tx_bytes) {
-            let mut facts = decoded.facts.clone();
-            facts.simulation_ok = true; // builder output is fresh, not yet simulated
-            facts.intent = Some(Intent {
-                action: if args.mint.is_some() {
-                    "spl_transfer".into()
-                } else {
-                    "transfer".into()
-                },
-                mint: args.mint.clone(),
-                amount_raw: amount.to_string(),
-                recipient: args.recipient.clone(),
-            });
-            let report = evaluate(&policy, &facts);
-            if report.verdict == Verdict::Deny {
-                return ExecuteOutput::err(format!(
-                    "builder refused: the requested transfer violates the operator policy ({})",
-                    report.reason_codes.join(", ")
-                ));
+    let nonce_account = config_value("nonce_account");
+    let nonce_authority = config_value("nonce_authority");
+    let (blockhash, durable) = match (nonce_account, nonce_authority) {
+        (Some(account), Some(authority)) => {
+            if let Err(error) = parse_pubkey(account).and_then(|_| parse_pubkey(authority)) {
+                return ExecuteOutput::err(format!("invalid nonce configuration: {error}"));
             }
+            let nonce = match safe_hands_core::rpc::fetch_durable_nonce(rpc, account, authority) {
+                Ok(nonce) => nonce,
+                Err(error) => {
+                    return ExecuteOutput::err(format!("durable nonce unusable: {error}"))
+                }
+            };
+            let hash = match bs58::decode(&nonce)
+                .into_vec()
+                .ok()
+                .and_then(|bytes| <[u8; 32]>::try_from(bytes).ok())
+            {
+                Some(bytes) => Hash::new_from_array(bytes),
+                None => return ExecuteOutput::err("durable nonce is not a 32-byte value"),
+            };
+            let (account, authority) = (
+                parse_pubkey(account).expect("validated above"),
+                parse_pubkey(authority).expect("validated above"),
+            );
+            instructions.insert(0, ix::advance_nonce(&account, &authority));
+            (hash, true)
         }
+        (None, None) => match fetch_blockhash(rpc) {
+            Ok(blockhash) => (blockhash, false),
+            Err(error) => {
+                return ExecuteOutput::err(format!("could not fetch recent blockhash: {error}"))
+            }
+        },
+        _ => {
+            return ExecuteOutput::err(
+                "durable-nonce mode needs both nonce_account and nonce_authority — configuring \
+                 one without the other is ambiguous, so it fails closed",
+            )
+        }
+    };
+    let mut message = Message::new(&instructions, Some(&fee_payer));
+    message.recent_blockhash = blockhash;
+    let serialized_message = match bincode::serialize(&message) {
+        Ok(bytes) => bytes,
+        Err(error) => return ExecuteOutput::err(format!("serialize failed: {error}")),
+    };
+    let required_signatures = usize::from(message.header.num_required_signatures);
+    let transaction_base64 =
+        match unsigned_transaction_base64(&serialized_message, required_signatures) {
+            Ok(encoded) => encoded,
+            Err(error) => {
+                return ExecuteOutput::err(format!("unsigned transaction assembly failed: {error}"))
+            }
+        };
+    let transaction_bytes =
+        match unsigned_transaction_bytes(&serialized_message, required_signatures) {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                return ExecuteOutput::err(format!("unsigned transaction assembly failed: {error}"))
+            }
+        };
+
+    // Decode and authorize the exact final artifact, including signature slots.
+    let decoded = match decode(&transaction_bytes) {
+        Ok(decoded) => decoded,
+        Err(error) => {
+            return ExecuteOutput::err(format!(
+                "builder produced a malformed canonical transaction: {error}"
+            ))
+        }
+    };
+    let intent = Intent {
+        action: if args.mint.is_some() {
+            "spl_transfer".into()
+        } else {
+            "transfer".into()
+        },
+        mint: args.mint.clone(),
+        amount_raw: amount.to_string(),
+        recipient: args.recipient.clone(),
+        memo: args.memo.clone(),
+    };
+    let mut facts = decoded.facts.clone();
+    facts.simulation_ok = true; // construction-time semantic self-check only
+    facts.intent = Some(intent);
+    let report = evaluate(&policy, &facts);
+    if report.verdict != Verdict::Allow {
+        return ExecuteOutput::err(format!(
+            "builder refused: policy returned {} ({})",
+            report.verdict.as_str(),
+            report.reason_codes.join(", ")
+        ));
     }
 
     let asset = args.mint.clone().unwrap_or_else(|| "SOL".into());
     let human_summary = format!(
-        "Send {amount} raw {asset} to {}.{}{}",
+        "Send {amount} raw {asset} to {}.{} Unsigned — a human or the host signs.",
         short_key(&args.recipient),
         args.memo
             .as_ref()
-            .map(|m| format!(" Memo: \"{m}\"."))
+            .map(|memo| format!(" Memo: \"{memo}\"."))
             .unwrap_or_default(),
-        " Unsigned — a human or the host signs."
     );
 
+    // Defensive equality check ensures the two shared canonical helpers agree.
+    if base64_decode(&transaction_base64, 4_096).ok().as_deref()
+        != Some(transaction_bytes.as_slice())
+    {
+        return ExecuteOutput::err("canonical transaction encoding mismatch");
+    }
+
     ExecuteOutput::ok(json!({
-        "transaction_base64": base64_encode(&tx_bytes),
+        "transaction_base64": transaction_base64,
         "intent": {
             "action": if args.mint.is_some() { "spl_transfer" } else { "transfer" },
             "mint": args.mint,
@@ -215,6 +312,12 @@ pub fn run(args_json: &str, transport: Option<&dyn RpcTransport>) -> ExecuteOutp
         "destination_account": destination_desc,
         "human_summary": human_summary,
         "unsigned": true,
+        "durable_nonce": durable,
+        "validity": if durable {
+            "pinned to the configured nonce account — survives an approval queue until the nonce advances"
+        } else {
+            "bound to a recent blockhash — expires in roughly 90 seconds"
+        },
     }))
 }
 
@@ -226,32 +329,26 @@ fn short_key(key: &str) -> String {
     }
 }
 
-/// Mint decimals = byte 44 of the SPL mint account layout.
-fn fetch_mint_decimals(rpc: &dyn RpcTransport, mint: &str) -> Result<u8, String> {
-    let resp = rpc.call("getAccountInfo", json!([mint, {"encoding": "base64"}]))?;
-    let data = resp
-        .pointer("/result/value/data/0")
-        .and_then(Value::as_str)
-        .ok_or("mint account not found")?;
-    use safe_hands_core::codec::base64_decode;
-    let bytes = base64_decode(data, 4096)?;
-    bytes
-        .get(44)
-        .copied()
-        .ok_or_else(|| "mint account data truncated".to_string())
-}
-
 fn fetch_blockhash(rpc: &dyn RpcTransport) -> Result<Hash, String> {
-    let resp = rpc.call("getLatestBlockhash", json!([]))?;
-    let b58 = resp
+    let response = rpc.call("getLatestBlockhash", json!([]))?;
+    reject_rpc_error(&response, "getLatestBlockhash")?;
+    let encoded = response
         .pointer("/result/value/blockhash")
         .and_then(Value::as_str)
         .ok_or("no blockhash in response")?;
-    let bytes = bs58::decode(b58)
+    let bytes = bs58::decode(encoded)
         .into_vec()
-        .map_err(|e| format!("bad blockhash: {e}"))?;
-    let arr: [u8; 32] = bytes.try_into().map_err(|_| "blockhash not 32 bytes")?;
-    Ok(Hash::new_from_array(arr))
+        .map_err(|error| format!("bad blockhash: {error}"))?;
+    let hash: [u8; 32] = bytes.try_into().map_err(|_| "blockhash not 32 bytes")?;
+    Ok(Hash::new_from_array(hash))
+}
+
+fn reject_rpc_error(response: &Value, method: &str) -> Result<(), String> {
+    if let Some(error) = response.get("error").filter(|error| !error.is_null()) {
+        Err(format!("{method} JSON-RPC error: {error}"))
+    } else {
+        Ok(())
+    }
 }
 
 #[cfg(test)]

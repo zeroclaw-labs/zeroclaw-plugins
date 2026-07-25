@@ -1,0 +1,162 @@
+# Safe Hands Merchant Desk — operator-only ZeroClaw config
+#
+# Four components, one skill, two SOPs. No sidecar service, no database:
+#   payment-verify       T0  derive the invoice, return its link, confirm payment
+#   spl-transfer-build   T1  build the unsigned refund/payout transfer
+#   solana-tx-authorize  T1  independently authorize the exact bytes
+#   squads-proposal-build T1 build the unsigned Squads proposal
+#
+# Stage and install the local artifacts first:
+#   just stage-local
+#   zeroclaw plugin install ./dist/local/payment-verify
+#   zeroclaw plugin install ./dist/local/spl-transfer-build
+#   zeroclaw plugin install ./dist/local/solana-tx-authorize
+#   zeroclaw plugin install ./dist/local/squads-proposal-build
+#
+# Replace only the PUBLIC-KEY and ID placeholders below. Never put a private
+# key, seed phrase, signer material, or API secret in this file. This config
+# uses Circle's Solana Devnet USDC mint; devnet tokens have no financial value.
+
+# ── Who may talk to the bot ────────────────────────────────────────────────
+#
+# This is the inbound gate, and it is the single most important block here.
+# An empty peer set denies everyone; `external_peers = ["*"]` accepts anyone.
+# NEVER use "*" for a merchant desk — it would hand every customer the
+# operator's tools. List only the merchant operator's Telegram user ID.
+#
+# Customers never talk to this bot. They receive the payment link or QR
+# out-of-band, through whatever channel the merchant already uses.
+#
+# Changes here take effect on daemon restart, not on a live process.
+
+[peer_groups.merchant_desk]
+channel = "telegram.operator"
+agents = ["merchant"]
+external_peers = ["<OPERATOR_TELEGRAM_USER_ID>"]
+
+[channels.telegram.operator]
+enabled = true
+bot_token = "<TELEGRAM_BOT_TOKEN_FROM_BOTFATHER>"
+
+# ── The agent ──────────────────────────────────────────────────────────────
+
+[agents.merchant]
+risk_profile = "merchant"
+
+# Approval policy.
+#
+# `allowed_tools` is the capability boundary: with a non-empty list, only
+# these tools are callable at all. These are native WASM tool plugins, so
+# each needs an explicit entry.
+#
+# Note for anyone adding an MCP server to this agent later: a non-empty
+# `allowed_tools` auto-admits ANY tool whose name contains `__`, which is the
+# `<server>__<tool>` convention. That would silently widen this list. Use
+# `excluded_tools` to block specific MCP tools, and prefer per-run cron
+# allow-lists, which are strict and have no `__` auto-admit.
+[risk_profiles.merchant]
+level = "supervised"
+allowed_tools = [
+  "payment-verify",
+  "spl-transfer-build",
+  "solana-tx-authorize",
+  "squads-proposal-build",
+]
+# Reading the chain and issuing an invoice move no money and need no gate.
+auto_approve = [
+  "payment-verify",
+]
+# Everything that could result in funds leaving the vault always prompts,
+# even at higher autonomy levels.
+always_ask = [
+  "spl-transfer-build",
+  "solana-tx-authorize",
+  "squads-proposal-build",
+]
+
+# ── Plugins ────────────────────────────────────────────────────────────────
+
+[plugins]
+enabled = true
+
+[[plugins.entries]]
+name = "payment-verify"
+
+[plugins.entries.config]
+# merchant_owner and invoice_salt are host-only on purpose: the plugin ignores
+# arguments of the same name, so a prompt cannot reissue invoices elsewhere.
+# Keep invoice_salt stable forever — changing it re-derives every reference and
+# orphans open invoices.
+merchant_owner = "<MERCHANT_WALLET_PUBKEY>"
+invoice_salt = "<RANDOM_STRING_KEEP_STABLE>"
+default_mint = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU"
+# Two INDEPENDENT endpoints. Both are queried and must agree, so one
+# compromised or lagging provider cannot mark an invoice paid. Two URLs
+# pointing at the same backend satisfy the check without buying the
+# independence it exists for.
+rpc_url = "https://api.devnet.solana.com"
+rpc_url_fallback = "<SECOND_INDEPENDENT_DEVNET_RPC_URL>"
+
+[[plugins.entries]]
+name = "spl-transfer-build"
+
+[plugins.entries.config]
+rpc_url = "https://api.devnet.solana.com"
+# For a proposal flow this must be the derived Squads vault public key. The
+# builder creates a vault-native draft; the vault is the sole required signer.
+fee_payer = "<DERIVED_SQUADS_VAULT_PUBKEY>"
+# Optional durable-nonce mode. A recent blockhash dies in ~90 seconds, which is
+# shorter than a human takes to approve a refund; with a nonce account the
+# transaction's validity is pinned to the nonce instead and survives the queue.
+# Setting these two is NOT sufficient — the policy must also allowlist the
+# nonce account and permit `advance_nonce`. Both halves, or it fails closed.
+# nonce_account = "<NONCE_ACCOUNT_PUBKEY>"
+# nonce_authority = "<NONCE_AUTHORITY_PUBKEY>"
+policy_json = "{\"version\":\"1.0.0\",\"default_action\":\"deny\",\"assets\":{\"SOL\":{\"decimals\":9,\"max_per_tx_raw\":\"2000000000\"},\"4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU\":{\"decimals\":6,\"max_per_tx_raw\":\"25000000\"}},\"allowed_recipients\":[\"<ENROLLED_CUSTOMER_WALLET_PUBKEY>\"],\"allowed_instructions\":{\"system\":[\"transfer\"],\"spl_token\":[\"transfer_checked\"],\"associated_token\":[\"create_idempotent\"],\"memo\":[\"memo\"]},\"unknown_program\":\"deny\",\"unknown_instruction\":\"deny\",\"missing_intent\":\"review\",\"durable_nonce\":\"deny\",\"token_2022\":{\"permanent_delegate\":\"deny\",\"transfer_hook\":\"deny\",\"transfer_fee\":\"deny\",\"default_frozen\":\"deny\"},\"simulation\":{\"required\":true,\"max_slot_age\":32}}"
+
+[[plugins.entries]]
+name = "solana-tx-authorize"
+
+[plugins.entries.config]
+rpc_url = "https://api.devnet.solana.com"
+policy_json = "{\"version\":\"1.0.0\",\"default_action\":\"deny\",\"assets\":{\"SOL\":{\"decimals\":9,\"max_per_tx_raw\":\"2000000000\"},\"4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU\":{\"decimals\":6,\"max_per_tx_raw\":\"25000000\"}},\"allowed_recipients\":[\"<ENROLLED_CUSTOMER_WALLET_PUBKEY>\"],\"allowed_instructions\":{\"system\":[\"transfer\"],\"spl_token\":[\"transfer_checked\"],\"associated_token\":[\"create_idempotent\"],\"memo\":[\"memo\"]},\"unknown_program\":\"deny\",\"unknown_instruction\":\"deny\",\"missing_intent\":\"review\",\"durable_nonce\":\"deny\",\"token_2022\":{\"permanent_delegate\":\"deny\",\"transfer_hook\":\"deny\",\"transfer_fee\":\"deny\",\"default_frozen\":\"deny\"},\"simulation\":{\"required\":true,\"max_slot_age\":32}}"
+
+[[plugins.entries]]
+name = "squads-proposal-build"
+
+[plugins.entries.config]
+rpc_url = "https://api.devnet.solana.com"
+squads_create_key = "<SQUADS_CREATE_KEY_PUBKEY>"
+squads_vault_index = 0
+# This member's Squads permissions must be exactly Initiate=1, Approve=0,
+# Execute=0. The plugin accepts independently evaluated ALLOW drafts only.
+proposer = "<INITIATE_ONLY_PROPOSER_PUBKEY>"
+policy_json = "{\"version\":\"1.0.0\",\"default_action\":\"deny\",\"assets\":{\"SOL\":{\"decimals\":9,\"max_per_tx_raw\":\"2000000000\"},\"4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU\":{\"decimals\":6,\"max_per_tx_raw\":\"25000000\"}},\"allowed_recipients\":[\"<ENROLLED_CUSTOMER_WALLET_PUBKEY>\"],\"allowed_instructions\":{\"system\":[\"transfer\"],\"spl_token\":[\"transfer_checked\"],\"associated_token\":[\"create_idempotent\"],\"memo\":[\"memo\"]},\"unknown_program\":\"deny\",\"unknown_instruction\":\"deny\",\"missing_intent\":\"review\",\"durable_nonce\":\"deny\",\"token_2022\":{\"permanent_delegate\":\"deny\",\"transfer_hook\":\"deny\",\"transfer_fee\":\"deny\",\"default_frozen\":\"deny\"},\"simulation\":{\"required\":true,\"max_slot_age\":32}}"
+
+# ── Refunds: how a customer becomes refundable ─────────────────────────────
+#
+# There is no enrollment database. A refund destination is refundable only by
+# being present in `allowed_recipients` in EVERY policy_json above — that is
+# operator-controlled host config the model cannot reach.
+#
+# `payment-verify` reports the payer as `payer_owner_evidence`, and that is all
+# it is: evidence. It is not permission. `solana-tx-authorize` re-derives and
+# re-checks the exact transaction bytes against this policy independently, so a
+# refund to an address the operator never added is denied before any proposal
+# is constructed.
+#
+# To make a customer refundable, add their wallet to `allowed_recipients` and
+# restart. That is deliberately a manual, operator-only act.
+
+# ── Optional: poll an open invoice on a schedule ───────────────────────────
+#
+# Per-run `--allowed-tool` is a strict capability intersection, so this job can
+# read payment state and nothing else — it cannot reach the refund path even
+# though the agent's own profile allows it.
+#
+#   zeroclaw cron add '*/2 * * * *' --agent merchant --prompt \
+#     --allowed-tool payment-verify \
+#     --uses-memory false \
+#     'Check invoice A-1042 for 25000000 raw units. Report only the status
+#      field. If it is UNKNOWN, say the evidence was untrusted — do not say
+#      unpaid.'

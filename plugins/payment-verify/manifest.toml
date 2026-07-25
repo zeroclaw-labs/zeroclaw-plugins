@@ -1,0 +1,12 @@
+name = "payment-verify"
+version = "0.1.0"
+description = "Confirm a Solana Pay invoice from finalized on-chain evidence, requiring two independent RPC endpoints to agree. T0 — read only, holds no keys, authorizes nothing."
+author = "Safe Hands"
+wasm_path = "payment_verify.wasm"
+capabilities = ["tool"]
+# config_read injects merchant_owner, invoice_salt, default_mint, rpc_url, and
+# rpc_url_fallback. merchant_owner and invoice_salt are deliberately host-only:
+# taking them from caller arguments would let a prompt verify against a
+# reference the operator never issued. Both endpoints are required — one
+# endpoint is not evidence, so a single lying RPC cannot mark an invoice paid.
+permissions = ["config_read", "http_client"]

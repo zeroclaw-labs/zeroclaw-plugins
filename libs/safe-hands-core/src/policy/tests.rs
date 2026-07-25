@@ -56,6 +56,7 @@ fn usdc_transfer(amount: u128, recipient: &str) -> TxFacts {
                 name: Some("memo".into()),
             },
         ],
+        memos: vec!["invoice-412".into()],
         transfers: vec![TransferFact {
             mint: Some(USDC.into()),
             amount_raw: amount,
@@ -66,6 +67,7 @@ fn usdc_transfer(amount: u128, recipient: &str) -> TxFacts {
             mint: Some(USDC.into()),
             amount_raw: amount.to_string(),
             recipient: recipient.into(),
+            memo: Some("invoice-412".into()),
         }),
         ..Default::default()
     }
@@ -128,6 +130,90 @@ fn unknown_program_denies() {
 }
 
 #[test]
+fn safe_v01_hard_denies_token_2022_plain_classic_transfer_and_inner_squads() {
+    let mut token_2022 = usdc_transfer(1_000, RECIP);
+    token_2022.instructions[1] = IxFact {
+        program: "token_2022".into(),
+        name: Some("transfer_checked".into()),
+    };
+    let report = evaluate(&policy(), &token_2022);
+    assert_eq!(report.verdict, Verdict::Deny);
+    assert!(report
+        .reason_codes
+        .iter()
+        .any(|code| code == "SH-DENY-T22-060"));
+
+    let mut plain = usdc_transfer(1_000, RECIP);
+    plain.instructions[1].name = Some("transfer".into());
+    let report = evaluate(&policy(), &plain);
+    assert_eq!(report.verdict, Verdict::Deny);
+    assert!(report
+        .reason_codes
+        .iter()
+        .any(|code| code == "SH-DENY-SPL-PLAIN-061"));
+
+    let mut configured_to_allow_squads = policy();
+    configured_to_allow_squads.allowed_instructions.insert(
+        "squads".into(),
+        std::iter::once("squads_ix".to_string()).collect(),
+    );
+    let mut nested_squads = usdc_transfer(1_000, RECIP);
+    nested_squads.instructions.push(IxFact {
+        program: "squads".into(),
+        name: Some("squads_ix".into()),
+    });
+    let report = evaluate(&configured_to_allow_squads, &nested_squads);
+    assert_eq!(report.verdict, Verdict::Deny);
+    assert!(report
+        .reason_codes
+        .iter()
+        .any(|code| code == "SH-DENY-SQUADS-INNER-063"));
+}
+
+#[test]
+fn intent_action_must_match_transfer_kind() {
+    let mut spl_as_sol = usdc_transfer(1_000, RECIP);
+    spl_as_sol.intent.as_mut().expect("intent").action = "transfer".into();
+    let report = evaluate(&policy(), &spl_as_sol);
+    assert_eq!(report.verdict, Verdict::Deny);
+    assert!(report
+        .reason_codes
+        .iter()
+        .any(|code| code == "SH-INTENT-ACTION-034"));
+
+    let mut sol = TxFacts {
+        byte_len: 200,
+        simulation_ok: true,
+        instructions: vec![IxFact {
+            program: "system".into(),
+            name: Some("transfer".into()),
+        }],
+        transfers: vec![TransferFact {
+            mint: None,
+            amount_raw: 1,
+            recipient: RECIP.into(),
+        }],
+        intent: Some(Intent {
+            action: "spl_transfer".into(),
+            mint: Some(USDC.into()),
+            amount_raw: "1".into(),
+            recipient: RECIP.into(),
+            memo: None,
+        }),
+        ..Default::default()
+    };
+    assert_eq!(evaluate(&policy(), &sol).verdict, Verdict::Deny);
+    sol.intent = Some(Intent {
+        action: "transfer".into(),
+        mint: None,
+        amount_raw: "1".into(),
+        recipient: RECIP.into(),
+        memo: None,
+    });
+    assert_eq!(evaluate(&policy(), &sol).verdict, Verdict::Allow);
+}
+
+#[test]
 fn unknown_instruction_in_allowed_program_denies() {
     let mut f = usdc_transfer(1_000, RECIP);
     f.instructions.push(IxFact {
@@ -136,7 +222,7 @@ fn unknown_instruction_in_allowed_program_denies() {
     });
     let r = evaluate(&policy(), &f);
     assert_eq!(r.verdict, Verdict::Deny);
-    assert!(r.reason_codes.iter().any(|c| c.starts_with("SH-DENY-IX")));
+    assert!(r.reason_codes.iter().any(|c| c == "SH-DENY-SPL-IX-062"));
 }
 
 #[test]
@@ -194,6 +280,76 @@ fn durable_nonce_reviews_by_default() {
         .any(|c| c.starts_with("SH-REVIEW-NONCE")));
 }
 
+/// The nonce-account allowlist is what turns a durable transaction from
+/// "refused" into "permitted". Without it, nothing changes — which is what
+/// keeps every pre-existing policy behaving exactly as before.
+fn policy_allowing_nonce(nonce: &str) -> Policy {
+    let json = demo_policy_json().replace(
+        r#""allowed_recipients""#,
+        &format!(r#""allowed_nonce_accounts": ["{nonce}"], "allowed_recipients""#),
+    );
+    Policy::from_json(&json).expect("policy with a nonce allowlist parses")
+}
+
+#[test]
+fn an_allowlisted_nonce_account_survives_the_approval_queue() {
+    // This is the whole point: a human can take their time approving, because
+    // the transaction's validity is pinned to the nonce, not a blockhash.
+    let mut f = usdc_transfer(1_000, RECIP);
+    f.durable_nonce_used = true;
+    f.nonce_account = Some(OTHER.to_string());
+    f.nonce_is_first_instruction = true;
+    let r = evaluate(&policy_allowing_nonce(OTHER), &f);
+    assert_eq!(r.verdict, Verdict::Allow, "codes: {:?}", r.reason_codes);
+}
+
+#[test]
+fn a_nonce_account_the_operator_never_allowlisted_is_refused() {
+    let mut f = usdc_transfer(1_000, RECIP);
+    f.durable_nonce_used = true;
+    f.nonce_account = Some(RECIP.to_string()); // allowlisted as a recipient, not as a nonce
+    f.nonce_is_first_instruction = true;
+    let r = evaluate(&policy_allowing_nonce(OTHER), &f);
+    assert_eq!(r.verdict, Verdict::Review);
+    assert!(r.reason_codes.iter().any(|c| c.starts_with("SH-REVIEW-NONCE")));
+}
+
+#[test]
+fn an_unidentifiable_nonce_account_is_never_treated_as_permission() {
+    let mut f = usdc_transfer(1_000, RECIP);
+    f.durable_nonce_used = true;
+    f.nonce_account = None;
+    f.nonce_is_first_instruction = true;
+    let r = evaluate(&policy_allowing_nonce(OTHER), &f);
+    assert_eq!(r.verdict, Verdict::Review);
+}
+
+#[test]
+fn an_allowlisted_nonce_not_in_first_position_is_denied() {
+    // The runtime requires AdvanceNonceAccount to be instruction 0. Emitting
+    // one that is not first would produce a transaction that cannot land.
+    let mut f = usdc_transfer(1_000, RECIP);
+    f.durable_nonce_used = true;
+    f.nonce_account = Some(OTHER.to_string());
+    f.nonce_is_first_instruction = false;
+    let r = evaluate(&policy_allowing_nonce(OTHER), &f);
+    assert_eq!(r.verdict, Verdict::Deny);
+    assert!(r
+        .reason_codes
+        .iter()
+        .any(|c| c == "SH-DENY-NONCE-011"), "codes: {:?}", r.reason_codes);
+}
+
+#[test]
+fn a_policy_without_a_nonce_allowlist_behaves_exactly_as_before() {
+    let mut f = usdc_transfer(1_000, RECIP);
+    f.durable_nonce_used = true;
+    f.nonce_account = Some(OTHER.to_string());
+    f.nonce_is_first_instruction = true;
+    assert!(policy().allowed_nonce_accounts.is_empty());
+    assert_eq!(evaluate(&policy(), &f).verdict, Verdict::Review);
+}
+
 #[test]
 fn authority_change_denies() {
     let mut f = usdc_transfer(1_000, RECIP);
@@ -203,14 +359,17 @@ fn authority_change_denies() {
 }
 
 #[test]
-fn t22_delegate_denies_hook_reviews() {
+fn token2022_instruction_denial_dominates_extension_policy() {
     let p = policy();
-    let mut f1 = usdc_transfer(1_000, RECIP);
-    f1.token2022.permanent_delegate = true;
-    assert_eq!(evaluate(&p, &f1).verdict, Verdict::Deny);
-    let mut f2 = usdc_transfer(1_000, RECIP);
-    f2.token2022.transfer_hook = true;
-    assert_eq!(evaluate(&p, &f2).verdict, Verdict::Review);
+    let mut facts = usdc_transfer(1_000, RECIP);
+    facts.instructions[1].program = "token_2022".into();
+    facts.token2022.transfer_hook = true;
+    let report = evaluate(&p, &facts);
+    assert_eq!(report.verdict, Verdict::Deny);
+    assert!(report
+        .reason_codes
+        .iter()
+        .any(|code| code == "SH-DENY-T22-060"));
 }
 
 #[test]
@@ -226,6 +385,7 @@ fn missing_intent_reviews_mismatch_denies() {
         mint: Some(USDC.into()),
         amount_raw: "500".into(), // declared 500, tx moves 1000
         recipient: RECIP.into(),
+        memo: Some("invoice-412".into()),
     });
     let r = evaluate(&p, &wrong_amount);
     assert_eq!(r.verdict, Verdict::Deny);
@@ -281,18 +441,37 @@ fn velocity_reviews_when_exceeded() {
 }
 
 #[test]
-fn fee_caps_enforced_when_configured() {
-    let mut p = policy();
-    p.fee = Some(FeePolicy {
-        max_priority_fee_lamports: 1_000_000,
-        max_transaction_fee_lamports: 5_000_000,
-        max_account_creation_lamports: 3_000_000,
-    });
-    let mut f = usdc_transfer(1_000, RECIP);
-    f.priority_fee_lamports = 9_000_000;
-    let r = evaluate(&p, &f);
-    assert_eq!(r.verdict, Verdict::Deny);
-    assert!(r.reason_codes.iter().any(|c| c.starts_with("SH-DENY-FEE")));
+fn configured_fee_policy_is_explicitly_unsupported_in_v01() {
+    let with_fee = demo_policy_json().replace(
+        "\"simulation\": {\"required\": true, \"max_slot_age\": 32}",
+        "\"fee\": {\"max_priority_fee_lamports\": 1, \"max_transaction_fee_lamports\": 2, \"max_account_creation_lamports\": 3}, \"simulation\": {\"required\": true, \"max_slot_age\": 32}",
+    );
+    let error = Policy::from_json(&with_fee).expect_err("v0.1 fee config must fail closed");
+    assert!(error.contains("unsupported in safe v0.1"), "{error}");
+}
+
+#[test]
+fn memo_intent_requires_exact_value_and_cardinality() {
+    let p = policy();
+    let exact = usdc_transfer(1_000, RECIP);
+    assert_eq!(evaluate(&p, &exact).verdict, Verdict::Allow);
+
+    let mut absent_intent = exact.clone();
+    absent_intent.intent.as_mut().unwrap().memo = None;
+    let report = evaluate(&p, &absent_intent);
+    assert_eq!(report.verdict, Verdict::Deny);
+    assert!(report
+        .reason_codes
+        .iter()
+        .any(|code| code == "SH-INTENT-MEMO-035"));
+
+    let mut wrong = exact.clone();
+    wrong.intent.as_mut().unwrap().memo = Some("other".into());
+    assert_eq!(evaluate(&p, &wrong).verdict, Verdict::Deny);
+
+    let mut duplicate = exact;
+    duplicate.memos.push("invoice-412".into());
+    assert_eq!(evaluate(&p, &duplicate).verdict, Verdict::Deny);
 }
 
 #[test]
@@ -311,7 +490,6 @@ fn policy_hash_is_stable() {
     assert_eq!(h1.len(), 64);
 }
 
-
 #[test]
 fn same_recipient_transfers_are_aggregated_for_cap_and_intent() {
     let mut facts = usdc_transfer(25_000_000, RECIP);
@@ -325,17 +503,22 @@ fn same_recipient_transfers_are_aggregated_for_cap_and_intent() {
 
     assert_eq!(report.verdict, Verdict::Deny);
     assert!(
-        report.reason_codes.iter().any(|code| code == "SH-DENY-CAP-001"),
+        report
+            .reason_codes
+            .iter()
+            .any(|code| code == "SH-DENY-CAP-001"),
         "aggregate spend must exceed the per-transaction cap: {:?}",
         report.reason_codes
     );
     assert!(
-        report.reason_codes.iter().any(|code| code == "SH-INTENT-AMOUNT-033"),
+        report
+            .reason_codes
+            .iter()
+            .any(|code| code == "SH-INTENT-AMOUNT-033"),
         "aggregate spend must exactly match declared intent: {:?}",
         report.reason_codes
     );
 }
-
 
 // --- Property-based security invariants -------------------------------------
 // These assert the engine's guarantees hold across *ranges* of inputs, not just
@@ -379,6 +562,7 @@ proptest! {
             mint: Some(USDC.into()),
             amount_raw: sum.to_string(),
             recipient: RECIP.into(),
+            memo: Some("invoice-412".into()),
         });
         let r = evaluate(&policy(), &f);
         prop_assert_ne!(r.verdict, Verdict::Allow);

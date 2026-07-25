@@ -8,6 +8,7 @@ publish = false
 
 [dependencies]
 safe-hands-core = { path = "../libs/safe-hands-core" }
+spl-transfer-build = { path = "../plugins/spl-transfer-build" }
 solana-tx-authorize = { path = "../plugins/solana-tx-authorize" }
 squads-proposal-build = { path = "../plugins/squads-proposal-build" }
 serde = { version = "1", features = ["derive"] }

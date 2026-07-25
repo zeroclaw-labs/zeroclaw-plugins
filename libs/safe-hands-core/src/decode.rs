@@ -41,9 +41,12 @@ pub struct DecodedTx {
     /// v0 address-lookup-table references (table address + indices).
     /// Contents are NOT resolved here — that needs RPC (caller binds).
     pub alt_refs: Vec<AltRef>,
+    /// Canonical serialized message bytes, without any signature vector.
+    /// Retained so RPC simulation can always wrap bare-message input in a full
+    /// unsigned transaction artifact.
+    pub serialized_message: Vec<u8>,
     /// The raw instructions (program, metas, data) reconstructed from the
-    /// message — needed by builders that recompile transactions (e.g. Squads
-    /// re-payer flow).
+    /// message — needed by exact-artifact builders.
     pub raw_instructions: Vec<solana_instruction::Instruction>,
 }
 
@@ -84,8 +87,14 @@ fn decode_impl(bytes: &[u8], loaded: Option<(&[Pubkey], &[Pubkey])>) -> Result<D
         return Err("empty transaction bytes".to_string());
     }
 
-    if let Some((signed, rest)) = try_strip_signatures(bytes)? {
+    if let Some((signature_count, signed, rest)) = try_strip_signatures(bytes)? {
         if let Ok(mut decoded) = decode_message(rest, loaded) {
+            if signature_count != decoded.required_signatures {
+                return Err(format!(
+                    "signature vector count {signature_count} does not match message requirement {}",
+                    decoded.required_signatures
+                ));
+            }
             decoded.facts.signed = signed;
             decoded.facts.byte_len = bytes.len();
             decoded.has_signature_array = true;
@@ -107,6 +116,12 @@ fn decode_message(
         return Err("empty message bytes".to_string());
     }
     let (version, body) = if message_bytes[0] & 0x80 != 0 {
+        if message_bytes[0] != 0x80 {
+            return Err(format!(
+                "unsupported versioned-message marker: 0x{:02x}",
+                message_bytes[0]
+            ));
+        }
         (TxVersion::V0, &message_bytes[1..])
     } else {
         (TxVersion::Legacy, message_bytes)
@@ -181,17 +196,35 @@ fn decode_message(
     facts.estimated_fee_lamports = 5_000u64.saturating_mul(header_signers as u64);
 
     let mut raw_instructions = Vec::with_capacity(raw_ixs.len());
-    for ((program_index, accounts, data), metas) in raw_ixs.iter().zip(metas_per_ix) {
+    let mut ata_creates = Vec::new();
+    let mut classic_transfer_checked = Vec::new();
+    for (position, ((program_index, accounts, data), metas)) in
+        raw_ixs.iter().zip(metas_per_ix).enumerate()
+    {
         let program_id = *keys
             .get(*program_index as usize)
             .ok_or("program id index out of range after ALT resolution")?;
-        classify(program_id, accounts, data, &keys, &mut facts)?;
+        let nonce_seen_before = facts.durable_nonce_used;
+        match classify(program_id, accounts, data, &keys, &mut facts)? {
+            Some(BindingFact::AtaCreate(binding)) => ata_creates.push(binding),
+            Some(BindingFact::ClassicTransferChecked(binding)) => {
+                classic_transfer_checked.push(binding)
+            }
+            None => {}
+        }
+        // Record the position of the first AdvanceNonceAccount seen. The
+        // runtime requires it to be instruction 0; policy refuses anything
+        // else rather than emitting a transaction that cannot land.
+        if facts.durable_nonce_used && !nonce_seen_before {
+            facts.nonce_is_first_instruction = position == 0;
+        }
         raw_instructions.push(solana_instruction::Instruction {
             program_id,
             accounts: metas,
             data: data.clone(),
         });
     }
+    validate_ata_bindings(&ata_creates, &classic_transfer_checked)?;
 
     Ok(DecodedTx {
         facts,
@@ -201,12 +234,16 @@ fn decode_message(
         version,
         blockhash: bs58::encode(blockhash).into_string(),
         alt_refs,
+        serialized_message: message_bytes.to_vec(),
         raw_instructions,
     })
 }
 
-/// Strip the signature array if one is present. Returns (signed, message).
-fn try_strip_signatures(bytes: &[u8]) -> Result<Option<(bool, &[u8])>, String> {
+type StrippedTransaction<'a> = (usize, bool, &'a [u8]);
+
+/// Strip the signature array if one is present. Returns
+/// (signature count, any signature byte is nonzero, serialized message).
+fn try_strip_signatures(bytes: &[u8]) -> Result<Option<StrippedTransaction<'_>>, String> {
     let (count, used) = shortvec_decode(bytes).unwrap_or((0, 0));
     if used == 0 || count > MAX_ACCOUNTS {
         return Ok(None);
@@ -224,7 +261,7 @@ fn try_strip_signatures(bytes: &[u8]) -> Result<Option<(bool, &[u8])>, String> {
         return Ok(None);
     }
     let any_nonzero = sigs.iter().any(|b| *b != 0);
-    Ok(Some((any_nonzero, &bytes[used + sig_bytes..])))
+    Ok(Some((count, any_nonzero, &bytes[used + sig_bytes..])))
 }
 
 type RawIx = (u8, Vec<u8>, Vec<u8>); // (program index, account indices, data)
@@ -274,8 +311,7 @@ fn parse_legacy(bytes: &[u8]) -> Result<ParsedParts, String> {
             .ok_or("program id index out of range")?;
         // Bounds-check every account index rather than indexing directly — an
         // out-of-range index in hostile input must be an error, never a panic.
-        let mut metas: Vec<solana_instruction::AccountMeta> =
-            Vec::with_capacity(ci.accounts.len());
+        let mut metas: Vec<solana_instruction::AccountMeta> = Vec::with_capacity(ci.accounts.len());
         for idx in &ci.accounts {
             let i = *idx as usize;
             let key = *keys.get(i).ok_or("account index out of range")?;
@@ -367,30 +403,75 @@ fn parse_v0(bytes: &[u8]) -> Result<ParsedParts, String> {
         ixs.push((program_index, acc_indices, data));
         metas_per_ix.push(metas);
     }
-    // Address lookup tables (leftover bytes after instructions).
-    let mut alt_refs = Vec::new();
-    while !cur.done() {
-        let table_count = cur.shortvec()?;
-        for _ in 0..table_count {
-            let table = bs58::encode(cur.bytes32()?).into_string();
-            let w_count = cur.shortvec()?;
-            let mut writable_indices = Vec::with_capacity(w_count);
-            for _ in 0..w_count {
-                writable_indices.push(cur.u8()?);
-            }
-            let r_count = cur.shortvec()?;
-            let mut readonly_indices = Vec::with_capacity(r_count);
-            for _ in 0..r_count {
-                readonly_indices.push(cur.u8()?);
-            }
-            alt_refs.push(AltRef {
-                table,
-                writable_indices,
-                readonly_indices,
-            });
+    // Address lookup tables are framed by exactly one canonical count.
+    let table_count = cur.shortvec()?;
+    if table_count > MAX_ACCOUNTS {
+        return Err("address-table lookup vector exceeds bound".to_string());
+    }
+    let mut alt_refs = Vec::with_capacity(table_count);
+    for _ in 0..table_count {
+        let table = bs58::encode(cur.bytes32()?).into_string();
+        let w_count = cur.shortvec()?;
+        let mut writable_indices = Vec::with_capacity(w_count);
+        for _ in 0..w_count {
+            writable_indices.push(cur.u8()?);
         }
+        let r_count = cur.shortvec()?;
+        let mut readonly_indices = Vec::with_capacity(r_count);
+        for _ in 0..r_count {
+            readonly_indices.push(cur.u8()?);
+        }
+        alt_refs.push(AltRef {
+            table,
+            writable_indices,
+            readonly_indices,
+        });
+    }
+    if !cur.done() {
+        return Err("trailing bytes after v0 address-table lookups".to_string());
     }
     Ok((num_signers, keys, blockhash, ixs, alt_refs, metas_per_ix))
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct AtaBinding {
+    address: Pubkey,
+    owner: Pubkey,
+    mint: Pubkey,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct TransferCheckedBinding {
+    destination: Pubkey,
+    mint: Pubkey,
+}
+
+enum BindingFact {
+    AtaCreate(AtaBinding),
+    ClassicTransferChecked(TransferCheckedBinding),
+}
+
+fn validate_ata_bindings(
+    ata_creates: &[AtaBinding],
+    transfers: &[TransferCheckedBinding],
+) -> Result<(), String> {
+    if ata_creates.len() > 1 {
+        return Err("multiple associated-token creates are not supported".to_string());
+    }
+    let Some(ata) = ata_creates.first() else {
+        return Ok(());
+    };
+    let matches = transfers
+        .iter()
+        .filter(|transfer| transfer.destination == ata.address && transfer.mint == ata.mint)
+        .count();
+    if matches != 1 {
+        return Err(format!(
+            "associated-token create for owner {} is unbound or ambiguous",
+            ata.owner
+        ));
+    }
+    Ok(())
 }
 
 /// Classify one instruction: program label, instruction name, value movements,
@@ -401,32 +482,83 @@ fn classify(
     data: &[u8],
     keys: &[Pubkey],
     facts: &mut TxFacts,
-) -> Result<(), String> {
+) -> Result<Option<BindingFact>, String> {
     let program_str = program.to_string();
-    let key_at = |i: usize| -> Result<String, String> {
+    let pubkey_at = |i: usize| -> Result<Pubkey, String> {
         account_indices
             .get(i)
             .and_then(|idx| keys.get(*idx as usize))
-            .map(|k| k.to_string())
+            .copied()
             .ok_or_else(|| "account index out of range".to_string())
     };
+    let key_at = |i: usize| pubkey_at(i).map(|key| key.to_string());
+    let mut binding = None;
 
     let (label, name) = match program_str.as_str() {
         SYSTEM_PROGRAM => classify_system(data, facts, &key_at)?,
         TOKEN_PROGRAM | TOKEN_2022_PROGRAM => {
             let is_2022 = program_str == TOKEN_2022_PROGRAM;
-            classify_token(data, facts, &key_at, is_2022)?
+            let classified = classify_token(data, facts, &key_at, is_2022)?;
+            if !is_2022 && data.first() == Some(&TOKEN_IX_TRANSFER_CHECKED) {
+                if account_indices.len() != 4 {
+                    return Err(
+                        "classic transfer_checked requires exactly four accounts".to_string()
+                    );
+                }
+                binding = Some(BindingFact::ClassicTransferChecked(
+                    TransferCheckedBinding {
+                        destination: pubkey_at(2)?,
+                        mint: pubkey_at(1)?,
+                    },
+                ));
+            }
+            classified
         }
         ATA_PROGRAM => {
-            let name = match data.first() {
-                Some(0) => "create",
-                Some(1) => "create_idempotent",
-                Some(2) => "recover_nested",
-                _ => "create_idempotent", // empty data = legacy create
-            };
-            ("associated_token".to_string(), Some(name.to_string()))
+            if data != [1] {
+                return Err(
+                    "associated-token instruction must be exact CreateIdempotent [1]".to_string(),
+                );
+            }
+            if account_indices.len() != 6 {
+                return Err("CreateIdempotent requires exactly six accounts".to_string());
+            }
+            let address = pubkey_at(1)?;
+            let owner = pubkey_at(2)?;
+            let mint = pubkey_at(3)?;
+            let system_program = pubkey_at(4)?;
+            let token_program = pubkey_at(5)?;
+            if system_program.to_string() != SYSTEM_PROGRAM {
+                return Err("CreateIdempotent system-program account mismatch".to_string());
+            }
+            if token_program.to_string() != TOKEN_PROGRAM {
+                return Err("CreateIdempotent requires the classic SPL Token program".to_string());
+            }
+            if crate::crypto::ata_address(&owner, &token_program, &mint) != address {
+                return Err("CreateIdempotent ATA derivation mismatch".to_string());
+            }
+            binding = Some(BindingFact::AtaCreate(AtaBinding {
+                address,
+                owner,
+                mint,
+            }));
+            (
+                "associated_token".to_string(),
+                Some("create_idempotent".to_string()),
+            )
         }
-        MEMO_PROGRAM => ("memo".to_string(), Some("memo".to_string())),
+        MEMO_PROGRAM => {
+            const MAX_MEMO_INSTRUCTIONS: usize = 8;
+            if facts.memos.len() >= MAX_MEMO_INSTRUCTIONS {
+                return Err(format!(
+                    "memo instruction count exceeds {MAX_MEMO_INSTRUCTIONS}"
+                ));
+            }
+            let memo = std::str::from_utf8(data)
+                .map_err(|_| "memo instruction data must be valid UTF-8".to_string())?;
+            facts.memos.push(memo.to_string());
+            ("memo".to_string(), Some("memo".to_string()))
+        }
         COMPUTE_BUDGET_PROGRAM => classify_compute_budget(data, facts)?,
         SQUADS_V4_PROGRAM => ("squads".to_string(), Some("squads_ix".to_string())),
         _ => (format!("unknown:{program_str}"), None),
@@ -436,7 +568,7 @@ fn classify(
         program: label,
         name,
     });
-    Ok(())
+    Ok(binding)
 }
 
 fn classify_system(
@@ -450,8 +582,8 @@ fn classify_system(
     let disc = u32::from_le_bytes([data[0], data[1], data[2], data[3]]);
     match disc {
         SYSTEM_IX_TRANSFER => {
-            if data.len() < 12 {
-                return Err("system transfer data truncated".to_string());
+            if data.len() != 12 {
+                return Err("system transfer data must be exactly 12 bytes".to_string());
             }
             let lamports = u64::from_le_bytes(data[4..12].try_into().map_err(|_| "amount")?);
             facts.transfers.push(TransferFact {
@@ -463,6 +595,9 @@ fn classify_system(
         }
         SYSTEM_IX_ADVANCE_NONCE => {
             facts.durable_nonce_used = true;
+            // Account 0 is the nonce account. An unresolvable account leaves
+            // `nonce_account` as None, which policy treats as not permitted.
+            facts.nonce_account = key_at(0).ok();
             Ok(("system".to_string(), Some("advance_nonce".to_string())))
         }
         SYSTEM_IX_ASSIGN => {
@@ -485,8 +620,8 @@ fn classify_token(
     };
     match disc {
         TOKEN_IX_TRANSFER => {
-            if data.len() < 9 {
-                return Err("token transfer data truncated".to_string());
+            if data.len() != 9 {
+                return Err("token transfer data must be exactly 9 bytes".to_string());
             }
             let amount = u64::from_le_bytes(data[1..9].try_into().map_err(|_| "amount")?);
             facts.transfers.push(TransferFact {
@@ -497,8 +632,8 @@ fn classify_token(
             Ok((label, Some("transfer".to_string())))
         }
         TOKEN_IX_TRANSFER_CHECKED => {
-            if data.len() < 10 {
-                return Err("transfer_checked data truncated".to_string());
+            if data.len() != 10 {
+                return Err("transfer_checked data must be exactly 10 bytes".to_string());
             }
             let amount = u64::from_le_bytes(data[1..9].try_into().map_err(|_| "amount")?);
             facts.transfers.push(TransferFact {
