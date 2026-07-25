@@ -1,0 +1,7 @@
+name = "wallet-narrate"
+version = "0.1.0"
+description = "Read-only bounded and redacted Solana wallet activity narration."
+author = "Briefline contributors"
+wasm_path = "wallet_narrate.wasm"
+capabilities = ["tool"]
+permissions = ["config_read"]
