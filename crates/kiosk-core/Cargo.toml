@@ -21,5 +21,9 @@ waki = { version = "0.5.1", optional = true }
 # core and all host tests compile with zero network dependency.
 http = ["dep:waki"]
 
+# Host-only: property-based and untrusted-input fuzz tests. Never in the wasm build.
+[dev-dependencies]
+proptest = "1"
+
 # Standalone crate: not part of any parent workspace.
 [workspace]
