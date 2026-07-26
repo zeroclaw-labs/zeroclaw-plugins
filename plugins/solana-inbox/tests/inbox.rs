@@ -390,7 +390,12 @@ fn include_transfers_false_suppresses_transfers_but_keeps_memos() {
 }
 
 #[test]
-fn extracts_incoming_spl_token_transfer() {
+fn extracts_incoming_spl_transfer_direct_wallet_to_wallet() {
+    // The classic case: Alice's ATA (source) fell by 25 USDC, Bob's ATA
+    // (destination, our watched owner) rose by 25 USDC. `infer_spl_sender`
+    // sees exactly one source with a matching delta and surfaces Alice
+    // as the sender — not the fee-payer, not "unknown".
+    let alice = "AliceOwner11111111111111111111111111111111";
     let usdc_mint = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
     let tx = json!({
         "result": {
@@ -398,25 +403,42 @@ fn extracts_incoming_spl_token_transfer() {
             "meta": {
                 "preBalances":  [10_000_000_000_u64],
                 "postBalances": [ 9_999_995_000_u64],
-                "preTokenBalances": [{
-                    "accountIndex": 1,
-                    "mint": usdc_mint,
-                    "owner": WATCHED,
-                    "uiTokenAmount": {"amount": "100000000", "decimals": 6, "uiAmount": 100.0, "uiAmountString": "100"}
-                }],
-                "postTokenBalances": [{
-                    "accountIndex": 1,
-                    "mint": usdc_mint,
-                    "owner": WATCHED,
-                    "uiTokenAmount": {"amount": "125000000", "decimals": 6, "uiAmount": 125.0, "uiAmountString": "125"}
-                }],
+                "preTokenBalances": [
+                    {
+                        "accountIndex": 1,
+                        "mint": usdc_mint,
+                        "owner": alice,
+                        "uiTokenAmount": {"amount": "1000000000", "decimals": 6}
+                    },
+                    {
+                        "accountIndex": 2,
+                        "mint": usdc_mint,
+                        "owner": WATCHED,
+                        "uiTokenAmount": {"amount": "100000000", "decimals": 6}
+                    }
+                ],
+                "postTokenBalances": [
+                    {
+                        "accountIndex": 1,
+                        "mint": usdc_mint,
+                        "owner": alice,
+                        "uiTokenAmount": {"amount": "975000000", "decimals": 6}
+                    },
+                    {
+                        "accountIndex": 2,
+                        "mint": usdc_mint,
+                        "owner": WATCHED,
+                        "uiTokenAmount": {"amount": "125000000", "decimals": 6}
+                    }
+                ],
                 "innerInstructions": []
             },
             "transaction": {
                 "message": {
                     "accountKeys": [
                         {"pubkey": SENDER, "signer": true, "writable": true, "source": "transaction"},
-                        {"pubkey": "ATAforwatched1111111111111111111111111111111", "signer": false, "writable": true, "source": "transaction"}
+                        {"pubkey": "AliceATA1111111111111111111111111111111111", "signer": false, "writable": true, "source": "transaction"},
+                        {"pubkey": "WatchedATA111111111111111111111111111111111", "signer": false, "writable": true, "source": "transaction"}
                     ],
                     "instructions": []
                 }
@@ -429,6 +451,106 @@ fn extracts_incoming_spl_token_transfer() {
         .find(|e| e.content.contains("mint EPjF"))
         .expect("expected SPL transfer event");
     assert!(spl.content.contains("[+25 mint EPjF"), "content was: {}", spl.content);
+    assert_eq!(spl.sender, alice, "sender should be Alice (source ATA owner), not fee-payer");
+}
+
+#[test]
+fn spl_swap_style_missing_source_reports_unknown_sender() {
+    // A Jupiter/Meteora swap: the source ATA is not present in
+    // preTokenBalances (or its owner is a pool account we don't want
+    // to name). The correct answer is "unknown" — never a false
+    // fee-payer attribution.
+    let usdc_mint = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+    let tx = json!({
+        "result": {
+            "blockTime": 1,
+            "meta": {
+                "preBalances":  [10_000_000_000_u64],
+                "postBalances": [ 9_999_995_000_u64],
+                "preTokenBalances": [{
+                    "accountIndex": 1,
+                    "mint": usdc_mint,
+                    "owner": WATCHED,
+                    "uiTokenAmount": {"amount": "100000000", "decimals": 6}
+                }],
+                "postTokenBalances": [{
+                    "accountIndex": 1,
+                    "mint": usdc_mint,
+                    "owner": WATCHED,
+                    "uiTokenAmount": {"amount": "125000000", "decimals": 6}
+                }],
+                "innerInstructions": []
+            },
+            "transaction": {
+                "message": {
+                    "accountKeys": [
+                        {"pubkey": SENDER, "signer": true, "writable": true, "source": "transaction"},
+                        {"pubkey": "WatchedATA111111111111111111111111111111111", "signer": false, "writable": true, "source": "transaction"}
+                    ],
+                    "instructions": []
+                }
+            }
+        }
+    });
+    let events = extract_inbounds(&tx, SIG, WATCHED, true, None);
+    let spl = events
+        .iter()
+        .find(|e| e.content.contains("mint EPjF"))
+        .expect("expected SPL transfer event");
+    assert_eq!(
+        spl.sender, "unknown",
+        "swap-style transfers with no matching source ATA must NOT falsely attribute to fee-payer; got: {}",
+        spl.sender
+    );
+}
+
+#[test]
+fn spl_multi_source_aggregation_reports_unknown_sender() {
+    // Two different sources both drained partial amounts that sum to
+    // the watched credit. There is no unique sender, so `unknown` is
+    // the honest answer.
+    let alice = "AliceOwner11111111111111111111111111111111";
+    let bob = "BobOwner1111111111111111111111111111111111";
+    let usdc_mint = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+    let tx = json!({
+        "result": {
+            "blockTime": 1,
+            "meta": {
+                "preBalances":  [10_000_000_000_u64],
+                "postBalances": [ 9_999_995_000_u64],
+                "preTokenBalances": [
+                    {"accountIndex": 1, "mint": usdc_mint, "owner": alice, "uiTokenAmount": {"amount": "1000000000", "decimals": 6}},
+                    {"accountIndex": 2, "mint": usdc_mint, "owner": bob, "uiTokenAmount": {"amount": "1000000000", "decimals": 6}},
+                    {"accountIndex": 3, "mint": usdc_mint, "owner": WATCHED, "uiTokenAmount": {"amount": "0", "decimals": 6}}
+                ],
+                "postTokenBalances": [
+                    {"accountIndex": 1, "mint": usdc_mint, "owner": alice, "uiTokenAmount": {"amount": "990000000", "decimals": 6}},
+                    {"accountIndex": 2, "mint": usdc_mint, "owner": bob, "uiTokenAmount": {"amount": "985000000", "decimals": 6}},
+                    {"accountIndex": 3, "mint": usdc_mint, "owner": WATCHED, "uiTokenAmount": {"amount": "25000000", "decimals": 6}}
+                ],
+                "innerInstructions": []
+            },
+            "transaction": {
+                "message": {
+                    "accountKeys": [
+                        {"pubkey": SENDER, "signer": true, "writable": true, "source": "transaction"},
+                        {"pubkey": "A1", "signer": false, "writable": true, "source": "transaction"},
+                        {"pubkey": "A2", "signer": false, "writable": true, "source": "transaction"},
+                        {"pubkey": "A3", "signer": false, "writable": true, "source": "transaction"}
+                    ],
+                    "instructions": []
+                }
+            }
+        }
+    });
+    let events = extract_inbounds(&tx, SIG, WATCHED, true, None);
+    let spl = events
+        .iter()
+        .find(|e| e.content.contains("mint EPjF"))
+        .expect("expected SPL transfer event");
+    // Neither source's individual delta equals the +25 credit (10 + 15).
+    // The plugin correctly refuses to name one.
+    assert_eq!(spl.sender, "unknown", "got: {}", spl.sender);
 }
 
 #[test]

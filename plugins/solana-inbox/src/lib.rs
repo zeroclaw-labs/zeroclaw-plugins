@@ -28,6 +28,9 @@
 
 pub mod core;
 
+#[cfg(kani)]
+mod proofs;
+
 #[cfg(target_family = "wasm")]
 mod component {
     wit_bindgen::generate!({
@@ -93,17 +96,23 @@ mod component {
         }
 
         fn send(_message: SendMessage) -> Result<(), String> {
-            // The whole point of the split-plugin design: this channel is
-            // read-only. Attempting to `send()` here would either need a
-            // signing key (blowing the T0 tier and the plugin's sandbox
-            // safety story) or would silently no-op (worse — it would
-            // look like the agent replied when nothing happened on chain).
-            // Both are worse than an explicit error routing the agent at
-            // the companion tool plugin.
+            // Inbound-only by design: this channel never signs. Sending
+            // on Solana requires a private key, and holding a key inside
+            // the same WASM component that also touches the network would
+            // trade the plugin's whole sandbox safety story for one
+            // feature. The correct outbound path is any tool plugin in
+            // the ecosystem that returns an unsigned versioned
+            // transaction (spl-transfer-build, jupiter-swap-build,
+            // squads-proposal-build, …) routed through whichever
+            // channel plugin the operator already trusts for approvals
+            // (Telegram approval, Squads multisig, etc.). Returning an
+            // explicit error is deliberately louder than a silent no-op
+            // so a poisoned agent trying to "reply" here cannot pretend
+            // it succeeded.
             Err(
-                "solana-inbox is read-only; build outbound replies with the `solana-outbox` \
-                 tool plugin and sign them via a channel plugin the operator trusts (Telegram \
-                 approval, Squads multisig, etc.)"
+                "solana-inbox is inbound-only. Sign outbound Solana writes with any tool \
+                 plugin that returns an unsigned transaction and route them through your \
+                 usual approval channel."
                     .to_string(),
             )
         }

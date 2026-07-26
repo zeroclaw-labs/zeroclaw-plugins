@@ -39,5 +39,10 @@ lto = true
 strip = true
 codegen-units = 1
 
+# `cfg(kani)` is used to gate the formal-proof harnesses in `src/proofs.rs`;
+# without this declaration, Rust 1.80+ warns them as unexpected under clippy.
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(kani)'] }
+
 # Standalone crate: built for wasm32-wasip2, not part of the host workspace.
 [workspace]

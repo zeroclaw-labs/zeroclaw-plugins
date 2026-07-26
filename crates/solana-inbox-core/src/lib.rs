@@ -153,7 +153,7 @@ impl Config {
 /// downstream RPC will reject any address whose bytes don't resolve to an
 /// account, so this is only a first-line guard against obvious garbage in
 /// operator configs.
-fn is_plausible_pubkey(s: &str) -> bool {
+pub fn is_plausible_pubkey(s: &str) -> bool {
     const BASE58: &[u8] = b"123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
     let bytes = s.as_bytes();
     (32..=44).contains(&bytes.len()) && bytes.iter().all(|b| BASE58.contains(b))
@@ -504,7 +504,7 @@ fn format_transfer(t: &IncomingTransfer) -> String {
 
 /// Divide `amount` by `10^decimals`, rendering as a bounded decimal string.
 /// Uses u128 arithmetic to avoid f64 precision loss on typical token supplies.
-fn pretty_amount(amount: u128, decimals: u8) -> String {
+pub fn pretty_amount(amount: u128, decimals: u8) -> String {
     if decimals == 0 {
         return amount.to_string();
     }
@@ -628,9 +628,19 @@ fn extract_transfers_to(
             .unwrap_or(0);
         if post_amount > pre_amount {
             let delta = post_amount - pre_amount;
-            // For SPL transfers the sender is not directly encoded in
-            // meta; the closest fee-free approximation is the fee-payer.
-            let from = fee_payer_address(result).unwrap_or_else(|| "unknown".to_string());
+            // SPL sender attribution is intentionally lossy. The wire
+            // encoding never names a `from` field on a token movement —
+            // an SPL transfer, a Jupiter swap out of a pool, and a
+            // Meteora vault withdrawal all show up in `meta` as
+            // `preTokenBalances`/`postTokenBalances` deltas. We walk
+            // those deltas to find the source ATA whose amount fell by
+            // exactly `delta` on the same mint. Only when exactly one
+            // such source exists — the direct wallet-to-wallet case —
+            // do we surface its owner. Swaps and aggregations resolve
+            // to `"unknown"` rather than a plausible-but-false
+            // fee-payer answer, so the agent's LLM never sees a
+            // fabricated counterparty.
+            let from = infer_spl_sender(&pre_tok, &post_tok, mint, delta);
             out.push(IncomingTransfer {
                 from,
                 asset: TransferAsset::SplMint(mint.to_string()),
@@ -641,6 +651,57 @@ fn extract_transfers_to(
     }
 
     out
+}
+
+/// Walk pre/post token-balance pairs for a given mint, returning the
+/// unique source account's owner iff exactly one entry's amount fell by
+/// `delta`. Everything else — swaps that pull from a pool, multi-source
+/// aggregations, sources missing from `preTokenBalances`, or ambiguous
+/// same-delta hits — resolves to `"unknown"`. That is the only honest
+/// answer: the RPC's `meta` never encodes intent, only arithmetic.
+fn infer_spl_sender(
+    pre_tok: &[serde_json::Value],
+    post_tok: &[serde_json::Value],
+    mint: &str,
+    delta: u128,
+) -> String {
+    let mut candidates: Vec<String> = Vec::new();
+    for pre_entry in pre_tok {
+        if pre_entry.get("mint").and_then(|m| m.as_str()) != Some(mint) {
+            continue;
+        }
+        let idx = match pre_entry.get("accountIndex").and_then(|i| i.as_u64()) {
+            Some(i) => i,
+            None => continue,
+        };
+        let pre_amount: u128 = pre_entry
+            .get("uiTokenAmount")
+            .and_then(|u| u.get("amount"))
+            .and_then(|a| a.as_str())
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0);
+        let post_amount: u128 = post_tok
+            .iter()
+            .find(|p| {
+                p.get("accountIndex").and_then(|i| i.as_u64()) == Some(idx)
+                    && p.get("mint").and_then(|m| m.as_str()) == Some(mint)
+            })
+            .and_then(|p| p.get("uiTokenAmount"))
+            .and_then(|u| u.get("amount"))
+            .and_then(|a| a.as_str())
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0);
+        if pre_amount > post_amount && pre_amount - post_amount == delta {
+            if let Some(owner) = pre_entry.get("owner").and_then(|o| o.as_str()) {
+                candidates.push(owner.to_string());
+            }
+        }
+    }
+    candidates.dedup();
+    match candidates.len() {
+        1 => candidates.remove(0),
+        _ => "unknown".to_string(),
+    }
 }
 
 /// SOL is spent by fee-payers and moved between accounts by system
