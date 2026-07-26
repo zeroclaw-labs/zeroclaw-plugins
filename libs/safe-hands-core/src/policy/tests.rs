@@ -350,6 +350,122 @@ fn a_policy_without_a_nonce_allowlist_behaves_exactly_as_before() {
     assert_eq!(evaluate(&policy(), &f).verdict, Verdict::Review);
 }
 
+// ── Mutants that survived `cargo mutants`, and the tests that kill them ─────
+//
+// Mutation testing injects a deliberate bug and reruns the suite. Four
+// survived, meaning the suite could not tell the mutated engine from the real
+// one. Both sites below are load-bearing, so both now have tests.
+
+/// `cargo mutants` replaced `>` with `>=` and with `==` at the packet-size
+/// check and nothing failed — the boundary was never pinned. 1232 bytes is
+/// Solana's transaction MTU: exactly at the limit must pass, one over must
+/// deny. An off-by-one here rejects legitimate maximum-size transactions.
+#[test]
+fn the_packet_size_limit_is_exact_at_the_boundary() {
+    let policy = policy();
+    let limit = policy.max_transaction_bytes;
+
+    let mut at_limit = usdc_transfer(1_000, RECIP);
+    at_limit.byte_len = limit;
+    let report = evaluate(&policy, &at_limit);
+    assert!(
+        !report
+            .reason_codes
+            .iter()
+            .any(|code| code.starts_with("SH-DENY-TOOBIG")),
+        "a transaction of exactly {limit} bytes must not be refused for size: {:?}",
+        report.reason_codes
+    );
+
+    let mut over_limit = usdc_transfer(1_000, RECIP);
+    over_limit.byte_len = limit + 1;
+    let report = evaluate(&policy, &over_limit);
+    assert_eq!(report.verdict, Verdict::Deny);
+    assert!(
+        report
+            .reason_codes
+            .iter()
+            .any(|code| code == "SH-DENY-TOOBIG-002"),
+        "one byte over the limit must deny: {:?}",
+        report.reason_codes
+    );
+}
+
+/// `cargo mutants` made `Verdict::as_str` return `""` and `"xyzzy"` and the
+/// suite passed. These strings are not cosmetic: `as_str` feeds the
+/// `decision_id` hash that receipts commit to and that `--verify` re-derives,
+/// and operators match on them. They are part of the wire contract.
+#[test]
+fn verdict_strings_are_part_of_the_wire_contract() {
+    assert_eq!(Verdict::Allow.as_str(), "ALLOW");
+    assert_eq!(Verdict::Review.as_str(), "REVIEW");
+    assert_eq!(Verdict::Deny.as_str(), "DENY");
+    assert_eq!(Verdict::Unknown.as_str(), "UNKNOWN");
+
+    // All four must stay distinct, or two verdicts would hash alike.
+    let all = [
+        Verdict::Allow.as_str(),
+        Verdict::Review.as_str(),
+        Verdict::Deny.as_str(),
+        Verdict::Unknown.as_str(),
+    ];
+    let unique: std::collections::BTreeSet<_> = all.iter().collect();
+    assert_eq!(unique.len(), all.len(), "verdict strings must be distinct");
+    assert!(
+        all.iter().all(|s| !s.is_empty()),
+        "an empty verdict string would silently weaken every decision_id"
+    );
+}
+
+/// `cargo mutants` replaced the instruction-allowlist membership check with
+/// `true` and nothing failed: no test drove a *known* program carrying an
+/// instruction the operator had not allowed. That is the entire
+/// `unknown_instruction` rule, untested at the unit level.
+#[test]
+fn an_instruction_outside_the_allowlist_is_refused() {
+    let mut facts = usdc_transfer(1_000, RECIP);
+    facts.instructions.push(IxFact {
+        program: "memo".to_string(),
+        name: Some("set_authority_somehow".to_string()),
+    });
+    let report = evaluate(&policy(), &facts);
+    assert_eq!(report.verdict, Verdict::Deny);
+    assert!(
+        report
+            .reason_codes
+            .iter()
+            .any(|code| code == "SH-DENY-IX-012"),
+        "an unlisted instruction on a known program must deny: {:?}",
+        report.reason_codes
+    );
+}
+
+/// `cargo mutants` flipped `!=` to `==` on the classic-SPL guard and survived,
+/// because under the demo policy `transfer_checked` is allowlisted either way.
+/// It only matters for an operator who removes it: the real code falls through
+/// to the allowlist and denies, the mutant skips the check and permits.
+#[test]
+fn removing_transfer_checked_from_the_allowlist_actually_denies_it() {
+    let json = demo_policy_json().replace(
+        r#""spl_token": ["transfer", "transfer_checked"]"#,
+        r#""spl_token": []"#,
+    );
+    let restrictive = Policy::from_json(&json).expect("policy parses");
+
+    let mut facts = usdc_transfer(1_000, RECIP);
+    facts.instructions.push(IxFact {
+        program: "spl_token".to_string(),
+        name: Some("transfer_checked".to_string()),
+    });
+    let report = evaluate(&restrictive, &facts);
+    assert_eq!(
+        report.verdict,
+        Verdict::Deny,
+        "an operator who allowlists no SPL instruction must not get a transfer through: {:?}",
+        report.reason_codes
+    );
+}
+
 #[test]
 fn authority_change_denies() {
     let mut f = usdc_transfer(1_000, RECIP);

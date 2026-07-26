@@ -7,7 +7,7 @@
 default: prove-safety
 
 # The full gate a judge runs.
-prove-safety: test conformance verify-receipt clippy wasm
+prove-safety: test conformance verify-receipt audit clippy wasm
     @echo ""
     @echo "=================================================="
     @echo "  prove-safety: ALL GREEN — the guard holds."
@@ -20,6 +20,21 @@ test:
     cargo test --locked --manifest-path plugins/spl-transfer-build/Cargo.toml
     cargo test --locked --manifest-path plugins/squads-proposal-build/Cargo.toml
     cargo test --locked --manifest-path plugins/payment-verify/Cargo.toml
+
+# Supply-chain gate over every pinned lockfile.
+#
+# RUSTSEC-2025-0141 (bincode unmaintained) is accepted knowingly and cannot be
+# fixed by upgrading: Solana's wire format IS bincode-1 (fixint,
+# little-endian), and bincode 2/3 changed it. Moving off 1.3.3 would silently
+# change the bytes this project exists to encode exactly. Everything else —
+# any new advisory, vulnerability or warning — fails the gate.
+audit:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    for crate in libs/safe-hands-core plugins/payment-verify plugins/solana-tx-authorize                  plugins/spl-transfer-build plugins/squads-proposal-build conformance; do
+        echo "audit: $crate"
+        (cd "$crate" && cargo audit --deny warnings --ignore RUSTSEC-2025-0141)
+    done
 
 # The attack arena — every fixture in conformance/fixtures/.
 conformance:

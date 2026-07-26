@@ -4,6 +4,8 @@ zeroclaw/
 __pycache__/
 *.pyc
 target/
+mutants.out*/
+
 *.wasm
 
 # Local environment & secrets — never commit (keypairs, seeds, RPC keys)

@@ -432,6 +432,14 @@ pub fn evaluate(policy: &Policy, facts: &TxFacts) -> Report {
 
     // 8. Reserved future fee/rent enforcement. Policy::from_json rejects the
     // fee section in safe v0.1 because complete evidence is not yet available.
+    //
+    // This block is therefore unreachable through the public API: no policy
+    // that parses can carry `fee`. `cargo mutants` surfaces survivors here for
+    // exactly that reason — the comparisons cannot be exercised without
+    // constructing a Policy by hand. They are left in place rather than
+    // deleted so the shape is ready when fee evidence lands, and left untested
+    // rather than tested through a back door, because a test that reaches code
+    // operators cannot reach would assert nothing about the shipped product.
     if let Some(fee) = &policy.fee {
         if facts.priority_fee_lamports > fee.max_priority_fee_lamports
             || facts.estimated_fee_lamports > fee.max_transaction_fee_lamports
