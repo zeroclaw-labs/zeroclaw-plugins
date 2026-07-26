@@ -1,0 +1,26 @@
+[package]
+name = "solana-token-risk"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "ZeroClaw WIT plugin: offline rug/honeypot risk analysis for Solana SPL and Token-2022 mints from already-fetched RPC JSON."
+publish = false
+
+# cdylib for the wasm component; rlib so the pure risk core is testable on the
+# host with a plain `cargo test`.
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+wit-bindgen = "0.46"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true
+codegen-units = 1
+
+# Standalone crate: built for wasm32-wasip2, not part of the host workspace.
+[workspace]
