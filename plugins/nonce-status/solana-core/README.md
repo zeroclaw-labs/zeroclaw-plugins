@@ -1,10 +1,17 @@
 # solana-core-wasi
 
 The Solana substrate for ZeroClaw WIT plugins: everything a payment tool
-needs on `wasm32-wasip2`, where `solana-sdk` and `solana-client` do not
-compile (tokio, sockets, ring). Pure Rust, no wasm dependency anywhere, so
-the whole crate tests on the host with a plain `cargo test` and compiles
-identically inside a component.
+needs on `wasm32-wasip2`, in a single zero-dependency crate. The modular
+solana crates do compile to wasip2 as libraries these days; this crate
+exists because a payment tool that can refuse to move money should be
+auditable end to end. No borsh, no bs58 crate, no transitive tree to
+review: every byte layout is written out in this repo and pinned by tests
+to independent ground truth (the Solana Pay spec's example transaction,
+`solana-sdk` short-vec vectors, the mainnet ATA vector, the nonce
+domain-hash constant), then simulated clean on devnet. Pure Rust, no wasm
+dependency anywhere, so the whole crate tests on the host with a plain
+`cargo test` and compiles identically inside a component, and the built
+components stay in the 330-410KB range.
 
 Ships with three plugins built on top of it in this repo:
 `spl-transfer-build` (unsigned transfers under policy, durable-nonce mode),
