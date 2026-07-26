@@ -28,6 +28,16 @@ impl Severity {
             Severity::Critical => 40,
         }
     }
+
+    fn label(self) -> &'static str {
+        match self {
+            Severity::Info => "info",
+            Severity::Low => "low",
+            Severity::Medium => "medium",
+            Severity::High => "high",
+            Severity::Critical => "critical",
+        }
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -48,6 +58,8 @@ pub struct RiskReport {
     /// Data sections that were absent, so the model knows the report is partial.
     pub missing_inputs: Vec<&'static str>,
     pub summary: String,
+    /// Same report rendered as markdown for direct inclusion in agent replies.
+    pub summary_markdown: String,
 }
 
 /// Analyze a mint. `mint_account` is the jsonParsed account (tolerates the
@@ -79,7 +91,10 @@ pub fn analyze(
             id: "mint_authority_active",
             severity: Severity::High,
             title: "Mint authority is still active".into(),
-            detail: format!("{auth} can mint unlimited new tokens and dilute every holder."),
+            detail: format!(
+                "{} can mint unlimited new tokens and dilute every holder.",
+                display_pubkey(&auth)
+            ),
         });
     }
     if let Some(auth) = non_null_str(info, "freezeAuthority") {
@@ -88,7 +103,8 @@ pub fn analyze(
             severity: Severity::High,
             title: "Freeze authority is still active".into(),
             detail: format!(
-                "{auth} can freeze any holder's token account, blocking transfers and sales."
+                "{} can freeze any holder's token account, blocking transfers and sales.",
+                display_pubkey(&auth)
             ),
         });
     }
@@ -169,7 +185,8 @@ pub fn analyze(
                         severity: Severity::Low,
                         title: "Metadata is mutable".into(),
                         detail: format!(
-                            "{ua} can rename the token or swap its image/URI at any time."
+                            "{} can rename the token or swap its image/URI at any time.",
+                            display_pubkey(&ua)
                         ),
                     });
                 }
@@ -202,6 +219,7 @@ pub fn analyze(
             level
         ),
     };
+    let summary_markdown = render_markdown(score, level, &findings, &missing);
 
     Ok(RiskReport {
         score,
@@ -210,7 +228,28 @@ pub fn analyze(
         findings,
         missing_inputs: missing,
         summary,
+        summary_markdown,
     })
+}
+
+fn render_markdown(score: u32, level: &str, findings: &[Finding], missing: &[&str]) -> String {
+    let mut md = format!("### Token risk: {score}/100 ({level})\n");
+    if findings.is_empty() {
+        md.push_str("\nNo risk flags found in the provided data.\n");
+    } else {
+        for f in findings {
+            md.push_str(&format!(
+                "- **[{}] {}** — {}\n",
+                f.severity.label(),
+                f.title,
+                f.detail
+            ));
+        }
+    }
+    if !missing.is_empty() {
+        md.push_str(&format!("\n_Not checked: {}._\n", missing.join("; ")));
+    }
+    md
 }
 
 fn analyze_extension(ext: &Value, findings: &mut Vec<Finding>) {
@@ -218,7 +257,9 @@ fn analyze_extension(ext: &Value, findings: &mut Vec<Finding>) {
     let state = ext.get("state").unwrap_or(&Value::Null);
     match name {
         "permanentDelegate" => {
-            let who = non_null_str(state, "delegate").unwrap_or_else(|| "an authority".into());
+            let who = non_null_str(state, "delegate")
+                .map(|d| display_pubkey(&d))
+                .unwrap_or_else(|| "an authority".into());
             findings.push(Finding {
                 id: "permanent_delegate",
                 severity: Severity::Critical,
@@ -235,10 +276,72 @@ fn analyze_extension(ext: &Value, findings: &mut Vec<Finding>) {
                     severity: Severity::High,
                     title: "Transfer hook program attached".into(),
                     detail: format!(
-                        "Program {pid} runs on every transfer and can block sells (honeypot pattern)."
+                        "Program {} runs on every transfer and can block sells (honeypot pattern).",
+                        display_pubkey(&pid)
                     ),
                 });
             }
+        }
+        "pausableConfig" => {
+            if state
+                .get("paused")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+            {
+                findings.push(Finding {
+                    id: "transfers_paused",
+                    severity: Severity::Critical,
+                    title: "Transfers are currently paused".into(),
+                    detail: "The pause authority has halted all transfers; nobody can move \
+                             or sell this token until it is unpaused."
+                        .into(),
+                });
+            } else {
+                findings.push(Finding {
+                    id: "pausable",
+                    severity: Severity::High,
+                    title: "Issuer can pause all transfers".into(),
+                    detail: "A pause authority can halt every transfer at any moment, \
+                             trapping holders (exit-blocking pattern)."
+                        .into(),
+                });
+            }
+        }
+        "confidentialTransferMint" => {
+            findings.push(Finding {
+                id: "confidential_transfers",
+                severity: Severity::Medium,
+                title: "Confidential transfers enabled".into(),
+                detail: "Balances and flows can be hidden, so holder-concentration and \
+                         volume analysis may be blind to the real distribution."
+                    .into(),
+            });
+        }
+        "interestBearingConfig" => {
+            let rate = state
+                .get("currentRate")
+                .and_then(Value::as_i64)
+                .unwrap_or(0);
+            if rate != 0 {
+                findings.push(Finding {
+                    id: "interest_bearing_display",
+                    severity: Severity::Low,
+                    title: format!("Interest-bearing display rate of {rate} bps"),
+                    detail: "The displayed balance grows without any tokens being minted; \
+                             UI amounts overstate what is actually redeemable."
+                        .into(),
+                });
+            }
+        }
+        "scaledUiAmountConfig" => {
+            findings.push(Finding {
+                id: "scaled_ui_amount",
+                severity: Severity::Medium,
+                title: "Scaled UI amount multiplier".into(),
+                detail: "Displayed balances are multiplied by an issuer-controlled factor, \
+                         so wallets can show amounts that do not match on-chain reality."
+                    .into(),
+            });
         }
         "defaultAccountState" => {
             if state.get("accountState").and_then(Value::as_str) == Some("frozen") {
@@ -325,6 +428,20 @@ fn extract_parsed(v: &Value) -> Option<(String, &Value)> {
         }
     }
     None
+}
+
+/// Echo an authority-shaped field only if it actually looks like a pubkey.
+///
+/// Chain data is attacker-controlled: a hostile mint can put arbitrary prose in
+/// any string field. Base58 (Bitcoin alphabet) pubkeys are 32–44 chars with no
+/// spaces, so anything else is withheld rather than quoted back to the model.
+fn display_pubkey(s: &str) -> String {
+    const BASE58: &str = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+    if (32..=44).contains(&s.len()) && s.chars().all(|c| BASE58.contains(c)) {
+        format!("`{s}`")
+    } else {
+        "an address withheld from this report (field is not a valid base58 pubkey)".to_string()
+    }
 }
 
 fn non_null_str(v: &Value, key: &str) -> Option<String> {
