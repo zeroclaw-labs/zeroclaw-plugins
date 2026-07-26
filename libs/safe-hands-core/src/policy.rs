@@ -547,7 +547,7 @@ pub fn hex_sha256(bytes: &[u8]) -> String {
 /// ATA-aware recipient check. Agents pay wallets, but tokens land in
 /// Associated Token Accounts — so a classic SPL transfer whose destination is
 /// the ATA of an allowed wallet for the same mint is legitimate.
-fn recipient_allowed(policy: &Policy, tr: &TransferFact) -> bool {
+pub(crate) fn recipient_allowed(policy: &Policy, tr: &TransferFact) -> bool {
     if policy.allowed_recipients.contains(&tr.recipient) {
         return true;
     }
@@ -570,7 +570,7 @@ fn recipient_allowed(policy: &Policy, tr: &TransferFact) -> bool {
 
 /// Intent recipient matching, ATA-aware: the declared wallet matches a transfer
 /// to that wallet OR to the ATA of that wallet for the transfer's mint.
-fn recipient_matches_intent(intent_recipient: &str, tr: &TransferFact) -> bool {
+pub(crate) fn recipient_matches_intent(intent_recipient: &str, tr: &TransferFact) -> bool {
     if tr.recipient == intent_recipient {
         return true;
     }
@@ -603,7 +603,4 @@ pub fn policy_from_config(
 #[cfg(test)]
 mod tests;
 
-/// Machine-checked proofs of the authorization invariants. Compiled only
-/// under `cargo kani`, so a normal build and `cargo test` are unaffected.
-#[cfg(kani)]
-mod proofs;
+pub mod resolved;

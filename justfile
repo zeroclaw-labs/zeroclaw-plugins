@@ -36,6 +36,14 @@ verify-capabilities: stage-local
 component-test: stage-local
     cargo run --locked --release --manifest-path component-test/Cargo.toml
 
+# Machine-checked proofs of the authorization invariants (Linux/macOS).
+#
+# Runs against the heap-free model in policy/resolved.rs, which is why it
+# terminates in under a second where the same proofs against evaluate() never
+# finished at all. policy/tests.rs holds the model and the engine together.
+prove:
+    cargo kani --manifest-path libs/safe-hands-core/Cargo.toml
+
 # Coverage-guided fuzzing (Linux/macOS; needs nightly + libFuzzer).
 #
 # Not part of prove-safety: it runs for as long as you give it, and a gate

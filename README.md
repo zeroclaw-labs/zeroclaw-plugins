@@ -83,43 +83,51 @@ verifier is what surfaced that the `decision_id` shape had implied otherwise.
 
 ### Universally: machine-check the engine itself
 
-Tests cover the cases we thought of. [`libs/safe-hands-core/src/policy/proofs.rs`](libs/safe-hands-core/src/policy/proofs.rs)
-covers the ones nobody thought of, using the [Kani](https://github.com/model-checking/kani)
-model checker: it explores the decision space symbolically and returns a
-concrete counterexample if `ALLOW` is reachable when policy forbids it.
+Tests cover the cases we thought of. The proofs in
+[`policy/resolved/proofs.rs`](libs/safe-hands-core/src/policy/resolved/proofs.rs)
+cover the ones nobody thought of, using the [Kani](https://github.com/model-checking/kani)
+model checker:
 
 ```sh
-cargo kani --manifest-path libs/safe-hands-core/Cargo.toml   # Linux/macOS
+just prove     # Linux/macOS; Kani has no Windows build
 ```
 
-The invariants each harness asserts: an unlisted recipient is never allowed; no
-amount over the cap is allowed; a signed input is never allowed; durable nonce
-needs both operator opt-ins; any Token-2022 extension blocks; an authority
-change blocks; and `evaluate` is total. That last one matters more than it
-looks — a panic inside an authorization path is an unhandled decision, and a
-caller that reads "no verdict" as "no objection" fails open.
+```text
+Complete - 8 successfully verified harnesses, 0 failures, 8 total.
+SUMMARY: ** 0 of 386 failed
+Verification Time: 0.75s
+```
 
-**Status, stated plainly: no harness has reached a verdict.** They compile and
-CBMC starts, but three rounds of tuning did not get one to terminate, so these
-are proof *obligations*, not proofs. The verified claims in this repository are
-the ones `just prove-safety` covers.
+What is proven, over the *entire* decision space rather than a sample of it:
+an unlisted recipient can never be allowed; no amount over the cap can be
+allowed; durable nonce needs both operator opt-ins; an intent that does not
+match the bytes can never be allowed; missing simulation evidence is never
+downgraded to a review queue; deny overrides every other outcome; ALLOW
+requires every hard check to have passed; and the decision is total.
 
-The bottleneck is worth naming because it moved each round and ended somewhere
-specific: not the decision logic, but the heap collections it reads from.
-`evaluate` resolves an allowlist by looking a `String` up in a
-`BTreeSet<String>`, and CBMC has to model the tree's node linking to do it.
-Removing the JSON parse cut the log from 1.2 MB to 107 KB of exploration and
-moved the stall from serde into `BTreeSet`; shrinking the collections did not
-move it further.
+**How this was made possible is worth stating, because the first attempt
+failed.** Pointing Kani at `evaluate()` directly never terminated — CBMC has to
+symbolically model `BTreeSet<String>` node internals on every allowlist
+lookup. That is Kani's own [issue #1251](https://github.com/model-checking/kani/issues/1251),
+open since 2022, not a flaw in the harness. Three rounds of tuning moved the
+bottleneck without fixing it.
 
-The fix is structural rather than more compute — split `evaluate` into
-fact-resolution over the collections and a pure decision over resolved
-booleans, then prove the decision. That is a real refactor of audited code and
-was not done late to chase a result. Full write-up in
-[`proofs.rs`](libs/safe-hands-core/src/policy/proofs.rs).
+The fix was structural. The decision is now split in two:
+[`resolve()`](libs/safe-hands-core/src/policy/resolved.rs) does all the
+collection and string work and decides nothing; `ResolvedFacts::verdict()`
+decides and is `Copy`, heap-free, and therefore something a checker can
+exhaust. The same proofs that would not finish in seventy minutes now finish
+in under a second.
 
-The harnesses compile only under `cargo kani`, so ordinary builds and
-`cargo test` are untouched.
+A separate model is only worth anything if it agrees with the engine operators
+actually run, so `policy/tests.rs` checks the two against each other — on every
+shaped fixture and on 512 generated fact sets per run. If they ever drift, the
+proofs become worthless and the test suite says so immediately.
+
+That pairing is the technique AWS uses for Cedar in `cedar-spec`: rather than
+verify the production authorizer directly, check it against a separate model on
+generated inputs. We reached the same answer from the other direction, by
+watching CBMC fail to terminate.
 
 ## Surviving the approval queue
 

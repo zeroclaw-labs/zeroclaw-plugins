@@ -573,6 +573,106 @@ fn a_sol_transfer_declared_with_a_mint_is_a_mismatch() {
     );
 }
 
+// ── The provable model must never disagree with production ─────────────────
+//
+// `resolved::verdict()` is a heap-free restatement of the same rules that a
+// model checker can exhaust. It is only worth anything if it says the same
+// thing as the engine operators actually run. These assert that, over the
+// fixtures and over generated inputs.
+
+/// Every hand-written scenario in this file, re-checked through the model.
+#[test]
+fn the_model_agrees_with_the_engine_on_every_shaped_case() {
+    let policy = policy();
+    let attacker = usdc_transfer(1_000, OTHER);
+    let over_cap = usdc_transfer(999_000_000, RECIP);
+    let mut signed = usdc_transfer(1_000, RECIP);
+    signed.signed = true;
+    let mut no_intent = usdc_transfer(1_000, RECIP);
+    no_intent.intent = None;
+    let mut nonce = usdc_transfer(1_000, RECIP);
+    nonce.durable_nonce_used = true;
+    nonce.nonce_account = Some(OTHER.to_string());
+    let mut hooked = usdc_transfer(1_000, RECIP);
+    hooked.token2022.transfer_hook = true;
+    let mut unsimulated = usdc_transfer(1_000, RECIP);
+    unsimulated.simulation_ok = false;
+    let mut authority = usdc_transfer(1_000, RECIP);
+    authority.authority_change = true;
+
+    let cases = [
+        ("clean", usdc_transfer(1_000, RECIP)),
+        ("unlisted recipient", attacker),
+        ("over cap", over_cap),
+        ("signed", signed),
+        ("no intent", no_intent),
+        ("unlisted nonce", nonce),
+        ("transfer hook", hooked),
+        ("no simulation", unsimulated),
+        ("authority change", authority),
+    ];
+
+    for (name, facts) in cases {
+        let engine = evaluate(&policy, &facts).verdict;
+        let model = resolved::resolve(&policy, &facts).verdict();
+        assert_eq!(
+            engine, model,
+            "{name}: engine said {engine:?} but the model said {model:?}"
+        );
+    }
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(512))]
+
+    /// The same agreement, over inputs nobody chose.
+    ///
+    /// If this ever fails, the model has drifted from the engine and any proof
+    /// against the model is worthless — which is exactly the failure mode a
+    /// separate model invites, and exactly why it is checked continuously.
+    #[test]
+    fn the_model_agrees_with_the_engine_on_generated_facts(
+        amount in 0u128..60_000_000,
+        to_attacker in any::<bool>(),
+        signed in any::<bool>(),
+        authority_change in any::<bool>(),
+        simulation_ok in any::<bool>(),
+        durable_nonce_used in any::<bool>(),
+        nonce_first in any::<bool>(),
+        nonce_allowlisted in any::<bool>(),
+        hook in any::<bool>(),
+        fee in any::<bool>(),
+        frozen in any::<bool>(),
+        delegate in any::<bool>(),
+        drop_intent in any::<bool>(),
+        byte_len in 0usize..2000,
+    ) {
+        let recipient = if to_attacker { OTHER } else { RECIP };
+        let mut facts = usdc_transfer(amount, recipient);
+        facts.signed = signed;
+        facts.authority_change = authority_change;
+        facts.simulation_ok = simulation_ok;
+        facts.durable_nonce_used = durable_nonce_used;
+        facts.nonce_is_first_instruction = nonce_first;
+        facts.nonce_account = Some(if nonce_allowlisted { OTHER } else { USDC }.to_string());
+        facts.token2022.transfer_hook = hook;
+        facts.token2022.transfer_fee = fee;
+        facts.token2022.default_frozen = frozen;
+        facts.token2022.permanent_delegate = delegate;
+        facts.byte_len = byte_len;
+        if drop_intent {
+            facts.intent = None;
+        }
+
+        let engine = evaluate(&policy(), &facts).verdict;
+        let model = resolved::resolve(&policy(), &facts).verdict();
+        prop_assert_eq!(
+            engine, model,
+            "engine and model disagree on {:?}", facts
+        );
+    }
+}
+
 #[test]
 fn authority_change_denies() {
     let mut f = usdc_transfer(1_000, RECIP);
