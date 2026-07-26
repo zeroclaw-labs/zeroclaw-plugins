@@ -311,7 +311,10 @@ fn a_nonce_account_the_operator_never_allowlisted_is_refused() {
     f.nonce_is_first_instruction = true;
     let r = evaluate(&policy_allowing_nonce(OTHER), &f);
     assert_eq!(r.verdict, Verdict::Review);
-    assert!(r.reason_codes.iter().any(|c| c.starts_with("SH-REVIEW-NONCE")));
+    assert!(r
+        .reason_codes
+        .iter()
+        .any(|c| c.starts_with("SH-REVIEW-NONCE")));
 }
 
 #[test]
@@ -334,10 +337,11 @@ fn an_allowlisted_nonce_not_in_first_position_is_denied() {
     f.nonce_is_first_instruction = false;
     let r = evaluate(&policy_allowing_nonce(OTHER), &f);
     assert_eq!(r.verdict, Verdict::Deny);
-    assert!(r
-        .reason_codes
-        .iter()
-        .any(|c| c == "SH-DENY-NONCE-011"), "codes: {:?}", r.reason_codes);
+    assert!(
+        r.reason_codes.iter().any(|c| c == "SH-DENY-NONCE-011"),
+        "codes: {:?}",
+        r.reason_codes
+    );
 }
 
 #[test]
@@ -502,7 +506,10 @@ fn an_intent_naming_a_wallet_is_satisfied_by_its_ata() {
         "paying the ATA of the intended wallet is the same payment: {:?}",
         report.reason_codes
     );
-    assert_ne!(ata, RECIP, "the ATA must differ from the wallet, or this proves nothing");
+    assert_ne!(
+        ata, RECIP,
+        "the ATA must differ from the wallet, or this proves nothing"
+    );
 }
 
 /// `cargo mutants` flipped `&&` to `||` in the action/mint consistency check.

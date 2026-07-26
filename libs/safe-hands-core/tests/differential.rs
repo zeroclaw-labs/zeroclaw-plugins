@@ -18,7 +18,9 @@
 
 use proptest::prelude::*;
 use safe_hands_core::decode::decode;
-use safe_hands_core::{bincode, ix, solana_hash::Hash, solana_message::Message, solana_pubkey::Pubkey};
+use safe_hands_core::{
+    bincode, ix, solana_hash::Hash, solana_message::Message, solana_pubkey::Pubkey,
+};
 
 /// Build a legacy message with `count` system transfers, then hand its exact
 /// bytes to both decoders.
@@ -26,7 +28,8 @@ fn transfers_message(count: usize, seed: u8) -> (Message, Vec<u8>) {
     let payer = Pubkey::new_from_array([seed.wrapping_add(1); 32]);
     let instructions: Vec<_> = (0..count)
         .map(|i| {
-            let recipient = Pubkey::new_from_array([seed.wrapping_add(i as u8).wrapping_add(2); 32]);
+            let recipient =
+                Pubkey::new_from_array([seed.wrapping_add(i as u8).wrapping_add(2); 32]);
             ix::system_transfer(&payer, &recipient, 1_000 + i as u64)
         })
         .collect();

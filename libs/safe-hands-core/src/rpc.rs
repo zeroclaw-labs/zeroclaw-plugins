@@ -146,7 +146,10 @@ pub fn fetch_durable_nonce(
     nonce_account: &str,
     expected_authority: &str,
 ) -> Result<String, String> {
-    let response = rpc.call("getAccountInfo", json!([nonce_account, {"encoding": "base64"}]))?;
+    let response = rpc.call(
+        "getAccountInfo",
+        json!([nonce_account, {"encoding": "base64"}]),
+    )?;
     if let Some(error) = non_null_rpc_error(&response) {
         return Err(format!("getAccountInfo JSON-RPC error: {error}"));
     }
@@ -669,7 +672,12 @@ mod tests {
         assert!(fetch_classic_mint_decimals(&rpc, "mint").is_err());
     }
 
-    fn nonce_account_bytes(version: u32, state: u32, authority: &[u8; 32], nonce: &[u8; 32]) -> Vec<u8> {
+    fn nonce_account_bytes(
+        version: u32,
+        state: u32,
+        authority: &[u8; 32],
+        nonce: &[u8; 32],
+    ) -> Vec<u8> {
         let mut data = vec![0u8; 80];
         data[0..4].copy_from_slice(&version.to_le_bytes());
         data[4..8].copy_from_slice(&state.to_le_bytes());

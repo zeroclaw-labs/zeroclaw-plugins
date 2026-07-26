@@ -193,12 +193,18 @@ impl ResolvedFacts {
 
         self.velocity_exceeded
             || outcome_reviews(self.has_unknown_program, self.unknown_program_outcome)
-            || outcome_reviews(self.has_unlisted_instruction, self.unknown_instruction_outcome)
+            || outcome_reviews(
+                self.has_unlisted_instruction,
+                self.unknown_instruction_outcome,
+            )
             || outcome_reviews(
                 self.durable_nonce_used && !self.nonce_allowlisted,
                 self.durable_nonce_outcome,
             )
-            || outcome_reviews(self.t22_permanent_delegate, self.t22_permanent_delegate_outcome)
+            || outcome_reviews(
+                self.t22_permanent_delegate,
+                self.t22_permanent_delegate_outcome,
+            )
             || outcome_reviews(self.t22_transfer_hook, self.t22_transfer_hook_outcome)
             || outcome_reviews(self.t22_transfer_fee, self.t22_transfer_fee_outcome)
             || outcome_reviews(self.t22_default_frozen, self.t22_default_frozen_outcome)

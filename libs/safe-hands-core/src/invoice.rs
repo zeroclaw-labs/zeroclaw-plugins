@@ -201,7 +201,9 @@ pub enum PaymentVerdict {
         signatures: Vec<String>,
     },
     /// Evidence could not be trusted. Fails closed.
-    Unknown { reason: String },
+    Unknown {
+        reason: String,
+    },
 }
 
 impl PaymentVerdict {
@@ -294,12 +296,7 @@ fn parse_token_balances(value: Option<&Value>) -> Result<Vec<TokenBalance>, Stri
 }
 
 /// Net change for one account index in the expected mint.
-fn delta_for(
-    pre: &[TokenBalance],
-    post: &[TokenBalance],
-    index: u64,
-    mint: &str,
-) -> Option<i128> {
+fn delta_for(pre: &[TokenBalance], post: &[TokenBalance], index: u64, mint: &str) -> Option<i128> {
     let find = |list: &[TokenBalance]| {
         list.iter()
             .find(|b| b.account_index == index && b.mint == mint)
@@ -487,7 +484,10 @@ fn find_transfer_authority(tx: &Value, merchant_ata: &str) -> Result<TransferAut
     {
         instructions.extend(list.iter());
     }
-    if let Some(inner) = tx.pointer("/meta/innerInstructions").and_then(Value::as_array) {
+    if let Some(inner) = tx
+        .pointer("/meta/innerInstructions")
+        .and_then(Value::as_array)
+    {
         for group in inner {
             if let Some(list) = group.get("instructions").and_then(Value::as_array) {
                 instructions.extend(list.iter());
@@ -506,7 +506,10 @@ fn find_transfer_authority(tx: &Value, merchant_ata: &str) -> Result<TransferAut
         let Some(parsed) = instruction.get("parsed") else {
             continue;
         };
-        let kind = parsed.get("type").and_then(Value::as_str).unwrap_or_default();
+        let kind = parsed
+            .get("type")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
         if kind != "transfer" && kind != "transferChecked" {
             continue;
         }
@@ -747,10 +750,7 @@ pub fn verify_payment_agreed(
 ///
 /// `fallback` is `None` when the primary already failed and the second call was
 /// skipped.
-pub fn combine_agreed(
-    primary: PaymentVerdict,
-    fallback: Option<PaymentVerdict>,
-) -> PaymentVerdict {
+pub fn combine_agreed(primary: PaymentVerdict, fallback: Option<PaymentVerdict>) -> PaymentVerdict {
     if let PaymentVerdict::Unknown { reason } = &primary {
         return PaymentVerdict::Unknown {
             reason: format!("primary RPC: {reason}"),

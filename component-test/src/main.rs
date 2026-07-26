@@ -80,8 +80,10 @@ impl zeroclaw::plugin::logging::Host for Host {
         level: zeroclaw::plugin::logging::LogLevel,
         event: zeroclaw::plugin::logging::PluginEvent,
     ) {
-        self.logs
-            .push(format!("{level:?} {} — {}", event.function_name, event.message));
+        self.logs.push(format!(
+            "{level:?} {} — {}",
+            event.function_name, event.message
+        ));
     }
 }
 
@@ -228,11 +230,17 @@ fn main() -> Result<()> {
         match (case.check)(&outcome) {
             Ok(detail) => {
                 passed += 1;
-                println!("  {GREEN}PASS{RESET}  {}\n        {DIM}{detail}{RESET}", case.name);
+                println!(
+                    "  {GREEN}PASS{RESET}  {}\n        {DIM}{detail}{RESET}",
+                    case.name
+                );
             }
             Err(reason) => {
                 failed += 1;
-                println!("  {RED}FAIL{RESET}  {}\n        {DIM}{reason}{RESET}", case.name);
+                println!(
+                    "  {RED}FAIL{RESET}  {}\n        {DIM}{reason}{RESET}",
+                    case.name
+                );
             }
         }
     }

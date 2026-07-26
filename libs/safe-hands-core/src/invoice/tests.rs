@@ -304,7 +304,11 @@ fn verification_reads_only_finalized_evidence() {
     for (method, params) in rpc.calls() {
         if method == "getSignaturesForAddress" || method == "getTransaction" {
             let commitment = params[1]["commitment"].as_str();
-            assert_eq!(commitment, Some("finalized"), "{method} used {commitment:?}");
+            assert_eq!(
+                commitment,
+                Some("finalized"),
+                "{method} used {commitment:?}"
+            );
         }
     }
 }
@@ -333,9 +337,15 @@ fn underpayment_and_overpayment_keep_both_amounts() {
             "the requested amount must never be overwritten by the observed one"
         );
         if expect_under {
-            assert!(matches!(verdict, PaymentVerdict::Underpaid(_)), "{verdict:?}");
+            assert!(
+                matches!(verdict, PaymentVerdict::Underpaid(_)),
+                "{verdict:?}"
+            );
         } else {
-            assert!(matches!(verdict, PaymentVerdict::Overpaid(_)), "{verdict:?}");
+            assert!(
+                matches!(verdict, PaymentVerdict::Overpaid(_)),
+                "{verdict:?}"
+            );
         }
     }
 }
@@ -362,7 +372,10 @@ fn a_non_positive_expiry_is_no_expiry_at_all() {
         let mut expectation = expectation();
         expectation.expiry_unix = expiry;
         let verdict = verify_payment(&rpc_with(Tx::default().build()), &expectation);
-        assert!(matches!(verdict, PaymentVerdict::Paid(_)), "{expiry:?} -> {verdict:?}");
+        assert!(
+            matches!(verdict, PaymentVerdict::Paid(_)),
+            "{expiry:?} -> {verdict:?}"
+        );
         assert!(!verdict.evidence().unwrap().late);
     }
 }
@@ -631,12 +644,16 @@ fn token_2022_cannot_reach_the_amount_comparison() {
 #[test]
 fn a_dead_endpoint_is_unknown_never_unpaid() {
     let verdict = verify_payment(&DownTransport, &expectation());
-    assert!(matches!(verdict, PaymentVerdict::Unknown { .. }), "{verdict:?}");
+    assert!(
+        matches!(verdict, PaymentVerdict::Unknown { .. }),
+        "{verdict:?}"
+    );
 }
 
 #[test]
 fn malformed_or_missing_evidence_is_unknown() {
-    let base = || MockTransport::new().with("getAccountInfo", mint_account(DECIMALS, TOKEN_PROGRAM));
+    let base =
+        || MockTransport::new().with("getAccountInfo", mint_account(DECIMALS, TOKEN_PROGRAM));
     let cases: Vec<(&str, MockTransport)> = vec![
         (
             "signature list is not an array",
@@ -768,9 +785,7 @@ fn a_single_dissenting_endpoint_always_forces_the_safe_state() {
                 reason: "r".into(),
                 signatures: vec![],
             },
-            PaymentVerdict::Unknown {
-                reason: "u".into(),
-            },
+            PaymentVerdict::Unknown { reason: "u".into() },
         ]
     };
 
