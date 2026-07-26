@@ -125,8 +125,7 @@ plugins/solana-inbox/
 ├── tests/fixtures/*.json # captured 2026-07-25 real transactions (see fixtures/README.md)
 ├── proofs/mod.rs         # cfg(kani) formal-proof harnesses; run with `cargo kani`
 ├── manifest.toml         # name, version, wasm_path, capabilities, permissions
-├── PROOFS.md             # invariants proven / verified by the harnesses above
-└── EVIDENCE.md           # live-devnet run artifacts
+└── PROOFS.md             # invariants proven / verified by the harnesses above
 
 crates/solana-inbox-core/  # pure parser split into a standalone MIT/Apache-2.0
 ├── src/lib.rs             #   crates.io crate so any other Rust plugin can reuse
