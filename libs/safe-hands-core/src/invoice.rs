@@ -719,25 +719,63 @@ pub fn verify_payment_agreed(
     expectation: &PaymentExpectation,
 ) -> PaymentVerdict {
     let first = verify_payment(primary, expectation);
-    if let PaymentVerdict::Unknown { reason } = &first {
+    // Short-circuit: a primary that cannot be trusted makes the second call
+    // pointless, and calling anyway would only widen the window for a
+    // time-of-check race between the two reads.
+    if matches!(first, PaymentVerdict::Unknown { .. }) {
+        return combine_agreed(first, None);
+    }
+    let second = verify_payment(fallback, expectation);
+    combine_agreed(first, Some(second))
+}
+
+/// The rule-combining algorithm for two independent endpoints, named and
+/// separated so it can be tested exhaustively rather than inferred from the
+/// call site.
+///
+/// The shape is deliberate, and it is the asymmetric one from functional-safety
+/// practice (IEC 61508's 1oo2/2oo2 distinction):
+///
+/// - **Unanimity is required to earn a permissive answer.** Both endpoints must
+///   independently reach the same verdict before it is returned.
+/// - **A single dissent is enough to force the safe state.** Any disagreement,
+///   and any endpoint that could not be trusted at all, yields `Unknown`.
+///
+/// A symmetric "2-out-of-2 to trip" design would be the dangerous inverse:
+/// it buys availability by letting one dead channel suppress a refusal. Here a
+/// dead channel can only ever cost availability, never safety.
+///
+/// `fallback` is `None` when the primary already failed and the second call was
+/// skipped.
+pub fn combine_agreed(
+    primary: PaymentVerdict,
+    fallback: Option<PaymentVerdict>,
+) -> PaymentVerdict {
+    if let PaymentVerdict::Unknown { reason } = &primary {
         return PaymentVerdict::Unknown {
             reason: format!("primary RPC: {reason}"),
         };
     }
-    let second = verify_payment(fallback, expectation);
-    if let PaymentVerdict::Unknown { reason } = &second {
+    let Some(fallback) = fallback else {
+        // A trustworthy primary with no second opinion is still one endpoint,
+        // and one endpoint is not evidence.
+        return PaymentVerdict::Unknown {
+            reason: "fallback RPC produced no verdict — one endpoint is not evidence".to_string(),
+        };
+    };
+    if let PaymentVerdict::Unknown { reason } = &fallback {
         return PaymentVerdict::Unknown {
             reason: format!("fallback RPC: {reason}"),
         };
     }
-    if first != second {
+    if primary != fallback {
         return PaymentVerdict::Unknown {
             reason: format!(
                 "primary and fallback RPC disagree: {} vs {}",
-                first.tag(),
-                second.tag()
+                primary.tag(),
+                fallback.tag()
             ),
         };
     }
-    first
+    primary
 }

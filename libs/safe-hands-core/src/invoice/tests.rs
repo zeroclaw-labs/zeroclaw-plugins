@@ -737,6 +737,83 @@ fn a_failing_endpoint_is_named_in_the_reason() {
     assert!(reason.starts_with("fallback RPC:"), "{reason}");
 }
 
+/// Exhaustive proof of the voting asymmetry, over every pair of verdicts the
+/// two endpoints can produce — 64 combinations, not a hand-picked few.
+///
+/// The property under test is the one functional-safety practice calls out as
+/// the difference between a safe and a dangerous redundancy design: unanimity
+/// is required to earn a permissive answer, but a single dissent is enough to
+/// force the safe state. Getting this backwards — letting one dead channel
+/// suppress a refusal — is how 2oo2 voting reduces protection instead of
+/// adding it.
+#[test]
+fn a_single_dissenting_endpoint_always_forces_the_safe_state() {
+    let evidence = PaymentEvidence {
+        signature: "S".into(),
+        payer_owner: key(PAYER).to_string(),
+        observed_amount_raw: AMOUNT,
+        requested_amount_raw: AMOUNT,
+        block_time: Some(1_700_000_000),
+        slot: 1,
+        late: false,
+    };
+    let universe = || {
+        vec![
+            PaymentVerdict::Unpaid,
+            PaymentVerdict::Paid(evidence.clone()),
+            PaymentVerdict::Underpaid(evidence.clone()),
+            PaymentVerdict::Overpaid(evidence.clone()),
+            PaymentVerdict::Late(evidence.clone()),
+            PaymentVerdict::Review {
+                reason: "r".into(),
+                signatures: vec![],
+            },
+            PaymentVerdict::Unknown {
+                reason: "u".into(),
+            },
+        ]
+    };
+
+    let mut checked = 0;
+    for primary in universe() {
+        for fallback in universe() {
+            let combined = combine_agreed(primary.clone(), Some(fallback.clone()));
+            checked += 1;
+
+            let unanimous = primary == fallback;
+            let either_untrusted = matches!(primary, PaymentVerdict::Unknown { .. })
+                || matches!(fallback, PaymentVerdict::Unknown { .. });
+
+            if unanimous && !either_untrusted {
+                assert_eq!(
+                    combined.tag(),
+                    primary.tag(),
+                    "two endpoints agreeing on {} must return it",
+                    primary.tag()
+                );
+            } else {
+                assert_eq!(
+                    combined.tag(),
+                    "UNKNOWN",
+                    "{} vs {} must fail closed, got {}",
+                    primary.tag(),
+                    fallback.tag(),
+                    combined.tag()
+                );
+            }
+        }
+
+        // A primary with no second opinion is one endpoint, never evidence.
+        assert_eq!(
+            combine_agreed(primary.clone(), None).tag(),
+            "UNKNOWN",
+            "{} alone must not stand as evidence",
+            primary.tag()
+        );
+    }
+    assert_eq!(checked, 49, "every verdict pair must be covered");
+}
+
 #[test]
 fn every_verdict_has_a_stable_tag() {
     let evidence = PaymentEvidence {
