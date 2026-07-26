@@ -447,3 +447,84 @@ fn full_detail_adds_digests() {
     assert!(v["policy_sha256"].as_str().unwrap().starts_with("sha256:"));
     assert!(v["message_sha256"].as_str().unwrap().starts_with("sha256:"));
 }
+
+/// Every terminal verdict must be auditable, including the ones produced
+/// before a policy or a transaction exists.
+///
+/// These four refusals used to return no `decision_id`, which meant they could
+/// not be re-derived by `--verify` and could not be entered in the transparency
+/// log. A refusal that leaves no checkable trace is the one an operator would
+/// most like to make quietly, so the absence was a hole rather than an
+/// omission.
+#[test]
+fn fail_closed_refusals_carry_a_decision_id() {
+    let policy = serde_json::to_string(&json!(policy_json())).unwrap();
+    let cases: Vec<(&str, String)> = vec![
+        (
+            "no policy configured",
+            format!(
+                r#"{{"transaction_base64":"{}","detail_level":"full","__config":{{}}}}"#,
+                good_tx()
+            ),
+        ),
+        (
+            "malformed policy",
+            format!(
+                r#"{{"transaction_base64":"{}","detail_level":"full","__config":{{"policy_json":"{{not json"}}}}"#,
+                good_tx()
+            ),
+        ),
+        (
+            "payload is not base64",
+            args("not-base64!!!", &policy, None),
+        ),
+        ("payload is not a transaction", args("AAAA", &policy, None)),
+    ];
+
+    let mut ids = std::collections::BTreeSet::new();
+    for (name, arg_json) in &cases {
+        let mut arg_json = arg_json.clone();
+        if !arg_json.contains("detail_level") {
+            arg_json = arg_json.replacen('{', r#"{"detail_level":"full","#, 1);
+        }
+        let out = run(&arg_json, Some(&sim_ok_transport() as &dyn RpcTransport));
+        let v: Value = serde_json::from_str(&out.output).unwrap();
+        assert_eq!(v["verdict"], "DENY", "{name}");
+
+        let id = v["decision_id"].as_str().unwrap_or_default().to_string();
+        assert!(id.starts_with("sha256:"), "{name} has no decision id");
+
+        // The id must re-derive from the digests the receipt carries — that is
+        // the whole contract `--verify` and the log rely on.
+        let codes: Vec<String> = v["reason_codes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| c.as_str().unwrap().to_string())
+            .collect();
+        let message = v["message_sha256"]
+            .as_str()
+            .unwrap()
+            .trim_start_matches("sha256:");
+        let policy_digest = v["policy_sha256"]
+            .as_str()
+            .unwrap()
+            .trim_start_matches("sha256:");
+        assert_eq!(
+            id,
+            format!(
+                "sha256:{}",
+                safe_hands_core::commitment::decision_id(message, policy_digest, "DENY", &codes)
+            ),
+            "{name} decision id does not re-derive"
+        );
+
+        ids.insert(id);
+    }
+
+    assert_eq!(
+        ids.len(),
+        cases.len(),
+        "four distinct failures must not share one decision id"
+    );
+}

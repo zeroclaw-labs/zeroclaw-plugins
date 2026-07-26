@@ -7,7 +7,7 @@
 default: prove-safety
 
 # The full gate a judge runs.
-prove-safety: test conformance verify-receipt audit clippy wasm verify-capabilities component-test
+prove-safety: test conformance verify-receipt log-verify audit clippy wasm verify-capabilities component-test
     @echo ""
     @echo "=================================================="
     @echo "  prove-safety: ALL GREEN — the guard holds."
@@ -20,6 +20,7 @@ test:
     cargo test --locked --manifest-path plugins/spl-transfer-build/Cargo.toml
     cargo test --locked --manifest-path plugins/squads-proposal-build/Cargo.toml
     cargo test --locked --manifest-path plugins/payment-verify/Cargo.toml
+    cargo test --locked --manifest-path conformance/Cargo.toml
 
 # Prove each shipped .wasm imports only the capabilities its manifest declares.
 # Reads the compiled artifact an operator installs, not the source: a component
@@ -77,6 +78,46 @@ conformance:
 verify-receipt receipt="conformance/receipts/live-allow.json":
     cargo run --locked --release --manifest-path conformance/Cargo.toml -- --verify {{receipt}}
 
+# The transparency log: replay conformance/log/arena.jsonl from its genesis.
+#
+# Every entry is re-derived from the bytes and policy it records, then the whole
+# chain is recomputed. Offline — it proves the log is internally honest, which
+# is everything except that nothing was quietly cut off the end.
+log-verify authority="BJqcN1wqvpakoMtu5xVepNHRTVbQohnDAfARtwe9HNcV":
+    cargo run --locked --release --manifest-path conformance/Cargo.toml -- --log-verify --log conformance/log/arena.jsonl --authority {{authority}}
+
+# The half that needs the network: check the log against its published head.
+#
+# The head of this log was signed and posted to Solana devnet by a key this
+# repository does not contain. Truncating the log, reordering it, or rewriting
+# any decision in it now contradicts a value nobody involved can retract.
+#
+#   just log-audit "https://api.devnet.solana.com"
+log-audit rpc="https://api.devnet.solana.com" authority="BJqcN1wqvpakoMtu5xVepNHRTVbQohnDAfARtwe9HNcV":
+    cargo run --locked --release --manifest-path conformance/Cargo.toml -- --log-audit --log conformance/log/arena.jsonl --authority {{authority}} --rpc "{{rpc}}"
+
+# Rebuild the log from scratch: run the attack arena, emit a receipt per
+# fixture, and append each one. Reproduces conformance/log/arena.jsonl except
+# for its timestamps, which the chain does not commit to.
+log-rebuild out="target/log-rebuild":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    authority=BJqcN1wqvpakoMtu5xVepNHRTVbQohnDAfARtwe9HNcV
+    rm -rf "{{out}}"
+    mkdir -p "{{out}}/receipts"
+    cargo run --locked --release --manifest-path conformance/Cargo.toml -- --receipts "{{out}}/receipts"
+    for receipt in "{{out}}"/receipts/*.json; do
+        cargo run --locked --release --manifest-path conformance/Cargo.toml -- --log-append "$receipt" --log "{{out}}/arena.jsonl" --authority "$authority" >/dev/null
+    done
+    cargo run --locked --release --manifest-path conformance/Cargo.toml -- --log-verify --log "{{out}}/arena.jsonl" --authority "$authority"
+
+# Build the unsigned transaction that publishes the current head.
+#
+# Safe Hands holds no key, so this stops at the unsigned bytes exactly like
+# every other transaction the suite produces.
+log-anchor rpc="https://api.devnet.solana.com" authority="BJqcN1wqvpakoMtu5xVepNHRTVbQohnDAfARtwe9HNcV":
+    cargo run --locked --release --manifest-path conformance/Cargo.toml -- --log-anchor --log conformance/log/arena.jsonl --authority {{authority}} --rpc "{{rpc}}"
+
 # clippy -D warnings on host and wasm targets, matching upstream CI.
 clippy:
     cargo clippy --locked --manifest-path libs/safe-hands-core/Cargo.toml --all-targets -- -D warnings
@@ -89,6 +130,7 @@ clippy:
     cargo clippy --locked --manifest-path plugins/spl-transfer-build/Cargo.toml --target wasm32-wasip2 -- -D warnings
     cargo clippy --locked --manifest-path plugins/squads-proposal-build/Cargo.toml --target wasm32-wasip2 -- -D warnings
     cargo clippy --locked --manifest-path plugins/payment-verify/Cargo.toml --target wasm32-wasip2 -- -D warnings
+    cargo clippy --locked --manifest-path conformance/Cargo.toml --all-targets -- -D warnings
 
 # wasm32-wasip2 release components for all four plugins.
 wasm:

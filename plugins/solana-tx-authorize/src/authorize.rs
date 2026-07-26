@@ -6,6 +6,7 @@
 //! evidence → UNKNOWN (fail closed), anything unexpected → DENY.
 
 use safe_hands_core::codec::{base64_decode, unsigned_transaction_bytes};
+use safe_hands_core::commitment;
 use safe_hands_core::decode::decode;
 use safe_hands_core::policy::{evaluate, hex_sha256, policy_from_config, Intent, Report, Verdict};
 use safe_hands_core::rpc::{
@@ -77,12 +78,17 @@ pub fn run(args_json: &str, transport: Option<&dyn RpcTransport>) -> ExecuteOutp
             } else {
                 "SH-DENY-CONFIG-060" // missing entirely
             };
-            return ExecuteOutput::verdict(json!({
-                "verdict": "DENY",
-                "summary": format!("No valid spend policy is configured — fail closed ({e})."),
-                "reason_codes": [code],
-                "next_action": "CONFIGURE_POLICY"
-            }));
+            return ExecuteOutput::verdict(committed_verdict(
+                "DENY",
+                &format!("No valid spend policy is configured — fail closed ({e})."),
+                &[code.to_string()],
+                "CONFIGURE_POLICY",
+                &commitment::uncanonical_message_digest(args.transaction_base64.trim()),
+                &commitment::unusable_policy_digest(
+                    args.config.get("policy_json").map(String::as_str),
+                ),
+                args.detail_level.as_deref(),
+            ));
         }
     };
     let policy_sha256 = policy.sha256();
@@ -92,23 +98,29 @@ pub fn run(args_json: &str, transport: Option<&dyn RpcTransport>) -> ExecuteOutp
     let tx_bytes = match base64_decode(tx_b64, MAX_B64_CHARS) {
         Ok(b) => b,
         Err(e) => {
-            return ExecuteOutput::verdict(json!({
-                "verdict": "DENY",
-                "summary": format!("The transaction payload is not valid base64 within the canonical size bound. ({e})"),
-                "reason_codes": ["SH-DENY-INPUT-061"],
-                "next_action": "DO_NOT_SIGN"
-            }));
+            return ExecuteOutput::verdict(committed_verdict(
+                "DENY",
+                &format!("The transaction payload is not valid base64 within the canonical size bound. ({e})"),
+                &["SH-DENY-INPUT-061".to_string()],
+                "DO_NOT_SIGN",
+                &commitment::uncanonical_message_digest(tx_b64),
+                &policy_sha256,
+                args.detail_level.as_deref(),
+            ));
         }
     };
     let decoded = match decode(&tx_bytes) {
         Ok(d) => d,
         Err(e) => {
-            return ExecuteOutput::verdict(json!({
-                "verdict": "DENY",
-                "summary": format!("The transaction could not be fully decoded; unexplainable input is denied. ({e})"),
-                "reason_codes": ["SH-DENY-DECODE-062"],
-                "next_action": "DO_NOT_SIGN"
-            }));
+            return ExecuteOutput::verdict(committed_verdict(
+                "DENY",
+                &format!("The transaction could not be fully decoded; unexplainable input is denied. ({e})"),
+                &["SH-DENY-DECODE-062".to_string()],
+                "DO_NOT_SIGN",
+                &commitment::uncanonical_message_digest(tx_b64),
+                &policy_sha256,
+                args.detail_level.as_deref(),
+            ));
         }
     };
     let canonical_unsigned = match unsigned_transaction_bytes(
@@ -117,12 +129,15 @@ pub fn run(args_json: &str, transport: Option<&dyn RpcTransport>) -> ExecuteOutp
     ) {
         Ok(bytes) => bytes,
         Err(error) => {
-            return ExecuteOutput::verdict(json!({
-                "verdict": "DENY",
-                "summary": format!("The decoded transaction could not be normalized canonically. ({error})"),
-                "reason_codes": ["SH-DENY-DECODE-062"],
-                "next_action": "DO_NOT_SIGN"
-            }));
+            return ExecuteOutput::verdict(committed_verdict(
+                "DENY",
+                &format!("The decoded transaction could not be normalized canonically. ({error})"),
+                &["SH-DENY-DECODE-062".to_string()],
+                "DO_NOT_SIGN",
+                &commitment::uncanonical_message_digest(tx_b64),
+                &policy_sha256,
+                args.detail_level.as_deref(),
+            ));
         }
     };
     let message_digest = hex_sha256(&canonical_unsigned);
@@ -152,6 +167,7 @@ pub fn run(args_json: &str, transport: Option<&dyn RpcTransport>) -> ExecuteOutp
                     &policy_sha256,
                     "RETRY_OR_ALERT_OPERATOR",
                     args.detail_level.as_deref(),
+                    Evidence::SimulationStale,
                 ));
             }
             SimulationOutcome::Unavailable { .. } => {
@@ -166,6 +182,7 @@ pub fn run(args_json: &str, transport: Option<&dyn RpcTransport>) -> ExecuteOutp
                     &policy_sha256,
                     "RETRY_OR_ALERT_OPERATOR",
                     args.detail_level.as_deref(),
+                    Evidence::SimulationUnavailable,
                 ));
             }
         };
@@ -194,6 +211,7 @@ pub fn run(args_json: &str, transport: Option<&dyn RpcTransport>) -> ExecuteOutp
                 &policy_sha256,
                 "RETRY_OR_ALERT_OPERATOR",
                 args.detail_level.as_deref(),
+                Evidence::MintEvidenceMissing,
             ));
         };
         if verify_classic_transfer_mints(rpc, &decoded).is_err() {
@@ -208,6 +226,7 @@ pub fn run(args_json: &str, transport: Option<&dyn RpcTransport>) -> ExecuteOutp
                 &policy_sha256,
                 "RETRY_OR_ALERT_OPERATOR",
                 args.detail_level.as_deref(),
+                Evidence::MintEvidenceMissing,
             ));
         }
     }
@@ -217,6 +236,13 @@ pub fn run(args_json: &str, transport: Option<&dyn RpcTransport>) -> ExecuteOutp
 
     // 5. Shape the verdict (slim by default; full evidence on request).
     let next_action = next_action_for(&report);
+    let evidence = if !policy.simulation.required {
+        Evidence::NotRequired
+    } else if facts.simulation_ok {
+        Evidence::SimulationOk
+    } else {
+        Evidence::SimulationFailed
+    };
     ExecuteOutput::verdict(verdict_json(
         &report,
         &decoded_summary(&decoded.facts),
@@ -224,6 +250,7 @@ pub fn run(args_json: &str, transport: Option<&dyn RpcTransport>) -> ExecuteOutp
         &policy_sha256,
         next_action,
         args.detail_level.as_deref(),
+        evidence,
     ))
 }
 
@@ -291,6 +318,43 @@ fn next_action_for(report: &Report) -> &'static str {
     }
 }
 
+/// Which external evidence the decision was made under.
+///
+/// A receipt records `simulation_ok` as a boolean, and a boolean cannot tell
+/// "the node said this transaction fails" from "the node did not answer" from
+/// "the answer was too old to trust". Those three produce different reason
+/// codes, so collapsing them made three whole classes of UNKNOWN impossible to
+/// re-derive — and UNKNOWN is the verdict an operator is most tempted to
+/// explain away. Naming the evidence keeps every refusal checkable.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Evidence {
+    /// Simulation ran and the transaction would succeed.
+    SimulationOk,
+    /// Simulation ran and the transaction would fail.
+    SimulationFailed,
+    /// Simulation could not be run at all.
+    SimulationUnavailable,
+    /// Simulation ran but against a slot too old to rely on.
+    SimulationStale,
+    /// A classic SPL mint could not be evidenced on chain.
+    MintEvidenceMissing,
+    /// The policy does not require simulation, so none was attempted.
+    NotRequired,
+}
+
+impl Evidence {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Evidence::SimulationOk => "simulation_ok",
+            Evidence::SimulationFailed => "simulation_failed",
+            Evidence::SimulationUnavailable => "simulation_unavailable",
+            Evidence::SimulationStale => "simulation_stale",
+            Evidence::MintEvidenceMissing => "mint_evidence_missing",
+            Evidence::NotRequired => "simulation_not_required",
+        }
+    }
+}
+
 /// The verdict object. Slim (~150 tokens) unless detail_level=full.
 fn verdict_json(
     report: &Report,
@@ -299,6 +363,7 @@ fn verdict_json(
     policy_sha256: &str,
     next_action: &str,
     detail_level: Option<&str>,
+    evidence: Evidence,
 ) -> Value {
     let summary = format!(
         "{} — {}",
@@ -309,25 +374,49 @@ fn verdict_json(
             tx_summary.to_string()
         }
     );
-    let decision_id = hex_sha256(
-        format!(
-            "{message_digest}|{policy_sha256}|{}|{:?}",
-            report.verdict.as_str(),
-            report.reason_codes
-        )
-        .as_bytes(),
+    let mut out = committed_verdict(
+        report.verdict.as_str(),
+        &summary,
+        &report.reason_codes,
+        next_action,
+        message_digest,
+        policy_sha256,
+        detail_level,
     );
+    if detail_level == Some("full") {
+        out["matched_rules"] = json!(report.matched_rules);
+        out["evidence"] = json!(evidence.as_str());
+    }
+    out
+}
+
+/// Build a verdict object that commits to its own inputs.
+///
+/// Every terminal verdict goes through here, including the fail-closed
+/// refusals that happen before a policy or a transaction exists. A refusal
+/// without a `decision_id` cannot be re-derived and cannot be entered in the
+/// transparency log — and the refusals that happen when the operator's config
+/// is broken are precisely the ones an auditor most wants to see.
+fn committed_verdict(
+    verdict: &str,
+    summary: &str,
+    reason_codes: &[String],
+    next_action: &str,
+    message_digest: &str,
+    policy_digest: &str,
+    detail_level: Option<&str>,
+) -> Value {
+    let decision_id = commitment::decision_id(message_digest, policy_digest, verdict, reason_codes);
     let mut out = json!({
-        "verdict": report.verdict.as_str(),
+        "verdict": verdict,
         "summary": summary,
-        "reason_codes": report.reason_codes,
+        "reason_codes": reason_codes,
         "next_action": next_action,
         "decision_id": format!("sha256:{decision_id}"),
     });
     if detail_level == Some("full") {
-        out["matched_rules"] = json!(report.matched_rules);
         out["message_sha256"] = json!(format!("sha256:{message_digest}"));
-        out["policy_sha256"] = json!(format!("sha256:{policy_sha256}"));
+        out["policy_sha256"] = json!(format!("sha256:{policy_digest}"));
     }
     out
 }

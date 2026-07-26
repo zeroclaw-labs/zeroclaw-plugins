@@ -23,7 +23,6 @@ pub struct Case {
 
 const USDC: &str = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 const RECIP: &str = "9hSR6S7WPtxmTojgo6GG3k4yDPecgJY292j7xrsUGWBu";
-const ATTACKER: &str = "AKnL4NNf3DGWZJS6cPknBuEGnVsV4A4m5tgebLHaRSZ9";
 
 fn policy_json() -> String {
     format!(
@@ -83,8 +82,7 @@ pub fn all() -> Vec<Case> {
             plugin: "solana-tx-authorize",
             wasm: "solana_tx_authorize.wasm",
             name: "authorizer fails closed with no policy configured",
-            args: r#"{"transaction_base64":"bm90LWEtdHJhbnNhY3Rpb24=","__config":{}}"#
-                .to_string(),
+            args: r#"{"transaction_base64":"bm90LWEtdHJhbnNhY3Rpb24=","__config":{}}"#.to_string(),
             check: |o| refused(o, "SH-DENY-CONFIG"),
         },
         // ── The builder must still enforce policy before constructing ─────
@@ -97,9 +95,7 @@ pub fn all() -> Vec<Case> {
             plugin: "spl-transfer-build",
             wasm: "spl_transfer_build.wasm",
             name: "builder fails closed with no policy configured",
-            args: format!(
-                r#"{{"recipient":"{RECIP}","amount_raw":"1000000","__config":{{}}}}"#
-            ),
+            args: format!(r#"{{"recipient":"{RECIP}","amount_raw":"1000000","__config":{{}}}}"#),
             check: |o| refused(o, "fail closed"),
         },
         // ── The verifier must refuse to answer without two endpoints ──────

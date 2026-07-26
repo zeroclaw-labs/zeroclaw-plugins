@@ -348,7 +348,13 @@ fn resolve_keys(v: &Value) -> Value {
     }
 }
 
-fn run_fixture(fx: &Fixture) -> Result<(), String> {
+/// Run one fixture through the real plugin.
+///
+/// `receipts`, when given, is a directory to drop a verifiable receipt into —
+/// the same JSON `--verify` and `--log-append` consume. It exists so the attack
+/// arena can feed the transparency log: twenty refusals and two approvals is a
+/// far more honest log to audit than a handful of hand-written allows.
+fn run_fixture(fx: &Fixture, receipts: Option<&std::path::Path>) -> Result<(), String> {
     let mut config: HashMap<String, String> = HashMap::new();
     match fx.policy.as_str() {
         "empty" => {}
@@ -385,13 +391,18 @@ fn run_fixture(fx: &Fixture) -> Result<(), String> {
     let tx_b64 = base64_encode(&tx_bytes);
     let transport = transport_for(&fx.simulation);
 
-    let args = json!({
+    let intent = fx.intent.as_ref().map(resolve_keys);
+    let mut args_value = json!({
         "transaction_base64": tx_b64,
-        "intent": fx.intent.as_ref().map(resolve_keys),
+        "intent": intent,
         "decision_record": fx.decision_record,
         "__config": config,
-    })
-    .to_string();
+    });
+    if receipts.is_some() {
+        // The digests a receipt commits to only appear at full detail.
+        args_value["detail_level"] = json!("full");
+    }
+    let args = args_value.to_string();
 
     let (success, output, error) = if fx.via == "propose" {
         let out = squads_proposal_build::propose::run(&args, Some(transport.as_ref()));
@@ -409,6 +420,38 @@ fn run_fixture(fx: &Fixture) -> Result<(), String> {
             .map_err(|e| format!("unparseable output: {e}: {output}"))?;
         v["verdict"].as_str().unwrap_or("").to_string()
     };
+
+    if let (Some(dir), false) = (receipts, fx.via == "propose") {
+        if let Ok(decision) = serde_json::from_str::<Value>(&output) {
+            let receipt = json!({
+                "fixture": fx.name,
+                "transaction_base64": tx_b64,
+                // null, not "", when no policy was configured: the two are
+                // different operator failures and commit to different digests.
+                "policy_json": config.get("policy_json").map(|p| json!(p)).unwrap_or(Value::Null),
+                "intent": intent,
+                "simulation_ok": fx.simulation != "fail" && fx.simulation != "down",
+                "decision": decision,
+            });
+            let slug: String = fx
+                .name
+                .chars()
+                .map(|c| {
+                    if c.is_ascii_alphanumeric() {
+                        c.to_ascii_lowercase()
+                    } else {
+                        '-'
+                    }
+                })
+                .collect();
+            fs::create_dir_all(dir).map_err(|e| format!("cannot create {dir:?}: {e}"))?;
+            fs::write(
+                dir.join(format!("{}.json", slug.trim_matches('-'))),
+                serde_json::to_string_pretty(&receipt).map_err(|e| e.to_string())?,
+            )
+            .map_err(|e| format!("cannot write receipt: {e}"))?;
+        }
+    }
 
     if verdict != fx.expect.verdict {
         return Err(format!(
@@ -737,19 +780,74 @@ fn demo() -> Result<(), String> {
     Ok(())
 }
 
+mod log;
 mod verify;
+
+/// The transparency-log subcommands, each `--log-*` taking the same
+/// `--authority` / `--log` / `--rpc` arguments.
+const DIM_HINT: &str = "[2m";
+const RESET_HINT: &str = "[0m";
+
+/// Read `--flag value` out of the argument list.
+fn value_after(args: &[String], flag: &str) -> Option<String> {
+    args.iter()
+        .position(|a| a == flag)
+        .and_then(|i| args.get(i + 1))
+        .cloned()
+}
+
+fn dispatch_log(args: &[String]) -> Option<Result<(), String>> {
+    let parsed = match log::Args::parse(args) {
+        Ok(parsed) => parsed,
+        Err(error) => return Some(Err(error)),
+    };
+    if let Some(i) = args.iter().position(|a| a == "--log-append") {
+        let Some(receipt) = args.get(i + 1) else {
+            return Some(Err("usage: --log-append <receipt.json>".into()));
+        };
+        return Some(log::append(&parsed, receipt));
+    }
+    if args.iter().any(|a| a == "--log-verify") {
+        return Some(log::verify_log(&parsed));
+    }
+    if args.iter().any(|a| a == "--log-anchor") {
+        return Some(log::build_anchor(&parsed));
+    }
+    if args.iter().any(|a| a == "--log-audit") {
+        return Some(log::audit(&parsed));
+    }
+    None
+}
 
 fn main() {
     // Independent re-derivation of a single decision from its receipt.
     let args: Vec<String> = std::env::args().collect();
+    if args.iter().any(|a| a.starts_with("--log-")) {
+        match dispatch_log(&args) {
+            Some(Ok(())) => return,
+            Some(Err(error)) => {
+                eprintln!(
+                    "
+{error}"
+                );
+                std::process::exit(1);
+            }
+            None => {
+                eprintln!("unknown --log-* subcommand");
+                std::process::exit(2);
+            }
+        }
+    }
     if let Some(i) = args.iter().position(|a| a == "--verify") {
         let Some(path) = args.get(i + 1) else {
             eprintln!("usage: --verify <receipt.json>");
             std::process::exit(2);
         };
         if let Err(error) = verify::verify(path) {
-            eprintln!("
-VERIFICATION FAILED: {error}");
+            eprintln!(
+                "
+VERIFICATION FAILED: {error}"
+            );
             std::process::exit(1);
         }
         return;
@@ -780,10 +878,18 @@ VERIFICATION FAILED: {error}");
         "Safe Hands conformance suite — {} fixtures\n",
         fixtures.len()
     );
+    let receipts_dir = value_after(&args, "--receipts").map(std::path::PathBuf::from);
+    if let Some(dir) = &receipts_dir {
+        println!(
+            "{DIM_HINT}writing verifiable receipts to {}{RESET_HINT}
+",
+            dir.display()
+        );
+    }
     let mut passed = 0;
     let mut failed = 0;
     for fx in &fixtures {
-        match run_fixture(fx) {
+        match run_fixture(fx, receipts_dir.as_deref()) {
             Ok(()) => {
                 println!("  PASS  {}", fx.name);
                 passed += 1;

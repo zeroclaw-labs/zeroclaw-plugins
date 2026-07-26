@@ -49,8 +49,9 @@ with `payment-verify`.
 
 Every safety claim in this repository reduces to one sentence: *the agent
 cannot move money the operator did not allow.* That is easy to assert and hard
-to believe, so there are two independent ways to check it, borrowed from
-outside crypto.
+to believe, so there are three independent ways to check it, borrowed from
+outside crypto: one decision, every decision, and the decisions you were never
+shown.
 
 ### Individually: re-derive any decision from its receipt
 
@@ -128,6 +129,83 @@ That pairing is the technique AWS uses for Cedar in `cedar-spec`: rather than
 verify the production authorizer directly, check it against a separate model on
 generated inputs. We reached the same answer from the other direction, by
 watching CBMC fail to terminate.
+
+### Collectively: a log that cannot quietly lose an entry
+
+A receipt makes one decision checkable. It says nothing about the decisions you
+were not shown. An operator can hand over four clean receipts and keep the
+fifth — every one of them re-derives, because each commits only to the policy
+that produced it.
+
+So the decisions are chained, and the head of the chain is published somewhere
+the operator does not control:
+
+```text
+head[0] = H( DOMAIN | 0x00 | authority )
+head[n] = H( DOMAIN | 0x01 | head[n-1] | seq | decision_id[n] )
+```
+
+[`conformance/log/arena.jsonl`](conformance/log/arena.jsonl) is the entire
+attack arena logged in order — 15 denials, 3 approvals, 2 reviews, 2 unknowns.
+Its head is anchored on Solana devnet in
+[a memo transaction](https://explorer.solana.com/tx/dyiyH5fwBsYNuT6H9ZytdBV8YoCxDgMh8sa2WjBtMpKsFPnomUyr8dAH84GNMRGKf262Y2dCjBpVQTxx1xH1wGj?cluster=devnet)
+at slot 478989134. Check it yourself, no API key required:
+
+```sh
+just log-verify     # offline: replay the chain, re-derive every decision
+just log-audit      # public devnet RPC: check it against the published head
+just log-rebuild    # rerun the arena from source and land on the same head
+```
+
+```text
+OK    slot 478989134 — 22 entries
+      dyiyH5fwBsYNuT6H9ZytdBV8YoCxDgMh8sa2WjBtMpKsFPnomUyr8dAH84GNMRGKf262Y2dCjBpVQTxx1xH1wGj
+OK    slot 478991446 — 22 entries
+      2HczD1C7wzCtR1h3vzCrDUg8xoE4MySmjGZycUmg9UxJBkcGW3HybMKfiNHGmN69odQPEBohAy5Ft71rQP1mu7FV
+
+All 2 anchors agree. 22 of 22 entries are pinned on chain.
+```
+
+`just log-anchor` prints the *unsigned* anchor transaction, because Safe Hands
+holds no key for this any more than it does for a refund.
+[`tools/sign-anchor.js`](tools/sign-anchor.js) is the operator's half: no
+dependencies — Node's built-in crypto has done Ed25519 since v12, so one fewer
+package ever touches the private key — and it refuses to sign anything that is
+not an anchor, because a script that signs whatever base64 it is handed is a
+signing oracle.
+
+Two details carry the weight. **The log stores each receipt's inputs, not its
+verdict**, and re-runs the engine over them — so rewriting a logged DENY into an
+ALLOW fails immediately, offline, without the chain. And **appending is refused
+unless the log already verifies**, so a tampered history cannot be given a
+fresh, clean-looking head.
+
+[`EVIDENCE-transparency.md`](EVIDENCE-transparency.md) attacks the anchored log
+four ways — truncate the tail, delete an entry and rebuild, rewrite a refusal,
+substitute a decision and recompute every head — and shows each failing with the
+accusation it deserves. The hardest one produces a file that is internally
+flawless and still loses:
+
+```text
+FORKED at 22 entries:
+  chain published   b9f032a7…add55
+  this log computes 87e235bf…5ca3d
+Two histories exist under one authority.
+```
+
+Building this exposed two real gaps, both now closed and both documented in that
+file: fail-closed refusals carried no `decision_id` at all — the one class of
+decision an operator would most like to make quietly — and a boolean
+`simulation_ok` could not distinguish "the node said no" from "the node did not
+answer", collapsing three kinds of UNKNOWN into one unverifiable bit.
+
+**Why the log lives outside the component.** A `wasm32-wasip2` tool component
+cannot persist a byte; `tool-plugin` imports `logging` and nothing else. That
+turns out to be the right architecture rather than a limitation. In Certificate
+Transparency the log is a separate entity from the CA precisely so the party
+making decisions is not the party recording them. Threading a caller-supplied
+previous head through the component would have put the agent — the untrusted
+party — in charge of its own audit trail.
 
 ## Surviving the approval queue
 

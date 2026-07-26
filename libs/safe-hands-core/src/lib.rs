@@ -24,10 +24,12 @@ pub use solana_message;
 pub use solana_pubkey;
 
 pub mod codec;
+pub mod commitment;
 pub mod crypto;
 pub mod decode;
 pub mod invoice;
 pub mod ix;
+pub mod log;
 pub mod policy;
 pub mod rpc;
 pub mod squads;
