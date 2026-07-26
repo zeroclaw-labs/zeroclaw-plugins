@@ -2,7 +2,6 @@
 //! calls this tool makes. No transport here — the wasm shim owns HTTP, and
 //! host tests feed canned JSON straight into the parsers.
 
-use base64::Engine;
 use serde_json::{json, Value};
 
 /// The three RPC calls, in the order the shim performs them.
@@ -63,8 +62,7 @@ pub fn parse_account_info(resp: &str) -> Result<Option<(String, Vec<u8>)>, Strin
         .and_then(|a| a.first())
         .and_then(Value::as_str)
         .ok_or("account missing base64 data")?;
-    let data = base64::engine::general_purpose::STANDARD
-        .decode(data_b64)
+    let data = solana_wasip2_core::b64::decode(data_b64)
         .map_err(|e| format!("account data is not valid base64: {e}"))?;
     Ok(Some((owner, data)))
 }

@@ -132,8 +132,7 @@ fn uninitialized_mint_fails_closed() {
 fn account_info_roundtrip() {
     let data = base_mint(None, 42, 0, None);
     let b64 = {
-        use base64::Engine;
-        base64::engine::general_purpose::STANDARD.encode(&data)
+        solana_wasip2_core::b64::encode(&data)
     };
     let resp = format!(
         r#"{{"jsonrpc":"2.0","id":1,"result":{{"context":{{"slot":1}},"value":{{"owner":"{TOKEN_PROGRAM}","data":["{b64}","base64"],"lamports":1,"executable":false}}}}}}"#

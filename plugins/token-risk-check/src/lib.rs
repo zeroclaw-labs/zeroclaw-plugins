@@ -11,7 +11,8 @@
 //! read from the plugin's own jailed config section.
 //!
 //! The pure logic lives in [`spl`], [`rpc`], and [`risk`] with no wasm
-//! dependency, so it compiles and tests on the host with a plain `cargo test`;
+//! dependency, and the Solana primitives (base58 pubkeys, base64 account
+//! data) come from the shared `solana-wasip2-core` crate, so it compiles and tests on the host with a plain `cargo test`;
 //! the wasm component reuses the exact same logic through this shim.
 //!
 //! Build:  rustup target add wasm32-wasip2
@@ -57,12 +58,13 @@ pub mod args {
                 sanitize(mint)
             ));
         }
-        let decoded = bs58::decode(mint)
-            .into_vec()
-            .map_err(|_| format!("'{}' is not valid base58", sanitize(mint)))?;
-        if decoded.len() != 32 {
+        // Strict decode via the shared core: base58 alphabet AND exactly 32
+        // bytes, or nothing. The core's error echoes raw input, so it is
+        // discarded here in favour of the sanitized message — untrusted
+        // bytes never round-trip into our output.
+        if solana_wasip2_core::pubkey::decode(mint).is_err() {
             return Err(format!(
-                "'{}' does not decode to a 32-byte key",
+                "'{}' is not a base58-encoded 32-byte key",
                 sanitize(mint)
             ));
         }
