@@ -466,6 +466,113 @@ fn removing_transfer_checked_from_the_allowlist_actually_denies_it() {
     );
 }
 
+/// `cargo mutants` replaced the whole of `recipient_matches_intent` with
+/// `true` and the suite passed: no unit test drove a transfer whose recipient
+/// disagreed with the declared intent. The conformance arena covers it, but
+/// mutation testing only reruns this crate's tests, and the gap was real here.
+#[test]
+fn a_transfer_to_someone_other_than_the_declared_recipient_denies() {
+    let mut facts = usdc_transfer(1_000, RECIP);
+    facts.transfers[0].recipient = OTHER.to_string();
+    let report = evaluate(&policy(), &facts);
+    assert_eq!(report.verdict, Verdict::Deny);
+    assert!(
+        report
+            .reason_codes
+            .iter()
+            .any(|code| code.starts_with("SH-INTENT-RECIPIENT")),
+        "the bytes must be what the intent declared: {:?}",
+        report.reason_codes
+    );
+}
+
+/// The other half of that function: an intent naming a *wallet* is satisfied
+/// by a transfer to that wallet's ATA for the mint. `cargo mutants` flipped
+/// the ATA comparison and survived, so nothing pinned this behaviour.
+#[test]
+fn an_intent_naming_a_wallet_is_satisfied_by_its_ata() {
+    let ata = crate::crypto::ata_address_str(RECIP, crate::crypto::TOKEN_PROGRAM, USDC)
+        .expect("ATA derives");
+    let mut facts = usdc_transfer(1_000, RECIP);
+    facts.transfers[0].recipient = ata.clone();
+    let report = evaluate(&policy(), &facts);
+    assert_eq!(
+        report.verdict,
+        Verdict::Allow,
+        "paying the ATA of the intended wallet is the same payment: {:?}",
+        report.reason_codes
+    );
+    assert_ne!(ata, RECIP, "the ATA must differ from the wallet, or this proves nothing");
+}
+
+/// `cargo mutants` flipped `&&` to `||` in the action/mint consistency check.
+/// A transfer carrying a mint must be declared `spl_transfer` *with* a mint —
+/// claiming a bare SOL `transfer` over an SPL transfer must not pass.
+#[test]
+fn the_declared_action_must_match_whether_a_mint_is_present() {
+    let mut facts = usdc_transfer(1_000, RECIP);
+    if let Some(intent) = facts.intent.as_mut() {
+        intent.action = "transfer".to_string();
+        intent.mint = None;
+    }
+    let report = evaluate(&policy(), &facts);
+    assert_ne!(
+        report.verdict,
+        Verdict::Allow,
+        "an SPL transfer declared as a bare SOL transfer must not be allowed: {:?}",
+        report.reason_codes
+    );
+}
+
+/// `cargo mutants` mutated the emptiness guard in `policy_from_config` three
+/// ways and none failed. This is the fail-closed path every plugin depends on:
+/// with no usable policy in host config, nothing may be authorized.
+#[test]
+fn a_missing_or_blank_policy_fails_closed() {
+    use std::collections::HashMap;
+
+    let mut config: HashMap<String, String> = HashMap::new();
+    assert!(
+        policy_from_config(&config).is_err(),
+        "no policy_json at all must fail closed"
+    );
+
+    for blank in ["", "   ", "\n\t "] {
+        config.insert("policy_json".to_string(), blank.to_string());
+        assert!(
+            policy_from_config(&config).is_err(),
+            "a blank policy_json ({blank:?}) must fail closed, not parse as permissive"
+        );
+    }
+
+    config.insert("policy_json".to_string(), demo_policy_json());
+    assert!(
+        policy_from_config(&config).is_ok(),
+        "a real policy must still load"
+    );
+}
+
+/// The bare-SOL arm of the same consistency check. A transfer with no mint
+/// must be declared `transfer` *and* carry no mint in the intent; an intent
+/// naming a mint over a SOL transfer is a mismatch. `cargo mutants` flipped
+/// this `&&` to `||` and the SPL-side test above could not see it.
+#[test]
+fn a_sol_transfer_declared_with_a_mint_is_a_mismatch() {
+    let mut facts = usdc_transfer(1_000, RECIP);
+    facts.transfers[0].mint = None; // bare SOL on the wire...
+    if let Some(intent) = facts.intent.as_mut() {
+        intent.action = "transfer".to_string();
+        intent.mint = Some(USDC.to_string()); // ...but the intent claims a mint
+    }
+    let report = evaluate(&policy(), &facts);
+    assert_ne!(
+        report.verdict,
+        Verdict::Allow,
+        "a SOL transfer whose intent names a mint must not be allowed: {:?}",
+        report.reason_codes
+    );
+}
+
 #[test]
 fn authority_change_denies() {
     let mut f = usdc_transfer(1_000, RECIP);

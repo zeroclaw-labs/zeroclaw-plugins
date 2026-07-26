@@ -7,7 +7,7 @@
 default: prove-safety
 
 # The full gate a judge runs.
-prove-safety: test conformance verify-receipt audit clippy wasm
+prove-safety: test conformance verify-receipt audit clippy wasm verify-capabilities
     @echo ""
     @echo "=================================================="
     @echo "  prove-safety: ALL GREEN — the guard holds."
@@ -20,6 +20,13 @@ test:
     cargo test --locked --manifest-path plugins/spl-transfer-build/Cargo.toml
     cargo test --locked --manifest-path plugins/squads-proposal-build/Cargo.toml
     cargo test --locked --manifest-path plugins/payment-verify/Cargo.toml
+
+# Prove each shipped .wasm imports only the capabilities its manifest declares.
+# Reads the compiled artifact an operator installs, not the source: a component
+# that cannot import wasi:filesystem cannot persist anything, whatever its code
+# claims.
+verify-capabilities: stage-local
+    python tools/ci/verify_capabilities.py
 
 # Supply-chain gate over every pinned lockfile.
 #
