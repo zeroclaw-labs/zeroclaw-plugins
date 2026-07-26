@@ -70,7 +70,6 @@ fn sequence_continues_from_newest_prior_attestation() {
 
 #[test]
 fn unsigned_tx_decodes_and_carries_the_memo() {
-    use base64::Engine;
     let mut post = canned_transport(json!([]));
     let out = att::run(&base_args().to_string(), &mut post, 1789000000).unwrap();
     let b64 = out
@@ -78,7 +77,7 @@ fn unsigned_tx_decodes_and_carries_the_memo() {
         .nth(1)
         .and_then(|s| s.split_whitespace().next())
         .expect("output carries the tx");
-    let bytes = base64::engine::general_purpose::STANDARD.decode(b64).unwrap();
+    let bytes = solana_wasip2_core::b64::decode(b64).unwrap();
     // Unsigned: exactly one all-zero signature slot.
     assert_eq!(bytes[0], 1);
     assert!(bytes[1..65].iter().all(|&b| b == 0));

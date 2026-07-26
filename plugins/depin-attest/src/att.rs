@@ -13,7 +13,7 @@ use std::collections::HashMap;
 use serde_json::Value;
 
 use crate::rpc::{self, PriorTx};
-use crate::tx;
+use solana_wasip2_core::{b64, hash, pubkey, tx};
 
 /// Public, keyless default. Operators running real devices set their own
 /// endpoint (their key stays in config, never in code or arguments).
@@ -57,7 +57,7 @@ pub fn parse_config(cfg: &HashMap<String, String>) -> Result<Config, String> {
         .map(String::as_str)
         .filter(|s| !s.is_empty())
         .ok_or("config is missing device_pubkey — refusing to attest for an unconfigured device")?;
-    tx::decode_pubkey(device_pubkey)
+    pubkey::decode(device_pubkey)
         .map_err(|e| format!("config device_pubkey is invalid: {e}"))?;
 
     let rpc_url = cfg
@@ -272,17 +272,17 @@ where
     let sigs_resp = post(&cfg.rpc_url, &rpc::build_get_signatures(&cfg.device_pubkey, PRIOR_SCAN_LIMIT))?;
     let priors = rpc::parse_signatures(&sigs_resp)?;
     let (seq, prev) = match find_prior(&priors, &cfg.device_pubkey) {
-        Some(prior) => (prior.seq + 1, tx::short_hash_hex(&prior.signature)),
+        Some(prior) => (prior.seq + 1, hash::short_hash_hex(&prior.signature)),
         None => (1, "genesis".to_string()),
     };
 
     let bh_resp = post(&cfg.rpc_url, &rpc::build_get_latest_blockhash())?;
     let (blockhash_b58, last_valid_height) = rpc::parse_latest_blockhash(&bh_resp)?;
-    let blockhash = tx::decode_pubkey(&blockhash_b58)
+    let blockhash = pubkey::decode(&blockhash_b58)
         .map_err(|e| format!("RPC returned an invalid blockhash: {e}"))?;
 
     let payload = build_payload(&cfg.device_pubkey, seq, now_unix, &reading, &prev);
-    let fee_payer = tx::decode_pubkey(&cfg.device_pubkey)?;
+    let fee_payer = pubkey::decode(&cfg.device_pubkey)?;
     let tx_bytes = tx::build_unsigned_memo_tx(&fee_payer, &blockhash, payload.as_bytes())?;
 
     let dev_short: String = cfg.device_pubkey.chars().take(8).collect();
@@ -298,7 +298,7 @@ where
         val = reading.value_str,
         unit = reading.unit,
         ts = now_unix,
-        tx_b64 = tx::to_base64(&tx_bytes),
+        tx_b64 = b64::encode(&tx_bytes),
         lvbh = last_valid_height,
     ))
 }

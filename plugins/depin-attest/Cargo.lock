@@ -85,11 +85,9 @@ dependencies = [
 name = "depin-attest"
 version = "0.1.0"
 dependencies = [
- "base64",
- "bs58",
  "serde",
  "serde_json",
- "sha2",
+ "solana-wasip2-core",
  "waki",
  "wit-bindgen 0.46.0",
 ]
@@ -434,6 +432,15 @@ name = "smallvec"
 version = "1.15.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8ed6a63f02c8539c91a8685a86f4099661ba3da017932f6ebbea6de3f0fa7c90"
+
+[[package]]
+name = "solana-wasip2-core"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "bs58",
+ "sha2",
+]
 
 [[package]]
 name = "spdx"

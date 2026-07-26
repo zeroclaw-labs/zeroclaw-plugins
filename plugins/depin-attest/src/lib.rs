@@ -23,7 +23,6 @@
 
 pub mod att;
 pub mod rpc;
-pub mod tx;
 
 #[cfg(target_family = "wasm")]
 mod component {
