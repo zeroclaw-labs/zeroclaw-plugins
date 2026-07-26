@@ -36,6 +36,15 @@ verify-capabilities: stage-local
 component-test: stage-local
     cargo run --locked --release --manifest-path component-test/Cargo.toml
 
+# Coverage-guided fuzzing (Linux/macOS; needs nightly + libFuzzer).
+#
+# Not part of prove-safety: it runs for as long as you give it, and a gate
+# has to terminate. Run it before a release, or overnight.
+#   just fuzz decode 300
+#   just fuzz policy 300
+fuzz target="decode" seconds="120":
+    cd libs/safe-hands-core/fuzz && cargo +nightly fuzz run {{target}} -- -max_total_time={{seconds}}
+
 # Supply-chain gate over every pinned lockfile.
 #
 # RUSTSEC-2025-0141 (bincode unmaintained) is accepted knowingly and cannot be

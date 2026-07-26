@@ -1,0 +1,34 @@
+[package]
+name = "safe-hands-core-fuzz"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+arbitrary = { version = "1", features = ["derive"] }
+safe-hands-core = { path = ".." }
+
+[[bin]]
+name = "decode"
+path = "fuzz_targets/decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "policy"
+path = "fuzz_targets/policy.rs"
+test = false
+doc = false
+bench = false
+
+# Standalone: the fuzz harness needs nightly and libFuzzer, neither of which
+# the shipped crates require.
+[workspace]
+
+[profile.release]
+debug = true
