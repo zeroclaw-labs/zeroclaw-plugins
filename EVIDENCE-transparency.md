@@ -242,6 +242,39 @@ is the one that most needed to stay checkable.
 
 ---
 
+## Mutation testing
+
+Tests that pass against broken code are worse than no tests. Every new module
+here was run through `cargo mutants`, which deletes and inverts operators one at
+a time and asks whether the suite notices.
+
+| Module | Mutants | Caught | Unviable | Surviving |
+|---|---|---|---|---|
+| `safe-hands-core/src/log.rs` + `commitment.rs` | 51 | 40 | 11 | **0** |
+| `conformance/src/log.rs` | 112 | 104 | 5 | **3** |
+
+The first pass found two things worth having found.
+
+`AnchorVerdict::is_consistent` could be replaced with `true` and every test still
+passed — which would have made the auditor approve every tampered log it was
+ever shown. The positive cases asserted `is_consistent()`; nothing asserted the
+negative.
+
+The whole of `Report::finish` could be replaced with `Ok(())`. That is the exit
+code of `--log-verify`. A verifier that prints FAIL and exits 0 is worse than no
+verifier, because it looks like it checked. The pass/fail accounting is now a
+separate `outcome()` with its own test, and the command functions take their
+transport as an argument so they can be driven from canned RPC answers instead
+of only from a shell.
+
+The three survivors are named rather than left unmentioned: `verify_log` and
+`audit`, the two-line wrappers that construct an HTTP transport and delegate to
+the tested functions, and `HttpTransport::call`, which cannot run without a
+server. None contains a decision. An undisclosed gap in a tool whose job is
+disclosure would be a poor joke.
+
+---
+
 ## What this does not claim
 
 - **It does not stop an operator from lying.** It makes one specific lie —

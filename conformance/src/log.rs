@@ -24,6 +24,19 @@
 //! makes a stronger statement than "these hashes line up": *every decision in
 //! here was really computed by this engine, from these bytes and this policy,
 //! in this order, and nothing has been removed.*
+//!
+//! # Testing
+//!
+//! Everything that decides anything takes its transport as an argument
+//! ([`verify_log_with`], [`audit_with`]), so the commands are tested against
+//! canned RPC answers rather than a live node — the same split the plugins use.
+//!
+//! `cargo mutants` over this file: 112 mutants, 104 caught, 5 unviable, 3
+//! surviving. All three survivors are the network wrappers that hold no logic —
+//! `verify_log` and `audit`, which build an `HttpTransport` and delegate, and
+//! `HttpTransport::call` itself, which cannot be exercised without a server.
+//! They are listed here rather than left unmentioned, because an undisclosed
+//! gap in a tool whose job is disclosure would be a poor joke.
 
 use safe_hands_core::codec::{base64_encode, unsigned_transaction_bytes};
 use safe_hands_core::crypto::parse_pubkey;
@@ -40,7 +53,7 @@ use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
-use crate::verify::rederive;
+use crate::verify::{rederive, Rederived};
 
 const GREEN: &str = "\x1b[32m";
 const RED: &str = "\x1b[31m";
@@ -218,20 +231,31 @@ pub fn append(args: &Args, receipt_path: &str) -> Result<(), String> {
     writeln!(file, "{line}")
         .map_err(|e| format!("cannot append to {}: {e}", args.log.display()))?;
 
-    println!("\n{BOLD}Safe Hands — logged decision {seq}{RESET}");
-    println!("{DIM}log: {}{RESET}\n", args.log.display());
-    println!("  verdict      {}", rederived.verdict);
-    if !rederived.reason_codes.is_empty() {
-        println!("  reasons      {:?}", rederived.reason_codes);
-    }
-    println!("  decision id  sha256:{}", rederived.decision_id);
-    println!("  {GREEN}head{RESET}         {new_head}");
-    println!(
-        "\n  {DIM}Publish this head to make everything up to it unfalsifiable:{RESET}\n  \
-         {DIM}conformance --log-anchor --authority {} --rpc <URL>{RESET}\n",
-        args.authority
-    );
+    println!("{}", appended_summary(args, seq, &rederived, &new_head));
     Ok(())
+}
+
+/// What an append reports, as text rather than as side effects.
+///
+/// Built as a string so the reason codes an operator reads are covered by a
+/// test. A refusal whose reasons never make it to the screen is a refusal
+/// nobody acts on.
+fn appended_summary(args: &Args, seq: u64, rederived: &Rederived, head: &Head) -> String {
+    let mut out = format!(
+        "\n{BOLD}Safe Hands — logged decision {seq}{RESET}\n{DIM}log: {}{RESET}\n\n  verdict      {}\n",
+        args.log.display(),
+        rederived.verdict,
+    );
+    if !rederived.reason_codes.is_empty() {
+        out.push_str(&format!("  reasons      {:?}\n", rederived.reason_codes));
+    }
+    out.push_str(&format!(
+        "  decision id  sha256:{}\n  {GREEN}head{RESET}         {head}\n\n  \
+         {DIM}Publish this head to make everything up to it unfalsifiable:{RESET}\n  \
+         {DIM}conformance --log-anchor --authority {} --rpc <URL>{RESET}\n",
+        rederived.decision_id, args.authority,
+    ));
+    out
 }
 
 /// RFC 3339 without pulling in a date library for one field the chain does not
@@ -277,22 +301,34 @@ impl Report {
     fn new() -> Self {
         Self { checks: Vec::new() }
     }
+
     fn push(&mut self, ok: bool, name: impl Into<String>, detail: impl Into<String>) {
         self.checks.push((ok, name.into(), detail.into()));
     }
-    fn finish(&self, subject: &str) -> Result<(), String> {
-        let mut failed = 0;
-        for (ok, name, detail) in &self.checks {
-            if *ok {
-                println!("  {GREEN}PASS{RESET}  {name}\n        {DIM}{detail}{RESET}");
-            } else {
-                failed += 1;
-                println!("  {RED}FAIL{RESET}  {name}\n        {DIM}{detail}{RESET}");
-            }
-        }
+
+    /// Whether the report passed, decided without printing anything.
+    ///
+    /// This is the exit code of `--log-verify`, so it is kept separate from
+    /// rendering and tested directly. A verifier that prints FAIL and returns
+    /// success is worse than no verifier: it looks like it checked.
+    fn outcome(&self) -> Result<(), String> {
+        let failed = self.checks.iter().filter(|(ok, ..)| !ok).count();
         if failed > 0 {
             return Err(format!("{failed} of {} checks failed", self.checks.len()));
         }
+        Ok(())
+    }
+
+    fn finish(&self, subject: &str) -> Result<(), String> {
+        for (ok, name, detail) in &self.checks {
+            let tag = if *ok {
+                format!("{GREEN}PASS{RESET}")
+            } else {
+                format!("{RED}FAIL{RESET}")
+            };
+            println!("  {tag}  {name}\n        {DIM}{detail}{RESET}");
+        }
+        self.outcome()?;
         println!(
             "\n  {GREEN}All {} checks passed.{RESET} {subject}\n",
             self.checks.len()
@@ -302,7 +338,17 @@ impl Report {
 }
 
 /// Replay the whole log from the genesis.
+///
+/// Builds the HTTP transport and delegates. Everything that decides anything
+/// lives in [`verify_log_with`], which takes the transport as an argument so it
+/// can be tested against canned RPC answers instead of a live node — the same
+/// split the plugins use.
 pub fn verify_log(args: &Args) -> Result<(), String> {
+    let transport = args.rpc.clone().map(HttpTransport::new);
+    verify_log_with(args, transport.as_ref().map(|t| t as &dyn RpcTransport))
+}
+
+pub fn verify_log_with(args: &Args, rpc: Option<&dyn RpcTransport>) -> Result<(), String> {
     println!("\n{BOLD}Safe Hands — transparency log{RESET}");
     println!("{DIM}log:       {}{RESET}", args.log.display());
     println!("{DIM}authority: {}{RESET}\n", args.authority);
@@ -351,10 +397,9 @@ pub fn verify_log(args: &Args) -> Result<(), String> {
     // Anchors, when an endpoint is available. Without them the chain is
     // internally consistent but says nothing about what was removed from the
     // end, so the absence of an endpoint is reported rather than passed over.
-    match &args.rpc {
-        Some(url) => {
-            let transport = HttpTransport::new(url.clone());
-            let anchors = fetch_anchors(&transport, &args.authority)?;
+    match rpc {
+        Some(transport) => {
+            let anchors = fetch_anchors(transport, &args.authority)?;
             report_anchors(&mut report, args, &links, &anchors);
         }
         None => println!(
@@ -553,8 +598,10 @@ pub fn audit(args: &Args) -> Result<(), String> {
         .rpc
         .clone()
         .ok_or("--rpc <URL> is required to read anchors from chain")?;
-    let transport = HttpTransport::new(url);
+    audit_with(args, &HttpTransport::new(url))
+}
 
+pub fn audit_with(args: &Args, transport: &dyn RpcTransport) -> Result<(), String> {
     println!("\n{BOLD}Safe Hands — anchor audit{RESET}");
     println!("{DIM}log:       {}{RESET}", args.log.display());
     println!("{DIM}authority: {}{RESET}\n", args.authority);
@@ -564,7 +611,7 @@ pub fn audit(args: &Args) -> Result<(), String> {
     verify_chain(&args.authority, &links)
         .map_err(|e| format!("the log does not verify, so no anchor can vindicate it — {e}"))?;
 
-    let anchors = fetch_anchors(&transport, &args.authority)?;
+    let anchors = fetch_anchors(transport, &args.authority)?;
     if anchors.is_empty() {
         return Err(format!(
             "no Safe Hands anchor found for {} in the last {ANCHOR_SCAN_LIMIT} signatures",

@@ -4,6 +4,7 @@
 //! response shape rather than an idealised one.
 
 use super::*;
+use safe_hands_core::log::head_after;
 use safe_hands_core::rpc::MockTransport;
 
 /// The real ALLOW receipt shipped for `--verify`.
@@ -333,6 +334,17 @@ fn arguments_are_read_in_full() {
 #[test]
 fn the_recorded_timestamp_is_a_real_rfc_3339_instant() {
     for (unix, expected) in [
+        // Century and 400-year boundaries: these are what the /36524 and
+        // /146096 corrections in the civil-from-days algorithm exist for, and
+        // nothing closer to today exercises them.
+        (-62135596800, "0001-01-01T00:00:00Z"),
+        (-2209075200, "1899-12-31T00:00:00Z"),
+        (-2203891200, "1900-03-01T00:00:00Z"),
+        (-2077747200, "1904-02-29T00:00:00Z"),
+        (951868800, "2000-03-01T00:00:00Z"),
+        (4107542400, "2100-03-01T00:00:00Z"),
+        (10413705600, "2299-12-31T00:00:00Z"),
+        (13574563200, "2400-02-29T00:00:00Z"),
         (0, "1970-01-01T00:00:00Z"),
         (1, "1970-01-01T00:00:01Z"),
         (951_782_400, "2000-02-29T00:00:00Z"),
@@ -347,4 +359,217 @@ fn the_recorded_timestamp_is_a_real_rfc_3339_instant() {
     let stamp = now_rfc3339();
     assert_eq!(stamp.len(), 20, "{stamp}");
     assert!(stamp.ends_with('Z'), "{stamp}");
+}
+
+// ── the report decides the exit code ────────────────────────────────────────
+//
+// Mutation testing found the whole accounting could be replaced with `Ok(())`
+// and every test still passed. A verifier that prints FAIL and exits 0 is
+// worse than no verifier, because it looks like it checked.
+
+#[test]
+fn a_report_passes_only_when_every_check_passed() {
+    let mut report = Report::new();
+    assert!(
+        report.outcome().is_ok(),
+        "an empty report has nothing to fail"
+    );
+
+    report.push(true, "a", "");
+    assert!(report.outcome().is_ok());
+
+    report.push(false, "b", "");
+    let error = report
+        .outcome()
+        .expect_err("one failure must fail the report");
+    assert_eq!(error, "1 of 2 checks failed");
+
+    report.push(false, "c", "");
+    assert_eq!(
+        report.outcome().expect_err("still failing"),
+        "2 of 3 checks failed"
+    );
+
+    // A later pass does not cancel an earlier failure.
+    report.push(true, "d", "");
+    assert!(report.outcome().is_err());
+}
+
+// ── the commands themselves ─────────────────────────────────────────────────
+
+/// A signature page carrying one honest anchor over `count` entries.
+fn anchor_page(count: u64, head: Head, slot: u64) -> MockTransport {
+    MockTransport::new().with(
+        "getSignaturesForAddress",
+        json!({"result": [{
+            "signature": "anchorSig", "slot": slot, "err": null, "blockTime": 1,
+            "memo": format!("[41] sh1 n={count} head={head}")
+        }]}),
+    )
+}
+
+/// Build a log of `count` copies of the shipped receipt and return its head.
+fn seeded(name: &str, count: usize) -> (Args, Head) {
+    let args = scratch(name);
+    let receipt = receipt_file(name, RECEIPT);
+    for _ in 0..count {
+        append(&args, &receipt).expect("append");
+    }
+    let records = read_records(&args.log).expect("read");
+    let links = links_from(&records).expect("re-derive");
+    let head = verify_chain(&args.authority, &links).expect("verifies");
+    (args, head)
+}
+
+#[test]
+fn verify_log_passes_on_an_honest_log_with_a_matching_anchor() {
+    let (args, head) = seeded("verify-ok", 3);
+    verify_log_with(&args, Some(&anchor_page(3, head, 10))).expect("verifies");
+}
+
+#[test]
+fn verify_log_fails_when_the_chain_is_broken() {
+    let (args, _) = seeded("verify-broken", 3);
+    let mut records = read_records(&args.log).expect("read");
+    records[1].head = Head([0u8; 32]);
+    rewrite(&args.log, &records);
+    assert!(verify_log_with(&args, None).is_err());
+}
+
+#[test]
+fn verify_log_fails_when_a_receipt_no_longer_re_derives() {
+    let (args, _) = seeded("verify-edited", 2);
+    let mut records = read_records(&args.log).expect("read");
+    records[0].receipt["decision"]["verdict"] = json!("DENY");
+    rewrite(&args.log, &records);
+    assert!(verify_log_with(&args, None).is_err());
+}
+
+/// The attack the chain alone cannot see.
+#[test]
+fn verify_log_fails_when_the_anchor_covers_more_than_the_log_holds() {
+    let (args, full) = seeded("verify-truncated", 4);
+    let mut records = read_records(&args.log).expect("read");
+    records.truncate(2);
+    rewrite(&args.log, &records);
+    // The shortened chain verifies against itself; only the anchor objects.
+    assert!(verify_log_with(&args, None).is_ok());
+    assert!(verify_log_with(&args, Some(&anchor_page(4, full, 10))).is_err());
+}
+
+/// Entries after the newest anchor are real but not yet pinned, and the report
+/// has to say so rather than implying full coverage.
+#[test]
+fn verify_log_fails_when_the_anchor_lags_behind_the_log() {
+    let (args, _) = seeded("verify-lagging", 4);
+    let records = read_records(&args.log).expect("read");
+    let links = links_from(&records).expect("re-derive");
+    let partial = head_after(&args.authority, &links, 2).expect("prefix head");
+    assert!(verify_log_with(&args, Some(&anchor_page(2, partial, 10))).is_err());
+}
+
+#[test]
+fn verify_log_fails_when_nothing_has_been_anchored() {
+    let (args, _) = seeded("verify-unanchored", 2);
+    let empty = MockTransport::new().with("getSignaturesForAddress", json!({"result": []}));
+    assert!(verify_log_with(&args, Some(&empty)).is_err());
+}
+
+#[test]
+fn audit_passes_on_an_honest_log_and_names_the_disagreement_otherwise() {
+    let (args, head) = seeded("audit-ok", 3);
+    audit_with(&args, &anchor_page(3, head, 42)).expect("audits");
+
+    // Same length, different head: a fork.
+    let forged = Head([0x5a; 32]);
+    assert!(audit_with(&args, &anchor_page(3, forged, 42)).is_err());
+
+    // An anchor beyond the log: a truncation.
+    assert!(audit_with(&args, &anchor_page(9, head, 42)).is_err());
+}
+
+#[test]
+fn audit_refuses_when_the_authority_has_published_nothing() {
+    let (args, _) = seeded("audit-empty", 2);
+    let empty = MockTransport::new().with("getSignaturesForAddress", json!({"result": []}));
+    let error = audit_with(&args, &empty).expect_err("nothing to audit against");
+    assert!(error.contains("no Safe Hands anchor"), "{error}");
+}
+
+#[test]
+fn audit_refuses_to_vindicate_a_log_that_does_not_verify() {
+    let (args, head) = seeded("audit-broken", 3);
+    let mut records = read_records(&args.log).expect("read");
+    records[1].head = Head([7u8; 32]);
+    rewrite(&args.log, &records);
+    let error = audit_with(&args, &anchor_page(3, head, 42)).expect_err("must refuse");
+    assert!(error.contains("does not verify"), "{error}");
+}
+
+/// Several anchors, one of which contradicts the log, must fail the whole
+/// audit — not be outvoted by the honest ones.
+#[test]
+fn one_contradicting_anchor_fails_the_audit() {
+    let (args, head) = seeded("audit-mixed", 3);
+    let bad = Head([0x11; 32]);
+    let transport = MockTransport::new().with(
+        "getSignaturesForAddress",
+        json!({"result": [
+            {"signature": "good", "slot": 10, "err": null, "blockTime": 1,
+             "memo": format!("sh1 n=3 head={head}")},
+            {"signature": "bad", "slot": 11, "err": null, "blockTime": 2,
+             "memo": format!("sh1 n=3 head={bad}")}
+        ]}),
+    );
+    assert!(audit_with(&args, &transport).is_err());
+}
+
+// ── append: the parts the shell exercised and the tests did not ─────────────
+
+#[test]
+fn appending_creates_the_directory_the_log_lives_in() {
+    let root = std::env::temp_dir().join("safe-hands-log-nested");
+    let _ = fs::remove_dir_all(&root);
+    let nested = root.join("deeper").join("log.jsonl");
+    let args = Args {
+        log: nested.clone(),
+        authority: authority(),
+        rpc: None,
+        blockhash: None,
+    };
+    append(&args, &receipt_file("nested", RECEIPT)).expect("append into a fresh tree");
+    assert_eq!(read_records(&nested).expect("read").len(), 1);
+}
+
+/// Reason codes are why a refusal happened. An append that swallows them is an
+/// append nobody acts on.
+#[test]
+fn the_append_summary_reports_the_verdict_and_its_reasons() {
+    let args = scratch("summary");
+    let head = Head([0x22; 32]);
+
+    let refused = Rederived {
+        decision_id: "ab".repeat(32),
+        verdict: "DENY".into(),
+        reason_codes: vec!["SH-DENY-RECIPIENT-003".into()],
+        checks: Vec::new(),
+    };
+    let text = appended_summary(&args, 7, &refused, &head);
+    assert!(text.contains("logged decision 7"), "{text}");
+    assert!(text.contains("DENY"), "{text}");
+    assert!(text.contains("SH-DENY-RECIPIENT-003"), "{text}");
+    assert!(text.contains(&head.to_hex()), "{text}");
+    assert!(text.contains(&args.authority.to_string()), "{text}");
+
+    let allowed = Rederived {
+        decision_id: "cd".repeat(32),
+        verdict: "ALLOW".into(),
+        reason_codes: Vec::new(),
+        checks: Vec::new(),
+    };
+    let text = appended_summary(&args, 0, &allowed, &head);
+    assert!(
+        !text.contains("reasons"),
+        "an empty reason list is not printed: {text}"
+    );
 }
