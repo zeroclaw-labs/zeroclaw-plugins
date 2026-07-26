@@ -7,7 +7,7 @@
 default: prove-safety
 
 # The full gate a judge runs.
-prove-safety: test conformance verify-receipt audit clippy wasm verify-capabilities
+prove-safety: test conformance verify-receipt audit clippy wasm verify-capabilities component-test
     @echo ""
     @echo "=================================================="
     @echo "  prove-safety: ALL GREEN — the guard holds."
@@ -27,6 +27,14 @@ test:
 # claims.
 verify-capabilities: stage-local
     python tools/ci/verify_capabilities.py
+
+# Execute the shipped components in a real WebAssembly runtime.
+#
+# Every other recipe here tests the Rust source; this one loads the staged
+# .wasm an operator installs, grants it exactly the imports ZeroClaw grants,
+# and asserts the refusals come back across the component boundary.
+component-test: stage-local
+    cargo run --locked --release --manifest-path component-test/Cargo.toml
 
 # Supply-chain gate over every pinned lockfile.
 #
