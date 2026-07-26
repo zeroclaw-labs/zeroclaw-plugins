@@ -90,8 +90,8 @@ policy endpoint stays the operator's. Pinned in
 ## What fought us on wasm32-wasip2
 
 Same substrate as `spl-transfer-build`: RPC bodies and response parsing
-are hand-rolled in the shared `solana-core-wasi` crate (zero deps by
-choice, auditable end to end) against captured devnet shapes;
+are hand-rolled in the shared `solana-core-wasi` crate (no solana-*
+crates, no borsh, auditable end to end) against captured devnet shapes;
 `maxSupportedTransactionVersion: 0` is required on `getTransaction` or v0
 transactions error out.
 

@@ -170,11 +170,11 @@ host's approval flow.
   have not been exercised inside the ZeroClaw host's narrower WASI grants,
   and a money tool's dependency tree is attack surface. Everything
   wire-level is instead hand-rolled in the shared `solana-core-wasi` crate
-  (zero deps, every layout readable in this repo) against byte layouts
-  verified with devnet `simulateTransaction`: message header/key ordering,
-  compact-u16, the bincode-style system-program tags, `transferChecked`,
-  ATA create-idempotent, the durable-nonce trio and the 80-byte nonce
-  state.
+  (no solana-* crates, no borsh; every layout readable in this repo)
+  against byte layouts verified with devnet `simulateTransaction`:
+  message header/key ordering, compact-u16, the bincode-style
+  system-program tags, `transferChecked`, ATA create-idempotent, the
+  durable-nonce trio and the 80-byte nonce state.
 - Keep `getrandom` out of the tree (nothing here needs randomness;
   `cargo tree --target wasm32-wasip2 -i getrandom` is empty).
 - `waki` must be a wasm-only target dependency or host `cargo test` breaks.
