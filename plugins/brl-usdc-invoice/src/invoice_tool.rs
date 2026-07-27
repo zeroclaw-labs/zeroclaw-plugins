@@ -105,9 +105,15 @@ fn empty_to_none(v: Option<String>) -> Option<String> {
     })
 }
 
+/// A Solana Pay URL carrying recipient, mint, amount and reference runs past
+/// 240 characters, which at 320px left each module about two pixels wide. That
+/// survives a screenshot and fails the thing it exists for: a phone camera
+/// reading it off a chat window that has already recompressed the image. 640px
+/// with the standard four-module quiet zone puts the modules back around ten
+/// pixels, and costs nothing but a larger PNG from a free endpoint.
 pub fn qr_image_url(data: &str) -> String {
     format!(
-        "https://api.qrserver.com/v1/create-qr-code/?size=320x320&margin=8&data={}",
+        "https://api.qrserver.com/v1/create-qr-code/?size=640x640&margin=4&data={}",
         url_encode(data)
     )
 }
@@ -214,6 +220,14 @@ mod unit_tests {
         let s = format_invoice_result(&r, true, "1000", "5.5", true);
         // QR links for both rails (the Solana QR encodes the full pay URL).
         assert_eq!(s.matches("api.qrserver.com").count(), 2);
+        // Big enough for a camera to read it off a chat window. At 320px the
+        // Solana Pay URL rendered modules about two pixels wide, which looked
+        // fine in a screenshot and would not scan. A QR nobody can scan is a
+        // broken payment rail, not a cosmetic issue.
+        assert!(
+            s.contains("size=640x640"),
+            "the QR must stay large enough to scan:\n{s}"
+        );
         assert!(s.contains(&qr_image_url(&r.solana_pay_url)));
         // PIX copia-e-cola inside one code block (tap-to-copy + forwardable).
         assert!(s.contains("000201TEST"));
