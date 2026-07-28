@@ -40,6 +40,30 @@ model = "gemini-3.6-flash"
 #   gemini-2.0-flash        429 quota exceeded
 # Re-check with the same one-shot curl if a take ever fails at the model call;
 # free-tier availability moves.
+#
+temperature = 0.2
+# Free-tier quota is 20 req/min and metered PER MODEL, so a throttled primary
+# can fall through to a model that still has headroom rather than ending a take.
+#
+# It has to be `fallback` (other ALIASES), not `fallback_models` (other model ids
+# on this alias). The rate-limit cooldown is keyed on `<family>.<alias>`, and
+# every fallback_models entry inherits that same key — so once this alias 429s,
+# all of its fallback_models are skipped with `reason=rate_limit_cooldown` and
+# the fallback never fires. A separate alias has a separate key and does get
+# tried. Verified the hard way on 2026-07-28.
+fallback = ["gemini.spare", "gemini.spare2"]
+
+# Same key, different alias => different cooldown bucket. Fallback aliases do
+# NOT inherit the primary's api_key, so each needs its own; run-demo.sh copies
+# the one key you set into all three so you only ever paste it once.
+# `gemini-flash-latest` is deliberately NOT used here: it resolves to
+# gemini-3.6-flash and shares its quota, making it a useless spare.
+[providers.models.gemini.spare]
+model = "gemini-3-flash-preview"
+temperature = 0.2
+
+[providers.models.gemini.spare2]
+model = "gemini-3.5-flash-lite"
 temperature = 0.2
 
 # ── risk profile ─────────────────────────────────────────────────────────────

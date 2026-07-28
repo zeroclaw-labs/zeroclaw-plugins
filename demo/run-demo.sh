@@ -48,6 +48,14 @@ GEMINI_KEY_VAR="ZEROCLAW_providers__models__gemini__default__api_key"
        \$GEMINI_API_KEY is NOT read by the host. Without this every
        \`zeroclaw agent\` take in DEMO-SCRIPT.md fails at the model call."
 
+# The rate-limit cooldown is keyed per alias, so config.demo.toml keeps spare
+# aliases to fall back to when the primary is throttled. Fallback aliases never
+# inherit the primary's key, so mirror it across them — you paste it once.
+for spare in spare spare2; do
+  var="ZEROCLAW_providers__models__gemini__${spare}__api_key"
+  [ -n "${!var:-}" ] || export "$var=${!GEMINI_KEY_VAR}"
+done
+
 command -v "$ZEROCLAW_BIN" >/dev/null 2>&1 \
   || die "no \`$ZEROCLAW_BIN\` on PATH. Set ZEROCLAW_BIN=/path/to/zeroclaw."
 
