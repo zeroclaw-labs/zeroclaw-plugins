@@ -72,24 +72,47 @@ rpc_url = "https://mainnet.helius-rpc.com/?api-key=..."
 Permissions requested: `http_client` (two JSON-RPC calls over the host's
 `wasi:http`, TLS host-side), `config_read` (the section above). Nothing else.
 
-## Worked example — real output, run inside a source-built v0.8.3 host
+## Worked example — real mainnet output, reproducible
 
 Agent message: *"Attest the current temperature reading."* → the model calls
 `depin_attest {"metric": "temp_c", "value": 23.5}` → the approval gate shows
-the call → on approve, with a live mainnet blockhash:
+the call → on approve, against a live mainnet blockhash:
 
 ```
-ATTESTATION #1 ready to sign — temp_c 23.5 C from device 11111111…
-chain: prev genesis, ts 1784499807
-memo: {"v":1,"dev":"11111111111111111111111111111111","seq":1,"ts":1784499807,"metric":"temp_c","val":"23.5","unit":"C","prev":"genesis"}
-unsigned_tx_base64: AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA…
+ATTESTATION #1 ready to sign — temp_c 23.5 C from device 9FpAnhwE…
+chain: prev genesis, ts 1785000000
+memo: {"v":1,"dev":"9FpAnhwEEdEQpPz3VPW5LnTqQYw3cHvXqh15xcUMXJ1z","seq":1,"ts":1785000000,"metric":"temp_c","val":"23.5","unit":"C","prev":"genesis"}
+unsigned_tx_base64: AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABAAECeqj163IpFEMiKqBTX+WyYQoEIwGVhtp3gr/zpdPhXa0FSlNamSkhBk0k6HFg2jh8fDW13bySu4HkH6hAQQVEjYkWhTC1kGoZh9KYCMKeZqKF4l0+VfxsOvcX1eq4YrTOAQEBAI8BeyJ2IjoxLCJkZXYiOiI5RnBBbmh3RUVkRVFwUHozVlBXNUxuVHFRWXczY0h2WHFoMTV4Y1VNWEoxeiIsInNlcSI6MSwidHMiOjE3ODUwMDAwMDAsIm1ldHJpYyI6InRlbXBfYyIsInZhbCI6IjIzLjUiLCJ1bml0IjoiQyIsInByZXYiOiJnZW5lc2lzIn0=
 Approving signs a fee-only memo (no transfer possible). Blockhash valid to
-height 296…; if approval waits past ~60s, call again to rebuild — the
+height 413815626; if approval waits past ~60s, call again to rebuild — the
 sequence stays consistent until one lands.
 ```
 
 The whole reply is a few hundred tokens; the raw RPC traffic never reaches
 the model.
+
+**Reproduce it yourself** — the pipeline is transport-injected, so the
+transcript above comes from real `getSignaturesForAddress` +
+`getLatestBlockhash` responses replayed through the real code path:
+
+```bash
+curl -s -X POST "$RPC" -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"getSignaturesForAddress",
+       "params":["<device_pubkey>",{"limit":10}]}' > signatures.json
+curl -s -X POST "$RPC" -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"getLatestBlockhash",
+       "params":[{"commitment":"finalized"}]}' > blockhash.json
+cargo run --example live -- <device_pubkey> signatures.json blockhash.json
+```
+
+`cargo test` stays network-free; only this example touches saved responses.
+
+> **Corrected 2026-07-28.** The previous transcript in this section was
+> illustrative: it used the all-ones System Program address as a stand-in
+> device and quoted a `lastValidBlockHeight` of `296…`, which is stale by
+> roughly 117 million blocks against live mainnet (`413815626` at time of
+> writing). Both are fixed above, and the `live` example exists so the numbers
+> can be re-derived rather than trusted.
 
 ## Blockhash expiry (trap #1, addressed head-on)
 
