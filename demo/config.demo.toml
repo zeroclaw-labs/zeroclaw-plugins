@@ -1,0 +1,85 @@
+#           ZeroClaw demo config — token-risk-check + portfolio-brief
+#
+# This is a THROWAWAY config. run-demo.sh points ZEROCLAW_CONFIG_DIR at the
+# directory holding this file, so nothing here touches your real ~/.zeroclaw.
+#
+# The `[[plugins.entries]]` / `[plugins.entries.config]` shape below is exact —
+# it matches the host's own end-to-end test
+# (zeroclaw crates/zeroclaw-plugins/tests/reference_plugin_e2e.rs).
+# Writing `[plugins.entries]` (single brackets) instead makes the WHOLE
+# [plugins] section fail deserialization and silently reset to
+# `enabled = false`, with no warning — upstream issue #8636. Don't retype it
+# from memory on camera.
+
+schema_version = 3
+
+# ── model provider ───────────────────────────────────────────────────────────
+# Shape is `[providers.models.<family>.<alias>]` — NOT `[model]` or `[llm]`.
+# The agent below references this as the dotted pair `gemini.default`.
+#
+# The key is deliberately absent. ZeroClaw does NOT read $GEMINI_API_KEY; its
+# env-override grammar is `ZEROCLAW_` + the dotted config path with `.` -> `__`,
+# so export this in the shell you record from:
+#
+#   export ZEROCLAW_providers__models__gemini__default__api_key="..."
+#
+# Env-injected secrets stay in memory and are never written back to config.toml,
+# which is why this file is safe to keep in git.
+[providers.models.gemini.default]
+model = "gemini-2.5-pro"
+# Swap to "gemini-2.5-flash" if you want faster turns on camera. Pro is the
+# safer take: the shot list requires the model to select the tool *unprompted*.
+temperature = 0.2
+
+# ── risk profile ─────────────────────────────────────────────────────────────
+# Mandatory — an enabled agent that names a missing risk_profile fails to start.
+# `supervised` is intentional, not a leftover: plugin tools are not in the
+# builtin auto-approve set, so this is what surfaces the operator approval
+# prompt on camera. That prompt IS the custody story (25% of the score) — do
+# not "fix" this to `full` to make the recording smoother.
+[risk_profiles.default]
+level = "supervised"          # readonly | supervised | full
+workspace_only = true
+# allowed_tools empty = no constraint, so both plugin tools are reachable.
+# allowed_commands stays empty: this demo never needs shell.
+
+# ── the agent that `-a assistant` resolves to ────────────────────────────────
+# There is no default agent in ZeroClaw. Without this table every take in
+# DEMO-SCRIPT.md dies with "is not configured (no [agents.assistant] entry)".
+[agents.assistant]
+enabled = true
+model_provider = "gemini.default"   # mandatory, dotted <family>.<alias>
+risk_profile = "default"            # mandatory for enabled agents
+# channels intentionally omitted — these are CLI-only takes.
+
+[plugins]
+enabled = true
+auto_discover = true
+# run-demo.sh rewrites this line to an absolute path.
+plugins_dir = "PLUGINS_DIR_PLACEHOLDER"
+
+[plugins.security]
+# Locally built components are unsigned. `strict` would refuse to load them.
+signature_mode = "permissive"
+
+[plugins.limits]
+call_fuel = 1000000000
+max_memory_mb = 256
+
+# ── token-risk-check ─────────────────────────────────────────────────────────
+# The host injects this map only because manifest.toml requests `config_read`.
+[[plugins.entries]]
+name = "token-risk-check"
+
+[plugins.entries.config]
+# Bounty trap #5: the public endpoint is rate-limited and WILL flake mid-take.
+# run-demo.sh substitutes $SOLANA_RPC_URL here.
+rpc_url = "RPC_URL_PLACEHOLDER"
+
+# ── portfolio-brief ──────────────────────────────────────────────────────────
+[[plugins.entries]]
+name = "portfolio-brief"
+
+[plugins.entries.config]
+rpc_url = "RPC_URL_PLACEHOLDER"
+price_api_url = "https://lite-api.jup.ag/price/v3"
