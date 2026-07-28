@@ -26,9 +26,20 @@ schema_version = 3
 # Env-injected secrets stay in memory and are never written back to config.toml,
 # which is why this file is safe to keep in git.
 [providers.models.gemini.default]
-model = "gemini-2.5-pro"
-# Swap to "gemini-2.5-flash" if you want faster turns on camera. Pro is the
-# safer take: the shot list requires the model to select the tool *unprompted*.
+model = "gemini-3.6-flash"
+# Verified against this key on 2026-07-28 by calling generateContent directly.
+# Do not trust the ListModels endpoint here: it still advertises
+# `gemini-2.5-flash`, which returns 404 "no longer available to new users" on
+# an actual call. Measured on the free tier that day:
+#   gemini-3.6-flash        200 OK   <- chosen: newest stable flash that answers
+#   gemini-flash-latest     200 OK   (works, but a moving alias — a pinned id
+#                                     keeps this PR reproducible for judges)
+#   gemini-3-flash-preview  200 OK
+#   gemini-3.5-flash        503 high demand
+#   gemini-2.5-pro          429 quota exceeded  <- would have died on camera
+#   gemini-2.0-flash        429 quota exceeded
+# Re-check with the same one-shot curl if a take ever fails at the model call;
+# free-tier availability moves.
 temperature = 0.2
 
 # ── risk profile ─────────────────────────────────────────────────────────────

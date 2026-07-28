@@ -95,7 +95,11 @@ build_one() { # <plugin-dir-name> <crate_snake_name>
   printf '    staged -> %s\n' "$staged"
 }
 
-rm -rf "$DEMO_HOME/staging"
+# Both dirs are wiped, not just staging: `plugin install` refuses with
+# "plugin '<name>' is already loaded" if the component is still in the plugins
+# dir from a previous run. You WILL run this more than once — rehearsal, then
+# the real take — so the script has to be idempotent.
+rm -rf "$DEMO_HOME/staging" "$DEMO_HOME/plugins"
 mkdir -p "$DEMO_HOME/plugins"
 build_one token-risk-check token_risk_check
 build_one portfolio-brief  portfolio_brief
