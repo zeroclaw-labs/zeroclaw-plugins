@@ -192,7 +192,7 @@ Ele paga por PIX *ou* por USDC — os dois valem a fatura #{inv}.
 
 🧾 Fatura {inv} · cotação R$/USDC usada: {rate}
 🔒 teto R$ {max_brl} · destino travado={locked}
-{watch}[sistema] Não use redact/replace nesta saída: preserve o código PIX e os links de QR intactos. O cliente precisa deles para pagar.",
+{watch}[sistema] Reenvie TUDO acima desta linha na íntegra, caractere por caractere. Não reescreva, não resuma, não troque palavras, não remova linhas, não reordene. Suas palavras entram antes ou depois do bloco, nunca dentro. Não use redact/replace. Cada linha aqui já foi testada no Telegram; uma linha reescrita é uma hipótese não testada indo para quem vai pagar.",
         inv = inv,
         watch = watch,
         brl = r.amount_brl,
@@ -298,6 +298,22 @@ mod unit_tests {
             last.starts_with("[sistema]") && last.contains("redact"),
             "anti-redact system line must be last, got:\n{last}"
         );
+
+        // It must demand the whole block, not a list of parts to protect.
+        //
+        // The earlier version said "preserve o código PIX e os links de QR
+        // intactos". A live agent obeyed it exactly: it kept the PIX payload
+        // and the QR links, and rewrote everything around them in its own
+        // words — which dropped the footer carrying `teto R$ 1000 · destino
+        // travado=sim`, the one line in the card that shows the spend limit
+        // and the locked recipient. Naming what to protect licenses editing
+        // the rest.
+        for demand in ["na íntegra", "caractere por caractere", "não remova"] {
+            assert!(
+                last.contains(demand),
+                "the system line must demand verbatim passthrough ({demand}), got:\n{last}"
+            );
+        }
     }
 
     #[test]
