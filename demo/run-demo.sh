@@ -20,6 +20,14 @@ die()  { printf '\033[31merror:\033[0m %s\n' "$*" >&2; exit 1; }
 
 # ── 0. Preconditions ─────────────────────────────────────────────────────────
 
+# Optional local secrets file, gitignored. Lets you keep the Gemini key and an
+# RPC URL out of your shell history and out of this repo. Anything already
+# exported wins, so `KEY=... ./demo/run-demo.sh` still overrides the file.
+if [ -f "$REPO_ROOT/demo/.env.demo" ]; then
+  bold "==> sourcing demo/.env.demo"
+  set -a; . "$REPO_ROOT/demo/.env.demo"; set +a
+fi
+
 if [ -z "${SOLANA_RPC_URL:-}" ]; then
   SOLANA_RPC_URL="https://api.mainnet-beta.solana.com"
   printf '\033[33mwarning:\033[0m SOLANA_RPC_URL unset — falling back to the public endpoint.\n'
