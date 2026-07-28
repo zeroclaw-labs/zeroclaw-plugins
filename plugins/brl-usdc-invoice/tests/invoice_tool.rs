@@ -56,15 +56,16 @@ fn happy_path_has_qr() {
     assert!(out.contains("000201"));
     assert!(out.contains("api.qrserver.com"));
     assert!(out.contains("PixZClaw"));
-    // v0.4: USDC leg is QR-only — the host redacts raw base58, so no raw
-    // solana: line may appear; the QR link encodes the full pay URL.
+    // The USDC leg carries a copyable `solana:` line alongside the QR. The
+    // customer reads the forwarded message on the phone they would pay from,
+    // and scanning a QR from that same screen needs a second device.
     assert!(
-        !out.lines().any(|l| l.trim().starts_with("solana:")),
-        "raw solana: line must be omitted (host redacts it):\n{out}"
+        out.lines().any(|l| l.trim().starts_with("solana:")),
+        "copyable solana: line must be present:\n{out}"
     );
     assert!(
         out.contains("```"),
-        "expected fenced PIX code block:\n{out}"
+        "expected fenced code blocks for both rails:\n{out}"
     );
     assert!(out.contains("Encaminhe esta mensagem ao cliente"));
     assert!(out.contains("150.00") || out.contains("R$ 150"));
