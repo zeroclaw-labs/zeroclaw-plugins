@@ -54,16 +54,25 @@ shopt -u nullglob
 IFS=$'\n' CLIPS=($(sort <<<"${CLIPS[*]}")); unset IFS
 
 # Normalise every segment to one geometry so concat cannot fail on a mismatch.
-# The first clip sets it; anything recorded at a different size is letterboxed
-# rather than stretched, which is visible but honest.
-FIRST="${CLIPS[0]}"
-check_readable "$FIRST" "clip"
-GEO="$(ffprobe -v error -select_streams v:0 -show_entries stream=width,height \
-        -of csv=s=x:p=0 "$FIRST" | head -1)"
-W="${GEO%x*}"; H="${GEO#*x}"
-# yuv420p needs even dimensions; odd capture regions are common.
-W=$(( W - W % 2 )); H=$(( H - H % 2 ))
-bold "==> target geometry ${W}x${H} (from $(basename "$FIRST"))"
+# The target is the LARGEST width and height across all clips, so no clip is
+# ever downscaled: each is centred and padded with black instead. Rescaling a
+# terminal recording visibly softens the text, and this demo is nothing but
+# text, so padding is worth the black bars on an inconsistent capture region.
+W=0; H=0
+for c in "${CLIPS[@]}"; do
+  check_readable "$c" "clip"
+  g="$(ffprobe -v error -select_streams v:0 -show_entries stream=width,height \
+        -of csv=s=x:p=0 "$c" | head -1)"
+  [ "${g%x*}" -gt "$W" ] && W="${g%x*}"
+  [ "${g#*x}" -gt "$H" ] && H="${g#*x}"
+done
+# yuv420p needs even dimensions; odd capture regions are common (Spectacle
+# region drags routinely land on an odd height).
+W=$(( W + W % 2 )); H=$(( H + H % 2 ))
+bold "==> target geometry ${W}x${H} (largest across ${#CLIPS[@]} clips; others are padded, never scaled)"
+
+# How much footage may run past the end of the narration before it is cut.
+TAIL="${TAIL:-1.0}"
 
 SEGMENTS=()
 TOTAL=0
@@ -88,11 +97,15 @@ for clip in "${CLIPS[@]}"; do
   vdur="$(dur "$clip")"
   seg="$WORK/seg-$num.mp4"
 
+  # Pad to the target rather than scale to it: no resampling, so terminal text
+  # stays sharp. Centred, black bars.
+  VF="pad=$W:$H:(ow-iw)/2:(oh-ih)/2:color=black,fps=30,format=yuv420p"
+
   if [ ${#vo[@]} -eq 0 ]; then
     warn "$base: no voiceover found in $VO_DIR for '$num' — keeping it silent"
     ffmpeg -nostdin -v error -y -i "$clip" \
       -f lavfi -i anullsrc=channel_layout=stereo:sample_rate=48000 \
-      -vf "scale=$W:$H:force_original_aspect_ratio=decrease,pad=$W:$H:-1:-1:color=black,fps=30,format=yuv420p" \
+      -vf "$VF" \
       -c:v libx264 -preset medium -crf 20 -c:a aac -b:a 192k \
       -shortest "$seg"
     printf '    %-22s video %6ss  (silent)\n' "$base" "$vdur"
@@ -100,22 +113,32 @@ for clip in "${CLIPS[@]}"; do
     [ ${#vo[@]} -gt 1 ] && warn "$base: ${#vo[@]} audio files match '$num', using $(basename "${vo[0]}")"
     adur="$(dur "${vo[0]}")"
 
-    # tpad holds the final frame when narration outruns the footage; apad adds
-    # silence when the footage outruns narration. Both are no-ops in the other
-    # direction, so one filter chain covers both cases and -shortest ends the
-    # segment at whichever real stream is longer.
+    # Segment length is the narration plus a short tail, except that footage
+    # shorter than the narration is never cut off: then the clip's final frame
+    # is held (tpad) to cover the remainder. So:
+    #   video longer than audio+TAIL -> trimmed to audio+TAIL, no dead air
+    #   video shorter than audio     -> last frame held, no narration lost
+    # apad covers the tail seconds with silence in the first case.
+    seglen="$(awk -v v="$vdur" -v a="$adur" -v t="$TAIL" \
+      'BEGIN{want=a+t; print (v<want ? want : v<a ? a : want)}')"
+
     ffmpeg -nostdin -v error -y -i "$clip" -i "${vo[0]}" \
-      -vf "scale=$W:$H:force_original_aspect_ratio=decrease,pad=$W:$H:-1:-1:color=black,fps=30,format=yuv420p,tpad=stop_mode=clone:stop_duration=600" \
+      -vf "$VF,tpad=stop_mode=clone:stop_duration=600" \
       -af "apad" \
       -map 0:v:0 -map 1:a:0 \
       -c:v libx264 -preset medium -crf 20 -c:a aac -b:a 192k -ar 48000 -ac 2 \
-      -t "$(awk -v v="$vdur" -v a="$adur" 'BEGIN{print (v>a?v:a)}')" "$seg"
+      -t "$seglen" "$seg"
 
     delta="$(awk -v v="$vdur" -v a="$adur" 'BEGIN{printf "%+.1f", a-v}')"
+    note=""
     if awk -v v="$vdur" -v a="$adur" 'BEGIN{exit !(a-v>3)}'; then
       warn "$base: narration outruns the clip by ${delta}s — that long a frozen frame will read as a stall. Re-record this one a few seconds longer."
+      note="holding last frame"
+    elif awk -v v="$vdur" -v s="$seglen" 'BEGIN{exit !(v-s>0.5)}'; then
+      note="trimmed $(awk -v v="$vdur" -v s="$seglen" 'BEGIN{printf "%.1f", v-s}')s of tail"
     fi
-    printf '    %-22s video %6ss  audio %6ss  (%s)\n' "$base" "$vdur" "$adur" "$delta"
+    printf '    %-22s video %6ss  audio %6ss  (%s)%s\n' \
+      "$base" "$vdur" "$adur" "$delta" "${note:+  $note}"
   fi
 
   SEGMENTS+=("$seg")

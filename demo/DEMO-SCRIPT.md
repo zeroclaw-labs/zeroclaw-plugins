@@ -15,12 +15,19 @@ export ZEROCLAW_BIN=/path/to/zeroclaw-host/target/release/zeroclaw
 
 # Now set up the shell you will actually record from. run-demo.sh sources
 # .env.demo into its OWN process, so the key does not survive into this shell:
+export PATH="$(dirname "$ZEROCLAW_BIN"):$PATH"   # so you can type `zeroclaw`
 export ZEROCLAW_CONFIG_DIR=~/.zeroclaw-demo   # the script prints the exact path
 set -a; . demo/.env.demo; set +a
 for s in spare spare2; do
   export ZEROCLAW_providers__models__gemini__${s}__api_key="$ZEROCLAW_providers__models__gemini__default__api_key"
 done
 ```
+
+**Run that block in the exact terminal you record from**, every time you open a
+new one. It is all shell-local: a new tab has none of it, and the first thing
+you would see on camera is `zeroclaw: command not found`. Do not shorten
+`zeroclaw` to an alias either. Aliases are per-shell in the same way, and the
+full command name is what a reviewer wants to see you typing.
 
 The `spare`/`spare2` mirroring is the same thing `run-demo.sh` does internally
 (fallback aliases never inherit the primary's key). Skip it and the rate-limit
