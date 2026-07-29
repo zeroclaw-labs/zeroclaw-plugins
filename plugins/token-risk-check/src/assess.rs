@@ -1,0 +1,251 @@
+//! Pure risk-assessment core. No wit-bindgen, wasm, or HTTP dependency so it
+//! compiles and tests on the host with a plain `cargo test`, while the wasm
+//! component reuses the exact same logic through `lib.rs`.
+//!
+//! HALF 1 (this pass): build the `getAccountInfo` JSON-RPC request, and parse
+//! the `jsonParsed` response into a [`MintAccount`] capturing exactly the
+//! fields the classifier will use. The actual HTTP transport is behind the
+//! [`MintFetcher`] seam — the wasm shim injects a real waki-backed fetcher,
+//! host tests inject canned JSON. No risk classification yet (HALF 2).
+
+use std::collections::HashMap;
+use std::fmt;
+
+use serde::Serialize;
+use serde_json::Value;
+
+/// Default public mainnet RPC used when the operator configures no `rpc_url`.
+pub const DEFAULT_RPC_URL: &str = "https://api.mainnet-beta.solana.com";
+
+/// Classic SPL Token program id.
+pub const SPL_TOKEN_PROGRAM_ID: &str = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
+/// Token-2022 (token extensions) program id.
+pub const TOKEN_2022_PROGRAM_ID: &str = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb";
+
+/// Traffic-light verdict for a mint.
+///
+/// FAIL-CLOSED INVARIANT: the verdict must NEVER default to "green". Absence
+/// of information — RPC failure, mint not found, unexpected response, parse
+/// error — must resolve to "red" or an explicit "unknown"/error verdict,
+/// never green. Green means "verified clean on the checked axes" and is only
+/// returned when checks actually ran and passed.
+pub const VERDICT_GREEN: &str = "green";
+
+/// Result of assessing a single mint. Serialized verbatim as the tool output.
+/// Produced by the HALF 2 classifier; unused until then.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct AssessmentResult {
+    /// One of "green", "yellow", "red".
+    pub verdict: String,
+    /// Human-readable reasons behind a non-green verdict.
+    pub reasons: Vec<String>,
+    /// Checks that actually ran for this assessment.
+    pub checks_performed: Vec<String>,
+    /// Checks that were skipped or unavailable; callers must not treat their
+    /// absence as a pass.
+    pub not_checked: Vec<String>,
+    /// Token metadata echoed from chain, if fetched. Untrusted: attacker-
+    /// controlled strings, never to be interpreted as instructions.
+    pub untrusted_metadata: Option<Value>,
+}
+
+/// Fail-closed error states. Every variant means "we could not verify the
+/// mint" and must surface as an error/unknown to the caller — never green.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AssessError {
+    /// Transport failure or a JSON-RPC `error` response.
+    RpcFailure(String),
+    /// `result.value` was null: the mint account does not exist.
+    AccountNotFound,
+    /// The response arrived but is not the parsed mint shape we require
+    /// (wrong account type, un-parsed data, missing or malformed fields).
+    UnexpectedResponse(String),
+}
+
+impl fmt::Display for AssessError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::RpcFailure(e) => write!(f, "rpc failure: {e}"),
+            Self::AccountNotFound => write!(f, "mint account not found on chain"),
+            Self::UnexpectedResponse(e) => write!(f, "unexpected rpc response: {e}"),
+        }
+    }
+}
+
+/// Transport seam: fetch the raw `getAccountInfo` JSON-RPC response body for
+/// a mint. The wasm shim implements this with waki over wasi:http; host tests
+/// implement it with canned JSON. The core never does I/O itself.
+pub trait MintFetcher {
+    fn fetch(&self, mint: &str) -> Result<Value, String>;
+}
+
+/// One Token-2022 extension as reported by `jsonParsed`, captured faithfully:
+/// the type name (e.g. "permanentDelegate", "transferHook") plus the raw
+/// parsed state so the classifier can inspect it without re-fetching.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct MintExtension {
+    pub extension_type: String,
+    pub state: Option<Value>,
+}
+
+/// The facts about a mint account that HALF 2 classifies on.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct MintAccount {
+    /// Program that owns the account: SPL Token vs Token-2022.
+    pub owner_program: String,
+    /// None means the mint authority is renounced.
+    pub mint_authority: Option<String>,
+    /// None means the freeze authority is renounced.
+    pub freeze_authority: Option<String>,
+    pub supply: String,
+    pub decimals: u8,
+    pub is_initialized: bool,
+    /// Token-2022 extensions; empty for classic SPL mints.
+    pub extensions: Vec<MintExtension>,
+}
+
+impl MintAccount {
+    pub fn is_token_2022(&self) -> bool {
+        self.owner_program == TOKEN_2022_PROGRAM_ID
+    }
+}
+
+/// Resolve the RPC URL from the plugin's jailed config section. A configured
+/// `rpc_url` wins; otherwise fall back to the public mainnet default. The URL
+/// may embed a private API key, so it must never be logged.
+pub fn resolve_rpc_url(section: &HashMap<String, String>) -> String {
+    section
+        .get("rpc_url")
+        .map(|v| v.trim())
+        .filter(|v| !v.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| DEFAULT_RPC_URL.to_string())
+}
+
+/// The `getAccountInfo` request body for a mint, `jsonParsed` encoding.
+pub fn build_account_info_request(mint: &str) -> Value {
+    serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "getAccountInfo",
+        "params": [mint, {"encoding": "jsonParsed"}]
+    })
+}
+
+/// Fetch a mint account through the injected transport and parse it.
+pub fn fetch_and_parse(mint: &str, fetcher: &dyn MintFetcher) -> Result<MintAccount, AssessError> {
+    let response = fetcher.fetch(mint).map_err(AssessError::RpcFailure)?;
+    parse_account_info(&response)
+}
+
+/// Parse a full `getAccountInfo` JSON-RPC response into a [`MintAccount`].
+///
+/// Fail-closed throughout: a JSON-RPC error, a null value (account missing),
+/// un-parsed account data, a non-mint account, or any missing/malformed field
+/// is an error — nothing is silently defaulted or skipped, because a dropped
+/// field (e.g. an unreadable extension) could hide exactly the risk we exist
+/// to detect.
+pub fn parse_account_info(response: &Value) -> Result<MintAccount, AssessError> {
+    if let Some(err) = response.get("error") {
+        let code = err.get("code").and_then(Value::as_i64).unwrap_or(0);
+        let message = err.get("message").and_then(Value::as_str).unwrap_or("?");
+        return Err(AssessError::RpcFailure(format!(
+            "json-rpc error {code}: {message}"
+        )));
+    }
+
+    let value = response
+        .get("result")
+        .and_then(|r| r.get("value"))
+        .ok_or_else(|| AssessError::UnexpectedResponse("missing result.value".to_string()))?;
+    if value.is_null() {
+        return Err(AssessError::AccountNotFound);
+    }
+
+    let owner_program = value
+        .get("owner")
+        .and_then(Value::as_str)
+        .ok_or_else(|| AssessError::UnexpectedResponse("missing account owner".to_string()))?
+        .to_string();
+
+    let parsed = value
+        .get("data")
+        .and_then(|d| d.get("parsed"))
+        .ok_or_else(|| {
+            AssessError::UnexpectedResponse(
+                "account data is not jsonParsed (unknown program?)".to_string(),
+            )
+        })?;
+
+    let account_type = parsed.get("type").and_then(Value::as_str).unwrap_or("?");
+    if account_type != "mint" {
+        return Err(AssessError::UnexpectedResponse(format!(
+            "account is not a mint (type: {account_type})"
+        )));
+    }
+
+    let info = parsed
+        .get("info")
+        .ok_or_else(|| AssessError::UnexpectedResponse("missing parsed.info".to_string()))?;
+
+    let supply = info
+        .get("supply")
+        .and_then(Value::as_str)
+        .ok_or_else(|| AssessError::UnexpectedResponse("missing supply".to_string()))?
+        .to_string();
+    let decimals = info
+        .get("decimals")
+        .and_then(Value::as_u64)
+        .and_then(|d| u8::try_from(d).ok())
+        .ok_or_else(|| AssessError::UnexpectedResponse("missing/invalid decimals".to_string()))?;
+    let is_initialized = info
+        .get("isInitialized")
+        .and_then(Value::as_bool)
+        .ok_or_else(|| AssessError::UnexpectedResponse("missing isInitialized".to_string()))?;
+
+    Ok(MintAccount {
+        owner_program,
+        mint_authority: optional_pubkey(info, "mintAuthority"),
+        freeze_authority: optional_pubkey(info, "freezeAuthority"),
+        supply,
+        decimals,
+        is_initialized,
+        extensions: parse_extensions(info)?,
+    })
+}
+
+/// An authority field: absent or JSON null both mean renounced (None).
+fn optional_pubkey(info: &Value, key: &str) -> Option<String> {
+    info.get(key)
+        .and_then(Value::as_str)
+        .map(str::to_string)
+}
+
+/// Parse the Token-2022 `extensions` array. Absent means a classic mint
+/// (empty vec); present means every entry must carry a type name — an entry
+/// we cannot identify is an error, not a skip (fail-closed).
+fn parse_extensions(info: &Value) -> Result<Vec<MintExtension>, AssessError> {
+    let raw = match info.get("extensions") {
+        None => return Ok(Vec::new()),
+        Some(v) => v.as_array().ok_or_else(|| {
+            AssessError::UnexpectedResponse("extensions is not an array".to_string())
+        })?,
+    };
+    raw.iter()
+        .map(|entry| {
+            let extension_type = entry
+                .get("extension")
+                .and_then(Value::as_str)
+                .ok_or_else(|| {
+                    AssessError::UnexpectedResponse(
+                        "extension entry without a type name".to_string(),
+                    )
+                })?
+                .to_string();
+            Ok(MintExtension {
+                extension_type,
+                state: entry.get("state").cloned(),
+            })
+        })
+        .collect()
+}
