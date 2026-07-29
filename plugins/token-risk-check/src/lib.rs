@@ -30,7 +30,8 @@ mod component {
     use serde_json::Value;
 
     use crate::assess::{
-        build_account_info_request, classify, fetch_and_parse, resolve_rpc_url, MintFetcher,
+        attach_untrusted_metadata, build_account_info_request, build_account_info_request_base64,
+        classify, fetch_and_parse, fetch_metadata, resolve_rpc_url, MetadataFetcher, MintFetcher,
     };
     use exports::zeroclaw::plugin::plugin_info::Guest as PluginInfo;
     use exports::zeroclaw::plugin::tool::{Guest as Tool, ToolResult};
@@ -59,15 +60,27 @@ mod component {
         rpc_url: String,
     }
 
-    impl MintFetcher for WakiFetcher {
-        fn fetch(&self, mint: &str) -> Result<Value, String> {
+    impl WakiFetcher {
+        fn post(&self, body: &Value) -> Result<Value, String> {
             waki::Client::new()
                 .post(&self.rpc_url)
-                .json(&build_account_info_request(mint))
+                .json(body)
                 .send()
                 .map_err(|e| e.to_string())?
                 .json::<Value>()
                 .map_err(|e| e.to_string())
+        }
+    }
+
+    impl MintFetcher for WakiFetcher {
+        fn fetch(&self, mint: &str) -> Result<Value, String> {
+            self.post(&build_account_info_request(mint))
+        }
+    }
+
+    impl MetadataFetcher for WakiFetcher {
+        fn fetch_base64(&self, address: &str) -> Result<Value, String> {
+            self.post(&build_account_info_request_base64(address))
         }
     }
 
@@ -146,7 +159,22 @@ mod component {
 
             // Classification is pure and only ever runs on a successfully
             // parsed account — every failure above returned with no verdict.
-            let result = classify(&parsed.mint, &account);
+            let mut result = classify(&parsed.mint, &account);
+
+            // Metadata is fetched AFTER the verdict is fixed and attached as
+            // labeled untrusted data — it is structurally not a classify
+            // input, and its absence or failure never changes the verdict.
+            let metadata = fetch_metadata(&parsed.mint, &account, &fetcher);
+            emit(
+                PluginAction::Note,
+                PluginOutcome::Success,
+                if metadata.is_some() {
+                    "attached untrusted token metadata"
+                } else {
+                    "no token metadata available (verdict unaffected)"
+                },
+            );
+            attach_untrusted_metadata(&mut result, metadata);
 
             let output = match serde_json::to_string(&result) {
                 Ok(s) => s,

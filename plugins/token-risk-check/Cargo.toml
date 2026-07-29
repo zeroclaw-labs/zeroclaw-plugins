@@ -15,6 +15,12 @@ crate-type = ["cdylib", "rlib"]
 wit-bindgen = "0.46"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# Metaplex metadata-PDA derivation (sha256 + base58 + ed25519 off-curve check)
+# and base64 account-data decoding. Pure math — compiles on host and wasm.
+sha2 = "0.10"
+bs58 = "0.5"
+curve25519-dalek = "4"
+base64 = "0.22"
 
 # wasi:http client — only compiled for the wasm component, never on the host.
 [target.'cfg(target_family = "wasm")'.dependencies]
