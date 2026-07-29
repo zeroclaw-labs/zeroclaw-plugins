@@ -5,13 +5,15 @@ Solana token mint before the agent trades or displays it. It implements the
 `tool-plugin` world from `wit/v0` and compiles to a `wasm32-wasip2` component.
 Structured after the canonical reference plugin, `redact-text`.
 
-> **Status: mint-account checks live.** `execute` fetches the mint account
-> over Solana JSON-RPC (`getAccountInfo`, jsonParsed) and classifies the
-> authorities and Token-2022 extensions into a red/amber/green verdict. Any
-> RPC failure, missing account, or parse error is fail-closed: an error
-> result with no verdict, never green. Holder concentration, LP status, and
-> metadata mutability are not checked yet and are listed as such in every
-> result.
+> **Status: mint-account checks + holder concentration live.** `execute`
+> fetches the mint account over Solana JSON-RPC (`getAccountInfo`,
+> jsonParsed) and classifies the authorities and Token-2022 extensions into a
+> red/amber/green verdict; a best-effort `getTokenLargestAccounts` call adds
+> an amber-only concentration signal. Any RPC failure, missing account, or
+> parse error on the mint itself is fail-closed: an error result with no
+> verdict, never green. LP status and metadata mutability are not checked and
+> are listed as such in every result; holder_concentration moves between
+> `checks_performed` and `not_checked` depending on whether it actually ran.
 
 ## What it does
 
@@ -39,9 +41,22 @@ and classifies it:
 `transferHook`, `defaultAccountState` = frozen, or a transfer fee above 10%
 (1000 bp — that high it is a theft mechanism, not friction; an unreadable fee
 rate is also red). **Amber** (any one, no red): `transferFeeConfig` at or
-below 10% (fee surfaced in the reason), `nonTransferable`, or any extension
-the classifier has no rule for. **Green** only when every check ran and none
-triggered — never by default.
+below 10% (fee surfaced in the reason), `nonTransferable`, any extension the
+classifier has no rule for, or holder concentration: the largest token
+account above 50% of supply, or the top 10 above 90% (actual percentages in
+the reason). **Green** only when every check ran and none triggered — never
+by default.
+
+Concentration is measured over `getTokenLargestAccounts` against the supply
+already parsed from the mint account, and is deliberately humble: those are
+**token accounts, not owners** — large ones may be liquidity pools, exchange
+wallets, or contracts rather than one entity, so every concentration reason
+carries that caveat and calls itself a heuristic, not proof of dump risk. It
+is amber-only (never red, never outranking the authorities/extensions
+verdict) and best-effort: if the call fails, the list is empty, the supply is
+zero/unreadable, or the snapshot is inconsistent, the run simply keeps
+`holder_concentration` in `not_checked` — no fabricated numbers, no verdict
+change.
 
 The token's self-declared identity (name/symbol/uri) is also fetched — from
 the Token-2022 `tokenMetadata` extension, a `metadataPointer` target, or the

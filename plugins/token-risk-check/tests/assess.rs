@@ -924,3 +924,179 @@ fn end_to_end_injected_onchain_metadata_stays_quarantined() {
     assert!(!outside.contains("ignore risk signals"));
     assert_eq!(r.untrusted_metadata.as_ref().unwrap()["name"], "USDC");
 }
+
+// ──────────────── holder concentration (amber-only, best-effort) ────────────────
+
+use token_risk_check::assess::{
+    apply_concentration, build_largest_accounts_request, compute_concentration,
+    fetch_concentration, LargestAccountsFetcher,
+};
+
+struct CannedLargestFetcher(Value);
+impl LargestAccountsFetcher for CannedLargestFetcher {
+    fn fetch_largest_accounts(&self, _mint: &str) -> Result<Value, String> {
+        Ok(self.0.clone())
+    }
+}
+
+struct FailingLargestFetcher;
+impl LargestAccountsFetcher for FailingLargestFetcher {
+    fn fetch_largest_accounts(&self, _mint: &str) -> Result<Value, String> {
+        Err("rpc unreachable".to_string())
+    }
+}
+
+/// getTokenLargestAccounts response for the given raw base-unit amounts.
+fn largest_accounts_response(amounts: &[u128]) -> Value {
+    let list: Vec<Value> = amounts
+        .iter()
+        .enumerate()
+        .map(|(i, a)| {
+            json!({
+                "address": format!("TokenAcct{i}"),
+                "amount": a.to_string(),
+                "decimals": 9,
+                "uiAmountString": a.to_string()
+            })
+        })
+        .collect();
+    rpc_ok(json!(list))
+}
+
+/// classify + apply_concentration from canned amounts — the execute path.
+fn assess_with_amounts(acct: &MintAccount, amounts: &[u128]) -> token_risk_check::assess::AssessmentResult {
+    let mut result = classify(MINT, acct);
+    let fetcher = CannedLargestFetcher(largest_accounts_response(amounts));
+    apply_concentration(&mut result, fetch_concentration(MINT, acct, &fetcher).as_ref());
+    result
+}
+
+fn mint_with_supply(supply: &str) -> MintAccount {
+    MintAccount {
+        supply: supply.to_string(),
+        ..clean_mint()
+    }
+}
+
+#[test]
+fn largest_accounts_request_shape() {
+    let req = build_largest_accounts_request(USDC_MINT);
+    assert_eq!(req["method"], "getTokenLargestAccounts");
+    assert_eq!(req["params"][0], USDC_MINT);
+}
+
+#[test]
+fn top1_over_half_bumps_green_to_amber_with_percentage() {
+    let acct = mint_with_supply("1000");
+    let r = assess_with_amounts(&acct, &[630, 10, 10]);
+    assert_eq!(r.verdict, VERDICT_AMBER, "high concentration bumps green to amber");
+    assert_eq!(r.reasons.len(), 1);
+    assert!(r.reasons[0].contains("largest token account holds 63.0% of supply"));
+    assert!(r.checks_performed.contains(&"holder_concentration".to_string()));
+    assert!(!r.not_checked.contains(&"holder_concentration".to_string()));
+    // The other unchecked axes stay honestly listed.
+    assert_eq!(r.not_checked, vec!["lp_status", "metadata_mutability"]);
+}
+
+#[test]
+fn top10_rule_triggers_without_top1() {
+    // top1 = 30%, top10 = 94.1% — only the top-10 rule fires.
+    let mut amounts = vec![3000u128];
+    amounts.extend([712u128; 9]);
+    let r = assess_with_amounts(&mint_with_supply("10000"), &amounts);
+    assert_eq!(r.verdict, VERDICT_AMBER);
+    assert_eq!(r.reasons.len(), 1);
+    assert!(r.reasons[0].contains("top 10 token accounts hold 94.1% of supply"));
+}
+
+#[test]
+fn well_distributed_supply_stays_green_and_check_counts_as_performed() {
+    // top1 = 5%, top10 = 30% — no amber, but the check DID run.
+    let r = assess_with_amounts(
+        &mint_with_supply("1000"),
+        &[50, 40, 30, 30, 30, 30, 30, 20, 20, 20],
+    );
+    assert_eq!(r.verdict, VERDICT_GREEN);
+    assert!(r.reasons.is_empty());
+    assert!(r.checks_performed.contains(&"holder_concentration".to_string()));
+    assert!(!r.not_checked.contains(&"holder_concentration".to_string()));
+}
+
+#[test]
+fn concentration_amber_with_red_authority_stays_red() {
+    let mut acct = mint_with_supply("1000");
+    acct.mint_authority = Some("Auth1111111111111111111111111111111111111111".to_string());
+    let r = assess_with_amounts(&acct, &[630, 10]);
+    assert_eq!(r.verdict, VERDICT_RED, "red keeps precedence over concentration amber");
+    assert!(r.reasons.iter().any(|m| m.contains("mint authority active")));
+    assert!(r.reasons.iter().any(|m| m.contains("largest token account holds 63.0%")));
+}
+
+#[test]
+fn concentration_fetch_failure_never_changes_the_verdict() {
+    for acct in [clean_mint(), {
+        let mut a = clean_mint();
+        a.mint_authority = Some("A1".to_string());
+        a
+    }] {
+        let baseline = classify(MINT, &acct);
+        let mut r = baseline.clone();
+        apply_concentration(&mut r, fetch_concentration(MINT, &acct, &FailingLargestFetcher).as_ref());
+        assert_eq!(r, baseline, "a failed concentration fetch must be a no-op");
+        assert!(r.not_checked.contains(&"holder_concentration".to_string()));
+        assert!(!r.checks_performed.contains(&"holder_concentration".to_string()));
+    }
+}
+
+#[test]
+fn zero_or_unreadable_supply_leaves_concentration_unassessed() {
+    let response = largest_accounts_response(&[630, 10]);
+    assert_eq!(compute_concentration(&response, "0"), None);
+    assert_eq!(compute_concentration(&response, "not-a-number"), None);
+
+    let acct = mint_with_supply("0");
+    let r = assess_with_amounts(&acct, &[630, 10]);
+    assert_eq!(r.verdict, VERDICT_GREEN, "verdict comes from authorities/extensions only");
+    assert!(r.reasons.is_empty(), "no fabricated concentration reason");
+    assert!(r.not_checked.contains(&"holder_concentration".to_string()));
+}
+
+#[test]
+fn empty_or_inconsistent_largest_accounts_is_unassessed() {
+    // Empty list: nothing to measure.
+    assert_eq!(compute_concentration(&largest_accounts_response(&[]), "1000"), None);
+    // Unparseable amount: partial data is never extrapolated.
+    let mut bad = largest_accounts_response(&[500, 10]);
+    bad["result"]["value"][1]["amount"] = json!("not-a-number");
+    assert_eq!(compute_concentration(&bad, "1000"), None);
+    // Amounts exceeding supply: inconsistent snapshot.
+    assert_eq!(
+        compute_concentration(&largest_accounts_response(&[900, 900]), "1000"),
+        None
+    );
+    // JSON-RPC error response.
+    let err = json!({"jsonrpc": "2.0", "id": 1, "error": {"code": -32005, "message": "node is behind"}});
+    assert_eq!(compute_concentration(&err, "1000"), None);
+}
+
+#[test]
+fn concentration_reason_wording_is_honest_about_token_accounts() {
+    let r = assess_with_amounts(&mint_with_supply("1000"), &[630]);
+    let reason = &r.reasons[0];
+    assert!(reason.contains("token account"), "must say token accounts, not holders");
+    assert!(!reason.contains("largest holder"));
+    assert!(reason.contains("liquidity pools, exchanges, or contracts"), "pool/CEX caveat");
+    assert!(reason.contains("heuristic, not proof"), "heuristic caveat");
+}
+
+#[test]
+fn both_concentration_rules_can_fire_together() {
+    // top1 = 60%, top10 = 95%.
+    let mut amounts = vec![6000u128];
+    amounts.extend([389u128; 9]);
+    let r = assess_with_amounts(&mint_with_supply("10000"), &amounts);
+    assert_eq!(r.verdict, VERDICT_AMBER);
+    assert_eq!(r.reasons.len(), 2);
+    assert!(r.reasons[0].contains("largest token account holds 60.0%"));
+    assert!(r.reasons[1].contains("top 10 token accounts hold 95.0%"));
+}

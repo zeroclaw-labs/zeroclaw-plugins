@@ -30,8 +30,10 @@ mod component {
     use serde_json::Value;
 
     use crate::assess::{
-        attach_untrusted_metadata, build_account_info_request, build_account_info_request_base64,
-        classify, fetch_and_parse, fetch_metadata, resolve_rpc_url, MetadataFetcher, MintFetcher,
+        apply_concentration, attach_untrusted_metadata, build_account_info_request,
+        build_account_info_request_base64, build_largest_accounts_request, classify,
+        fetch_and_parse, fetch_concentration, fetch_metadata, resolve_rpc_url,
+        LargestAccountsFetcher, MetadataFetcher, MintFetcher,
     };
     use exports::zeroclaw::plugin::plugin_info::Guest as PluginInfo;
     use exports::zeroclaw::plugin::tool::{Guest as Tool, ToolResult};
@@ -81,6 +83,12 @@ mod component {
     impl MetadataFetcher for WakiFetcher {
         fn fetch_base64(&self, address: &str) -> Result<Value, String> {
             self.post(&build_account_info_request_base64(address))
+        }
+    }
+
+    impl LargestAccountsFetcher for WakiFetcher {
+        fn fetch_largest_accounts(&self, mint: &str) -> Result<Value, String> {
+            self.post(&build_largest_accounts_request(mint))
         }
     }
 
@@ -160,6 +168,21 @@ mod component {
             // Classification is pure and only ever runs on a successfully
             // parsed account — every failure above returned with no verdict.
             let mut result = classify(&parsed.mint, &account);
+
+            // Holder concentration: best-effort, amber-only. When it cannot
+            // be computed the base verdict stands untouched and
+            // holder_concentration honestly stays in not_checked.
+            let concentration = fetch_concentration(&parsed.mint, &account, &fetcher);
+            emit(
+                PluginAction::Note,
+                PluginOutcome::Success,
+                if concentration.is_some() {
+                    "holder concentration assessed"
+                } else {
+                    "holder concentration unavailable (left in not_checked)"
+                },
+            );
+            apply_concentration(&mut result, concentration.as_ref());
 
             // Metadata is fetched AFTER the verdict is fixed and attached as
             // labeled untrusted data — it is structurally not a classify

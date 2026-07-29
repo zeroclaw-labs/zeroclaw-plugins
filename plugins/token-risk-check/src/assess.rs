@@ -572,3 +572,120 @@ fn read_borsh_string(bytes: &[u8], offset: &mut usize) -> Option<String> {
     *offset += len;
     Some(std::str::from_utf8(raw).ok()?.trim_end_matches('\0').to_string())
 }
+
+// ──────────────── holder concentration (amber-only, best-effort) ────────────────
+//
+// From `getTokenLargestAccounts`: the up-to-20 largest TOKEN ACCOUNTS — not
+// owners. LP vaults, exchange wallets, and contracts appear here too, so a
+// high share is a heuristic for dump risk, never proof; the reason text says
+// so. The signal is amber-only and best-effort: when it cannot be computed
+// (RPC failure, empty list, zero/unreadable supply, inconsistent snapshot)
+// the assessment simply leaves "holder_concentration" in not_checked — it
+// never fabricates a number and never changes the authorities/extensions
+// verdict, which remains the source of truth.
+
+/// Amber when the single largest token account exceeds this share (%).
+pub const TOP1_CONCENTRATION_AMBER_PCT: f64 = 50.0;
+/// Amber when the ten largest token accounts together exceed this share (%).
+pub const TOP10_CONCENTRATION_AMBER_PCT: f64 = 90.0;
+
+/// Successfully computed concentration shares, as % of total supply.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Concentration {
+    pub top1_pct: f64,
+    pub top10_pct: f64,
+}
+
+/// Transport seam for `getTokenLargestAccounts`, mocked in host tests.
+pub trait LargestAccountsFetcher {
+    fn fetch_largest_accounts(&self, mint: &str) -> Result<Value, String>;
+}
+
+/// The `getTokenLargestAccounts` request body for a mint.
+pub fn build_largest_accounts_request(mint: &str) -> Value {
+    serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "getTokenLargestAccounts",
+        "params": [mint]
+    })
+}
+
+/// Fetch the largest token accounts and compute concentration against the
+/// supply we already parsed from the mint account (never a second supply
+/// source). None on any failure — unassessed, not guessed.
+pub fn fetch_concentration(
+    mint: &str,
+    account: &MintAccount,
+    fetcher: &dyn LargestAccountsFetcher,
+) -> Option<Concentration> {
+    let response = fetcher.fetch_largest_accounts(mint).ok()?;
+    compute_concentration(&response, &account.supply)
+}
+
+/// Pure computation from a `getTokenLargestAccounts` response and the mint's
+/// raw supply. Amounts and supply are raw base units, so decimals cancel.
+/// None (unassessed) if: JSON-RPC error, empty account list, any unparseable
+/// amount, zero or unreadable supply, or the amounts sum to more than the
+/// supply (inconsistent snapshot) — partial data is never extrapolated.
+pub fn compute_concentration(response: &Value, supply: &str) -> Option<Concentration> {
+    if response.get("error").is_some() {
+        return None;
+    }
+    let supply: u128 = supply.parse().ok()?;
+    if supply == 0 {
+        return None;
+    }
+    let list = response.get("result")?.get("value")?.as_array()?;
+    if list.is_empty() {
+        return None;
+    }
+    let mut amounts: Vec<u128> = Vec::with_capacity(list.len());
+    for entry in list {
+        amounts.push(entry.get("amount")?.as_str()?.parse().ok()?);
+    }
+    if amounts.iter().sum::<u128>() > supply {
+        return None;
+    }
+    amounts.sort_unstable_by(|a, b| b.cmp(a));
+    let pct = |part: u128| (part as f64 / supply as f64) * 100.0;
+    Some(Concentration {
+        top1_pct: pct(amounts[0]),
+        top10_pct: pct(amounts.iter().take(10).sum::<u128>()),
+    })
+}
+
+/// Merge an (optionally) computed concentration into an already-classified
+/// result. Strictly additive and amber-only: it may append reasons and bump
+/// a green verdict to amber; it never touches red/extension logic, never
+/// removes a reason, and never downgrades a verdict. When concentration was
+/// not computed (None) the result is untouched and "holder_concentration"
+/// honestly stays in not_checked.
+pub fn apply_concentration(result: &mut AssessmentResult, concentration: Option<&Concentration>) {
+    let Some(c) = concentration else { return };
+
+    result.not_checked.retain(|s| s != "holder_concentration");
+    result.checks_performed.push("holder_concentration".to_string());
+
+    const CAVEAT: &str = "caveat: these are token accounts, not owners — large accounts may \
+                          be liquidity pools, exchanges, or contracts rather than one entity, \
+                          so concentration is a heuristic, not proof of dump risk";
+    let mut triggered = false;
+    if c.top1_pct > TOP1_CONCENTRATION_AMBER_PCT {
+        triggered = true;
+        result.reasons.push(format!(
+            "largest token account holds {:.1}% of supply ({CAVEAT})",
+            c.top1_pct
+        ));
+    }
+    if c.top10_pct > TOP10_CONCENTRATION_AMBER_PCT {
+        triggered = true;
+        result.reasons.push(format!(
+            "top 10 token accounts hold {:.1}% of supply ({CAVEAT})",
+            c.top10_pct
+        ));
+    }
+    if triggered && result.verdict == VERDICT_GREEN {
+        result.verdict = VERDICT_AMBER.to_string();
+    }
+}
