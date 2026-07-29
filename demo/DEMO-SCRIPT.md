@@ -12,8 +12,19 @@ are real, not illustrative.
 cp demo/.env.demo.example demo/.env.demo   # paste your Gemini key into it
 export ZEROCLAW_BIN=/path/to/zeroclaw-host/target/release/zeroclaw
 ./demo/run-demo.sh
+
+# Now set up the shell you will actually record from. run-demo.sh sources
+# .env.demo into its OWN process, so the key does not survive into this shell:
 export ZEROCLAW_CONFIG_DIR=~/.zeroclaw-demo   # the script prints the exact path
+set -a; . demo/.env.demo; set +a
+for s in spare spare2; do
+  export ZEROCLAW_providers__models__gemini__${s}__api_key="$ZEROCLAW_providers__models__gemini__default__api_key"
+done
 ```
+
+The `spare`/`spare2` mirroring is the same thing `run-demo.sh` does internally
+(fallback aliases never inherit the primary's key). Skip it and the rate-limit
+failover in note 2 below silently does nothing.
 
 Do all of that *off* camera; the take starts from a clean prompt. `run-demo.sh`
 is idempotent, so re-run it as often as you like between takes.
