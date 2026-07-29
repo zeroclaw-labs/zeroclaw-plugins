@@ -56,6 +56,15 @@ it. Start recording, count five slowly, scroll a little, hold, stop.
 
 ## Clip 02 — install · target 28s
 
+**First, off camera:** `run-demo.sh` has already installed both plugins, so
+recording `plugin install` straight after it fails with `Error: plugin
+'token-risk-check' is already loaded`. Remove it first so the install you film
+is real:
+
+```bash
+zeroclaw plugin remove token-risk-check
+```
+
 **On screen:** run the three commands, let each finish.
 
 ```bash
