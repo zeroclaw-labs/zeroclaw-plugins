@@ -1,12 +1,11 @@
 //! A ZeroClaw WIT tool plugin: `token-risk-check`.
 //!
-//! Assesses the on-chain risk of a Solana token mint (authorities, Token-2022
-//! extensions, LP status) before the agent trades or displays it. HALF 1
-//! stage: `execute` fetches the mint account over Solana JSON-RPC
-//! (`getAccountInfo`, jsonParsed) and returns the parsed facts with an
-//! explicit pre-classification "unknown" verdict; the red/yellow/green
-//! classifier is HALF 2. Every fetch/parse failure is fail-closed: an error
-//! result, never green.
+//! Assesses the on-chain risk of a Solana token mint before the agent trades
+//! or displays it: `execute` fetches the mint account over Solana JSON-RPC
+//! (`getAccountInfo`, jsonParsed), then classifies the authorities and
+//! Token-2022 extensions into a red/amber/green verdict with per-signal
+//! reasons. Every fetch/parse failure is fail-closed: an error result with no
+//! verdict, never green.
 //!
 //! The pure core lives in [`assess`] (no wasm/http deps) behind the
 //! `MintFetcher` seam, so it is host-tested with mocked RPC via a plain
@@ -31,7 +30,7 @@ mod component {
     use serde_json::Value;
 
     use crate::assess::{
-        build_account_info_request, fetch_and_parse, resolve_rpc_url, MintFetcher,
+        build_account_info_request, classify, fetch_and_parse, resolve_rpc_url, MintFetcher,
     };
     use exports::zeroclaw::plugin::plugin_info::Guest as PluginInfo;
     use exports::zeroclaw::plugin::tool::{Guest as Tool, ToolResult};
@@ -145,16 +144,23 @@ mod component {
                 }
             };
 
-            emit(PluginAction::Complete, PluginOutcome::Success, "mint fetched and parsed");
+            // Classification is pure and only ever runs on a successfully
+            // parsed account — every failure above returned with no verdict.
+            let result = classify(&parsed.mint, &account);
 
-            // HALF 1: explicit pre-classification verdict, per the fail-closed
-            // invariant — "unknown" until real checks run, never green.
-            let output = serde_json::json!({
-                "verdict": "unknown",
-                "note": "pre-classification: mint account fetched and parsed; risk checks not yet implemented",
-                "mint_account": account,
-            })
-            .to_string();
+            let output = match serde_json::to_string(&result) {
+                Ok(s) => s,
+                Err(e) => {
+                    emit(PluginAction::Fail, PluginOutcome::Failure, "serialization failed");
+                    return Ok(ToolResult {
+                        success: false,
+                        output: String::new(),
+                        error: Some(format!("serialization failed: {e}")),
+                    });
+                }
+            };
+
+            emit(PluginAction::Complete, PluginOutcome::Success, "mint assessed");
 
             Ok(ToolResult {
                 success: true,

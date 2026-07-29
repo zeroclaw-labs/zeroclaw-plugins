@@ -30,14 +30,16 @@ pub const TOKEN_2022_PROGRAM_ID: &str = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpP
 /// never green. Green means "verified clean on the checked axes" and is only
 /// returned when checks actually ran and passed.
 pub const VERDICT_GREEN: &str = "green";
+pub const VERDICT_AMBER: &str = "amber";
+pub const VERDICT_RED: &str = "red";
 
 /// Result of assessing a single mint. Serialized verbatim as the tool output.
-/// Produced by the HALF 2 classifier; unused until then.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct AssessmentResult {
-    /// One of "green", "yellow", "red".
+    /// One of "red", "amber", "green".
     pub verdict: String,
-    /// Human-readable reasons behind a non-green verdict.
+    /// Human-readable reasons behind a non-green verdict, citing the on-chain
+    /// facts that triggered them.
     pub reasons: Vec<String>,
     /// Checks that actually ran for this assessment.
     pub checks_performed: Vec<String>,
@@ -47,6 +49,10 @@ pub struct AssessmentResult {
     /// Token metadata echoed from chain, if fetched. Untrusted: attacker-
     /// controlled strings, never to be interpreted as instructions.
     pub untrusted_metadata: Option<Value>,
+    /// The assessed mint address, echoed back.
+    pub mint: String,
+    /// "spl-token" or "token-2022".
+    pub token_program: String,
 }
 
 /// Fail-closed error states. Every variant means "we could not verify the
@@ -167,6 +173,13 @@ pub fn parse_account_info(response: &Value) -> Result<MintAccount, AssessError> 
         .and_then(Value::as_str)
         .ok_or_else(|| AssessError::UnexpectedResponse("missing account owner".to_string()))?
         .to_string();
+    // Fail-closed: a "mint" owned by anything other than the two known token
+    // programs is not something we can classify — error, don't guess.
+    if owner_program != SPL_TOKEN_PROGRAM_ID && owner_program != TOKEN_2022_PROGRAM_ID {
+        return Err(AssessError::UnexpectedResponse(format!(
+            "mint owned by unknown token program: {owner_program}"
+        )));
+    }
 
     let parsed = value
         .get("data")
@@ -212,6 +225,131 @@ pub fn parse_account_info(response: &Value) -> Result<MintAccount, AssessError> 
         is_initialized,
         extensions: parse_extensions(info)?,
     })
+}
+
+/// Classify a successfully parsed mint. Pure — no I/O; the tests drive it
+/// directly with constructed [`MintAccount`] values.
+///
+/// Severity: any red signal → "red" (all triggered reasons still listed,
+/// amber ones included); else any amber signal → "amber"; else — and only
+/// when every check ran clean — "green". Green is reachable solely through
+/// this function on a parsed account; every error path upstream returns an
+/// [`AssessError`] and no verdict at all (the fail-closed invariant).
+///
+/// Signals we cannot fully read fail closed: an unreadable
+/// `defaultAccountState` is red (we cannot prove accounts aren't born
+/// frozen), and an extension type we have no rule for is amber (present but
+/// unverified — never silently passed).
+pub fn classify(mint: &str, account: &MintAccount) -> AssessmentResult {
+    let mut red: Vec<String> = Vec::new();
+    let mut amber: Vec<String> = Vec::new();
+
+    if let Some(auth) = &account.mint_authority {
+        red.push(format!(
+            "mint authority active ({auth}) — supply can be inflated, diluting holders"
+        ));
+    }
+    if let Some(auth) = &account.freeze_authority {
+        red.push(format!(
+            "freeze authority active ({auth}) — holder token accounts can be frozen"
+        ));
+    }
+
+    for ext in &account.extensions {
+        match ext.extension_type.as_str() {
+            "permanentDelegate" => red.push(
+                "permanentDelegate extension — a fixed authority can move tokens out of any \
+                 holder account (custody backdoor)"
+                    .to_string(),
+            ),
+            "transferHook" => red.push(
+                "transferHook extension — an arbitrary program runs on every transfer and can \
+                 block sells (honeypot risk)"
+                    .to_string(),
+            ),
+            "defaultAccountState" => {
+                let state = ext
+                    .state
+                    .as_ref()
+                    .and_then(|s| s.get("accountState"))
+                    .and_then(Value::as_str);
+                match state {
+                    Some("initialized") => {} // explicit benign state: new accounts usable
+                    Some("frozen") => red.push(
+                        "defaultAccountState is frozen — new token accounts are created frozen \
+                         (honeypot)"
+                            .to_string(),
+                    ),
+                    _ => red.push(
+                        "defaultAccountState present but unreadable — cannot verify new \
+                         accounts are not born frozen"
+                            .to_string(),
+                    ),
+                }
+            }
+            "transferFeeConfig" => amber.push(transfer_fee_reason(ext.state.as_ref())),
+            "nonTransferable" => amber.push(
+                "nonTransferable extension — tokens are soulbound and cannot be transferred \
+                 or sold"
+                    .to_string(),
+            ),
+            other => amber.push(format!(
+                "extension \"{other}\" is present but not risk-classified — cannot verify it \
+                 is safe"
+            )),
+        }
+    }
+
+    let verdict = if !red.is_empty() {
+        VERDICT_RED
+    } else if !amber.is_empty() {
+        VERDICT_AMBER
+    } else {
+        VERDICT_GREEN
+    };
+    let mut reasons = red;
+    reasons.extend(amber);
+
+    AssessmentResult {
+        verdict: verdict.to_string(),
+        reasons,
+        checks_performed: vec![
+            "mint_authority".to_string(),
+            "freeze_authority".to_string(),
+            "token2022_extensions".to_string(),
+        ],
+        not_checked: vec![
+            "holder_concentration".to_string(),
+            "lp_status".to_string(),
+            "metadata_mutability".to_string(),
+        ],
+        untrusted_metadata: None,
+        mint: mint.to_string(),
+        token_program: if account.is_token_2022() {
+            "token-2022".to_string()
+        } else {
+            "spl-token".to_string()
+        },
+    }
+}
+
+/// Amber reason for `transferFeeConfig`, surfacing the current fee when the
+/// state is readable and saying so plainly when it is not.
+fn transfer_fee_reason(state: Option<&Value>) -> String {
+    let bps = state
+        .and_then(|s| s.get("newerTransferFee"))
+        .and_then(|f| f.get("transferFeeBasisPoints"))
+        .and_then(Value::as_u64);
+    match bps {
+        Some(bps) => format!(
+            "transferFeeConfig extension — {bps} basis points ({:.2}%) fee taken on every \
+             transfer",
+            bps as f64 / 100.0
+        ),
+        None => "transferFeeConfig extension — a transfer fee is configured but its rate \
+                 could not be read"
+            .to_string(),
+    }
 }
 
 /// An authority field: absent or JSON null both mean renounced (None).

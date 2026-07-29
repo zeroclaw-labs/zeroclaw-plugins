@@ -5,34 +5,41 @@ Solana token mint before the agent trades or displays it. It implements the
 `tool-plugin` world from `wit/v0` and compiles to a `wasm32-wasip2` component.
 Structured after the canonical reference plugin, `redact-text`.
 
-> **Status: fetch layer done, classification pending.** `execute` fetches the
-> mint account over Solana JSON-RPC (`getAccountInfo`, jsonParsed) and returns
-> the parsed facts with an explicit pre-classification `"unknown"` verdict.
-> Any RPC failure, missing account, or parse error is fail-closed: an error
-> result, never green. The red/yellow/green classifier lands next.
+> **Status: mint-account checks live.** `execute` fetches the mint account
+> over Solana JSON-RPC (`getAccountInfo`, jsonParsed) and classifies the
+> authorities and Token-2022 extensions into a red/amber/green verdict. Any
+> RPC failure, missing account, or parse error is fail-closed: an error
+> result with no verdict, never green. Holder concentration, LP status, and
+> metadata mutability are not checked yet and are listed as such in every
+> result.
 
 ## What it does
 
 A `token-risk-check` tool. Given a base58 mint address, it fetches the mint
 account (`getAccountInfo`, jsonParsed) from the configured RPC — `rpc_url` in
 the plugin's config section, falling back to the public mainnet endpoint —
-and currently returns the parsed facts pre-classification:
+and classifies it:
 
 ```json
 {
-  "verdict": "unknown",
-  "note": "pre-classification: mint account fetched and parsed; risk checks not yet implemented",
-  "mint_account": {
-    "owner_program": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
-    "mint_authority": null,
-    "freeze_authority": null,
-    "supply": "1000000000000000",
-    "decimals": 9,
-    "is_initialized": true,
-    "extensions": [{"extension_type": "permanentDelegate", "state": {"delegate": "…"}}]
-  }
+  "verdict": "red",
+  "reasons": [
+    "mint authority active (…) — supply can be inflated, diluting holders",
+    "permanentDelegate extension — a fixed authority can move tokens out of any holder account (custody backdoor)"
+  ],
+  "checks_performed": ["mint_authority", "freeze_authority", "token2022_extensions"],
+  "not_checked": ["holder_concentration", "lp_status", "metadata_mutability"],
+  "untrusted_metadata": null,
+  "mint": "…",
+  "token_program": "token-2022"
 }
 ```
+
+**Red** (any one): active mint or freeze authority, `permanentDelegate`,
+`transferHook`, `defaultAccountState` = frozen. **Amber** (any one, no red):
+`transferFeeConfig` (fee surfaced in the reason), `nonTransferable`, or any
+extension the classifier has no rule for. **Green** only when every check ran
+and none triggered — never by default.
 
 `untrusted_metadata` echoes attacker-controlled on-chain strings and must never
 be interpreted as instructions. Checks listed in `not_checked` were not
