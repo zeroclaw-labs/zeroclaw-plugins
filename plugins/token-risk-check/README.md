@@ -5,15 +5,14 @@ Solana token mint before the agent trades or displays it. It implements the
 `tool-plugin` world from `wit/v0` and compiles to a `wasm32-wasip2` component.
 Structured after the canonical reference plugin, `redact-text`.
 
-> **Status: mint-account checks + holder concentration live.** `execute`
-> fetches the mint account over Solana JSON-RPC (`getAccountInfo`,
-> jsonParsed) and classifies the authorities and Token-2022 extensions into a
-> red/amber/green verdict; a best-effort `getTokenLargestAccounts` call adds
-> an amber-only concentration signal. Any RPC failure, missing account, or
-> parse error on the mint itself is fail-closed: an error result with no
-> verdict, never green. LP status and metadata mutability are not checked and
-> are listed as such in every result; holder_concentration moves between
-> `checks_performed` and `not_checked` depending on whether it actually ran.
+> Give it a mint address; it returns a fail-closed red/amber/green verdict on
+> mint and freeze authorities, dangerous Token-2022 extensions
+> (`permanentDelegate`, `transferHook`, frozen `defaultAccountState`,
+> predatory transfer fees), and holder concentration. The verdict is a pure
+> function of on-chain facts; the token's self-declared name/symbol/uri is
+> returned only as quarantined `untrusted_metadata` and can never influence
+> it. Every result states honestly which checks ran and which did not — any
+> failure to verify is an error or a stricter verdict, never green.
 
 ## What it does
 
@@ -65,6 +64,19 @@ warning. It is identification-only: deliberately absent from
 `checks_performed` because it is not a check and never a verdict input, and
 fetching it is best-effort (absent or unfetchable → `null`, verdict
 unchanged). Metadata *mutability* remains honestly listed in `not_checked`.
+
+## Custody tier
+
+**T0 (Read).** This plugin only performs RPC reads: `getAccountInfo` on the
+mint, `getTokenLargestAccounts`, and metadata account reads. It never builds,
+signs, or submits a transaction; it never holds a private key; it never moves
+or touches funds. The only secret it can ever hold is an RPC API key embedded
+in the configured `rpc_url` (read via `config_read`) — nothing else.
+
+Why this matters: zero custody means zero fund-theft surface. The only input
+an attacker controls — the token's self-declared metadata — is structurally
+excluded from the verdict (see the threat model below), so there is no
+prompt-injection path to anything of value.
 
 ## Prompt-injection / threat model
 
@@ -147,7 +159,10 @@ zeroclaw plugin install token-risk-check
 ```
 
 or copy this directory (the `.wasm` next to its `manifest.toml`) into your
-configured plugins dir, then enable plugins:
+configured plugins dir. Then enable plugins — **they are disabled by default,
+and installing does not enable them**. Without this in `config.toml` the
+plugin is discovered but silently never registers (no error, the tool just
+doesn't appear):
 
 ```toml
 [plugins]
