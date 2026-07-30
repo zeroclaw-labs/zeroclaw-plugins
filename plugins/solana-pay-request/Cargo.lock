@@ -287,7 +287,7 @@ checksum = "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
 [[package]]
 name = "nanosol"
 version = "0.1.0"
-source = "git+https://github.com/Fianko-codes/zeroclaw-solana.git?rev=989cd0d3bd25ce6a2d796f72c0dc6a4ae56d989f#989cd0d3bd25ce6a2d796f72c0dc6a4ae56d989f"
+source = "git+https://github.com/Fianko-codes/zeroclaw-solana.git?rev=2093879cd1cc28c6182386706d70b8a56b3b07be#2093879cd1cc28c6182386706d70b8a56b3b07be"
 dependencies = [
  "base64",
  "bs58",

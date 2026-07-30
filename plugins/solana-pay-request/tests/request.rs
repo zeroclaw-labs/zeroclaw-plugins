@@ -208,3 +208,75 @@ fn empty_config_is_a_safe_zero_network_default() {
     args.label = None;
     assert!(build_request(args, &config).is_ok());
 }
+
+/// The cross-plugin contract with `solana-pay-confirm`.
+///
+/// That plugin never accepts a reference: it re-derives one from the same four
+/// invoice fields and scans the cluster for it. The frozen vector below is
+/// asserted from both sides — see
+/// `plugins/solana-pay-confirm/tests/golden_reference.rs`,
+/// `the_derived_reference_matches_the_frozen_cross_plugin_vector` — so a change
+/// to the derivation, the canonical amount, or the framing fails a test in both
+/// plugins rather than silently making every request unconfirmable.
+#[test]
+fn golden_reference_vector_is_shared_with_solana_pay_confirm() {
+    const CONFIRM_RECIPIENT: &str = "FnHyam9w4NZoWR6mKN1CuGBritdsEWZQa4Z4oawLZGxa";
+    const GOLDEN_REFERENCE: &str = "3FrMXf9ucXff2biCaz5ehKYr1yguHjWvwLcy8ALDVEnw";
+
+    let config = config(&[
+        ("mint_aliases", &format!("USDC={USDC}")),
+        ("mint_decimals", "USDC=6"),
+        ("allowed_recipients", CONFIRM_RECIPIENT),
+    ]);
+    let args = RequestArgs {
+        recipient: CONFIRM_RECIPIENT.to_string(),
+        amount: "1.5".to_string(),
+        spl_token: Some("USDC".to_string()),
+        invoice_id: "412".to_string(),
+        label: None,
+        message: None,
+        memo: None,
+    };
+    let output = build_request(args, &config).expect("build request");
+
+    assert_eq!(output.reference, GOLDEN_REFERENCE);
+    assert_eq!(
+        output.url,
+        format!(
+            "solana:{CONFIRM_RECIPIENT}?amount=1.5&spl-token={USDC}&reference={GOLDEN_REFERENCE}"
+        )
+    );
+
+    // A wallet reads the reference out of the URL; that is the exact value the
+    // confirm plugin derives from the invoice alone.
+    let from_url = output
+        .url
+        .split("reference=")
+        .nth(1)
+        .expect("reference query parameter")
+        .split('&')
+        .next()
+        .expect("reference value");
+    assert_eq!(from_url, GOLDEN_REFERENCE);
+
+    // Trailing-zero and leading-zero spellings of the same amount canonicalise
+    // to the same reference, so "1.50" and "1.5" are one invoice, not two.
+    for spelling in ["1.50", "1.500000", "01.5"] {
+        let args = RequestArgs {
+            recipient: CONFIRM_RECIPIENT.to_string(),
+            amount: spelling.to_string(),
+            spl_token: Some("USDC".to_string()),
+            invoice_id: "412".to_string(),
+            label: None,
+            message: None,
+            memo: None,
+        };
+        assert_eq!(
+            build_request(args, &config)
+                .expect("build request")
+                .reference,
+            GOLDEN_REFERENCE,
+            "amount spelling {spelling} derived a different reference"
+        );
+    }
+}
