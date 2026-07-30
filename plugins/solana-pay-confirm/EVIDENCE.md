@@ -1,4 +1,6 @@
-# `solana-pay-confirm` — M5 results
+# `solana-pay-confirm` — evidence
+
+Validation record for this plugin: what was run, what it produced, and what is *not* proven. Failed commands are preserved rather than removed.
 
 Evidence for the third and final component of the ZeroClaw Solana submission,
 which closes the payment path: **request → build → confirm**.
@@ -7,7 +9,7 @@ Every claim below is a command that was executed. Where something was *not*
 achieved, it is stated as not achieved, with the blocker and the exact steps that
 would finish it.
 
-## 1. Environment
+### 1. Environment
 
 ```text
 rustc          1.96.1 (31fca3adb 2026-06-26)   # the pinned CI toolchain
@@ -21,7 +23,7 @@ plugin source  c26da355c1243bc75cf6b99f2353e007b3742651
 All three plugins in this fork are pinned to the same immutable `nanosol`
 revision, so the reference derivation cannot differ between request and confirm.
 
-## 2. Full validation matrix, on the pinned toolchain
+### 2. Full validation matrix, on the pinned toolchain
 
 Run through the repository's own validator (`tools/ci/validate_components.sh`),
 which is the same script the `Validate Required Gate` job runs. It snapshots the
@@ -64,7 +66,7 @@ python3 -m unittest discover -s tools/ci/tests → 36 tests, OK
 `registry.json` was not edited. `solana-pay-confirm@0.1.0` is reported as a
 pending unpublished source, exactly like the other two components.
 
-## 3. Real host, real component, real mainnet (read-only)
+### 3. Real host, real component, real mainnet (read-only)
 
 The authoritative artifact and its manifest were copied into a disposable
 ZeroClaw 0.8.3 plugin directory. Host discovery:
@@ -134,7 +136,7 @@ What this run establishes, in the real host with the real component over the rea
 5. Host tool-I/O persistence was disabled; component logs contained only bounded
    phase labels — no arguments, invoice text, URL, signature, or response bodies.
 
-## 4. Verification against a real finalized mainnet payment
+### 4. Verification against a real finalized mainnet payment
 
 `tests/fixtures/mainnet_usdc_payment.json` is a verbatim capture of the public
 mainnet-beta responses for
@@ -176,7 +178,7 @@ implementation** of Solana's PDA derivation, including Ed25519 point
 decompression for the off-curve check. Agreement with `nanosol` is therefore a
 cross-check against a real on-chain ATA, not self-consistency.
 
-## 5. Cross-plugin reference binding
+### 5. Cross-plugin reference binding
 
 The frozen vector, asserted from both plugins' suites:
 
@@ -199,7 +201,7 @@ url         solana:FnHy…ZGxa?amount=1.5&spl-token=EPjF…Dt1v&reference=3FrM�
 
 **Independent tie to a real on-chain payment.** The M3 devnet acceptance
 transaction — public, finalized, and recorded in
-`plugins/spl-transfer-build/RESULTS.md` — embeds the reference
+`plugins/spl-transfer-build/EVIDENCE.md` — embeds the reference
 `GtaJ8kXf6UFmNKNkeYNhADCMFkxzShLCrsbvoJDkwK9J` in its `TransferChecked` account
 list. Deriving from that invoice's four fields
 (`ERajJRamvLoNyDmboTE6JjR4rPp16ZHdTwcnqcMz7kjH`,
@@ -208,7 +210,7 @@ list. Deriving from that invoice's four fields
 plugin performs therefore matches a reference that is already attached to a real
 settled payment on chain.
 
-## 6. Not achieved: a first-party live payment confirmed end to end
+### 6. Not achieved: a first-party live payment confirmed end to end
 
 The plan's first evidence item — request a payment on devnet, pay it from a
 disposable wallet, and watch `solana_pay_confirm` return `paid: true` — **was not
@@ -223,7 +225,7 @@ assumed:
    getFirstAvailableBlock → 479066362
    ```
    The transaction remains publicly documented and explorer-linked in
-   `spl-transfer-build/RESULTS.md`; an archival endpoint would serve it.
+   `spl-transfer-build/EVIDENCE.md`; an archival endpoint would serve it.
 2. **A new devnet payment needs funding, and the faucet refused.** Airdrops of
    0.2, 0.05, and 0.01 SOL to a fresh disposable keypair all returned
    `airdrop request failed. This can happen when the rate limit is reached.`
@@ -256,7 +258,7 @@ reconciliation paths are proven against real mainnet data and a real host; a
 first-party `paid: true` on a payment this project itself created is not yet
 recorded.** No test or document in this repository claims otherwise.
 
-## 7. Security audit
+### 7. Security audit
 
 `M5_SECURITY_AUDIT.md` in the workspace root records a read-only audit of this
 component and the `nanosol` read delta, with an adversary model per trust
@@ -278,7 +280,7 @@ this tree, each with a regression test:
 
 The counts in §2 are post-remediation.
 
-## 8. Failed commands, preserved
+### 8. Failed commands, preserved
 
 Development failures are recorded so they are not misreported as passes:
 

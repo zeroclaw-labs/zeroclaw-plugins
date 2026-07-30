@@ -472,7 +472,7 @@ an external Solana client. Record only public addresses, the public signature,
 the decoded shape, and confirmation; never commit the keypair or its seed.
 
 The exact M3 acceptance run, public signature, component hash, and bounded host
-transcript are recorded in `RESULTS.md` after execution.
+transcript are recorded in `EVIDENCE.md` after execution.
 
 The preserved acceptance fixture used sender
 `DY8kZcYtLkPBsRgu9BGfRirKsK3Jnf1eDn8LyYiJkxw9`, disposable legacy mint
@@ -504,7 +504,7 @@ sampled wallet's USDC on chain.
 
 Nothing was signed and nothing was submitted; no private key for any mainnet
 address involved exists in this project. Full record, exact addresses, and
-reproduction steps: [`MAINNET_RESULTS.md`](./MAINNET_RESULTS.md).
+reproduction steps: [`EVIDENCE.md`, Part 3](./EVIDENCE.md#part-3--live-mainnet-beta-read-only-validation).
 
 ## Known limitations
 
