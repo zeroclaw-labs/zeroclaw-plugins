@@ -642,6 +642,7 @@ fn confirm_payment_observed(
         None => unpaid_output(
             &expected,
             candidates.len(),
+            config.max_signatures_scanned,
             first_rejection,
             alias,
             invoice_id,
@@ -875,15 +876,18 @@ fn paid_output(
 fn unpaid_output(
     expected: &ExpectedPayment,
     scanned: usize,
+    window: u16,
     rejection: Option<Rejection>,
     alias: Option<&str>,
     invoice_id: &str,
 ) -> Result<ConfirmOutput, ConfirmError> {
     let expected_ui =
         format_ui_amount(expected.raw_amount, expected.decimals).map_err(amount_error)?;
+    // With no candidates the honest statement is how wide the window was, not
+    // how many transactions came back; with candidates it is what they were.
     let reason = match rejection {
         None => format!(
-            "no transaction referencing this invoice was found in the {scanned} most recent signatures for its reference"
+            "no transaction referencing this invoice was found in the most recent {window} signatures for its reference"
         ),
         Some(rejection) => format!(
             "scanned {scanned} candidate transaction(s); none confirmed this invoice: {}",
