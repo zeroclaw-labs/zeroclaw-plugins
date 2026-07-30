@@ -486,6 +486,26 @@ after which independent balance reads returned recipient `1.25` and sender
 `98.75`. The plugin received only the sender public key; it never received the
 disposable signing key.
 
+## Mainnet read-only validation
+
+Because this plugin has no signing path and no submission path, its read paths
+can be exercised against `mainnet-beta` with zero risk — and they have been.
+Live against mainnet through the real ZeroClaw 0.8.3 WASM host: a real USDC
+transfer was constructed, verified, and **simulated on mainnet with `err: null`**
+(`unitsConsumed: 22853`), then independently decoded by `solders` and
+independently re-simulated; and a real mainnet Token-2022 mint (PYUSD, carrying
+`transferFeeConfig`, `permanentDelegate`, `transferHook`, and confidential
+transfer) was **refused even with `allow_token_2022=true`**, because the live TLV
+extension list falls outside the supported safe subset.
+
+Independent confirmation of the derived ATAs came free: the canonical associated
+token account that `nanosol` derives is the account that actually holds the
+sampled wallet's USDC on chain.
+
+Nothing was signed and nothing was submitted; no private key for any mainnet
+address involved exists in this project. Full record, exact addresses, and
+reproduction steps: [`MAINNET_RESULTS.md`](./MAINNET_RESULTS.md).
+
 ## Known limitations
 
 - One SPL-token recipient and one configured sender per invocation.
