@@ -525,3 +525,8 @@ authority arrangement and performs no nonce creation, withdrawal, or authority
 management. Signing and submission are still external, and no private key ever
 enters the plugin. To ship without durable support, use the frozen
 `m35-security-freeze-95e10dc` tag.
+
+## License
+
+Dual-licensed under either [MIT](./LICENSE-MIT) or [Apache-2.0](./LICENSE-APACHE),
+at your option — matching the reference plugins in this repository.

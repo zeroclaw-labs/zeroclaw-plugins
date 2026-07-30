@@ -221,3 +221,8 @@ Then point a disposable `[providers.models.custom.<alias>]` at
 `http://127.0.0.1:38173/v1`, invoke the configured agent with the worked-example
 request, and expect the final response to begin with `M2_SMOKE_OK`. No external
 network service is involved.
+
+## License
+
+Dual-licensed under either [MIT](./LICENSE-MIT) or [Apache-2.0](./LICENSE-APACHE),
+at your option — matching the reference plugins in this repository.
