@@ -373,9 +373,7 @@ fn transfer_fee_bps(state: Option<&Value>) -> Option<u64> {
 
 /// An authority field: absent or JSON null both mean renounced (None).
 fn optional_pubkey(info: &Value, key: &str) -> Option<String> {
-    info.get(key)
-        .and_then(Value::as_str)
-        .map(str::to_string)
+    info.get(key).and_then(Value::as_str).map(str::to_string)
 }
 
 /// Parse the Token-2022 `extensions` array. Absent means a classic mint
@@ -455,6 +453,7 @@ pub fn build_account_info_request_base64(address: &str) -> Value {
 /// 1. an on-chain Token-2022 `tokenMetadata` extension (already parsed — no RPC);
 /// 2. the account a `metadataPointer` extension points to (if external);
 /// 3. the Metaplex metadata PDA derived from the mint.
+///
 /// Every failure path is None — never an error, never a verdict change.
 pub fn fetch_metadata(
     mint: &str,
@@ -570,7 +569,12 @@ fn read_borsh_string(bytes: &[u8], offset: &mut usize) -> Option<String> {
     *offset += 4;
     let raw = bytes.get(*offset..*offset + len)?;
     *offset += len;
-    Some(std::str::from_utf8(raw).ok()?.trim_end_matches('\0').to_string())
+    Some(
+        std::str::from_utf8(raw)
+            .ok()?
+            .trim_end_matches('\0')
+            .to_string(),
+    )
 }
 
 // ──────────────── holder concentration (amber-only, best-effort) ────────────────
@@ -665,7 +669,9 @@ pub fn apply_concentration(result: &mut AssessmentResult, concentration: Option<
     let Some(c) = concentration else { return };
 
     result.not_checked.retain(|s| s != "holder_concentration");
-    result.checks_performed.push("holder_concentration".to_string());
+    result
+        .checks_performed
+        .push("holder_concentration".to_string());
 
     const CAVEAT: &str = "caveat: these are token accounts, not owners — large accounts may \
                           be liquidity pools, exchanges, or contracts rather than one entity, \

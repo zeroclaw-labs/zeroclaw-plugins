@@ -132,7 +132,11 @@ mod component {
             let parsed: ExecuteArgs = match serde_json::from_str(&args) {
                 Ok(a) => a,
                 Err(e) => {
-                    emit(PluginAction::Fail, PluginOutcome::Failure, "invalid arguments");
+                    emit(
+                        PluginAction::Fail,
+                        PluginOutcome::Failure,
+                        "invalid arguments",
+                    );
                     return Ok(ToolResult {
                         success: false,
                         output: String::new(),
@@ -156,7 +160,11 @@ mod component {
             let account = match fetch_and_parse(&parsed.mint, &fetcher) {
                 Ok(a) => a,
                 Err(e) => {
-                    emit(PluginAction::Fail, PluginOutcome::Failure, "mint fetch failed");
+                    emit(
+                        PluginAction::Fail,
+                        PluginOutcome::Failure,
+                        "mint fetch failed",
+                    );
                     return Ok(ToolResult {
                         success: false,
                         output: String::new(),
@@ -202,7 +210,11 @@ mod component {
             let output = match serde_json::to_string(&result) {
                 Ok(s) => s,
                 Err(e) => {
-                    emit(PluginAction::Fail, PluginOutcome::Failure, "serialization failed");
+                    emit(
+                        PluginAction::Fail,
+                        PluginOutcome::Failure,
+                        "serialization failed",
+                    );
                     return Ok(ToolResult {
                         success: false,
                         output: String::new(),
@@ -211,7 +223,11 @@ mod component {
                 }
             };
 
-            emit(PluginAction::Complete, PluginOutcome::Success, "mint assessed");
+            emit(
+                PluginAction::Complete,
+                PluginOutcome::Success,
+                "mint assessed",
+            );
 
             Ok(ToolResult {
                 success: true,
