@@ -263,17 +263,42 @@ can make received differ from sent in ways this tool would then have to model.
 
 The operator chooses the endpoint. The plugin embeds no keyed URL, makes one
 request per read with no retry, accepts HTTP 200 only, follows no redirect, caps
-the body before JSON parsing, requires JSON-RPC 2.0 with the matching numeric id
-(each candidate read carries its own id), and rejects errors and malformed
-envelopes. Only the fields needed for verification are kept: slot, raw bytes,
-`meta.err`, and pre/post token balances. Logs, inner instructions, rewards, and
-fee details are discarded, so **no endpoint prose can reach tool output** — every
-`reason` string is this plugin's own bounded sentence.
+each body before JSON parsing, bounds the **total** bytes read across a whole
+call (1 MiB, so a full scan window cannot become unbounded parsing), requires
+JSON-RPC 2.0 with the matching numeric id (each candidate read carries its own
+id), and rejects errors and malformed envelopes. Only the fields needed for
+verification are kept: slot, raw bytes, `meta.err`, and pre/post token balances.
+Logs, inner instructions, rewards, and fee details are discarded, so **no
+endpoint prose can reach tool output** — every `reason` string is this plugin's
+own bounded sentence.
 
-RPC remains a trust boundary. A dishonest endpoint can hide a payment (a
-false negative, i.e. denial of service) or lie about mint state. Two-endpoint
-agreement, strict parsing, local decoding, local ATA derivation, and the balance
-reconciliation reduce the consequences; they do not make the endpoint trusted.
+RPC is a trust boundary, and it is worth being exact about how far it reaches:
+
+> **A single dishonest endpoint can forge a positive confirmation.** Every input
+> to the verdict — the transaction bytes, the reported commitment, and the
+> balance metadata — arrives from the endpoint. An endpoint willing to fabricate
+> all three consistently can make an unpaid invoice read as paid. It can equally
+> hide a real payment, which is the milder failure (denial of service).
+
+Signature verification would not close this. The forged transaction never has to
+be real, so an attacker can sign fabricated bytes with a key they own; and the
+balance delta — the check that makes this tool worth using — is the endpoint's
+word regardless. Verifying Ed25519 in-plugin would add a dependency and buy
+nothing against this adversary, so the plugin does not pretend to.
+
+What actually reduces it, in order of strength:
+
+1. **`rpc_url_secondary`** — two independently operated endpoints must return
+   the same transaction, so one compromised provider is no longer sufficient.
+2. **The returned `signature` is independently checkable.** Every paid verdict
+   names its transaction, so an operator or an SOP can verify it on an explorer
+   or a third endpoint without trusting this tool at all.
+3. Strict parsing, local decoding, local ATA re-derivation, and the balance
+   reconciliation, which together mean a *partly* dishonest endpoint — one that
+   lies about one field while relaying the rest — is caught.
+
+None of that makes an untrusted endpoint trusted. Choose the endpoint as
+carefully as you would choose a payment processor.
 
 Anyone can attach a reference key to their own transaction, so the reference is
 findable but not exclusive. Two consequences, both handled:
@@ -393,8 +418,13 @@ golden-tested byte-for-byte against the official `solana-message`,
   with unrelated transactions can require manual reconciliation.
 - No cursor, no watcher, no notification suppression, and no per-day limits —
   the plugin is stateless by construction.
-- The RPC endpoint remains an operator-managed trust dependency; two-endpoint
-  agreement narrows it but does not remove it.
+- A call reads at most 1 MiB in total; endpoints that answer every read at
+  maximum size make the call refuse rather than scan further.
+- Transaction signatures are not verified in-plugin — see the trust section for
+  why that would not help against the adversary who could exploit it.
+- The RPC endpoint remains an operator-managed trust dependency; a single
+  dishonest endpoint can forge a positive confirmation, and two-endpoint
+  agreement narrows that without removing it.
 
 ## License
 

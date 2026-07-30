@@ -48,6 +48,13 @@ pub const DEFAULT_SIGNATURES_SCANNED: u16 = 10;
 /// Hard ceiling on the scan window. Each candidate costs one `getTransaction`
 /// per configured endpoint, so the window is bounded by code, not only config.
 pub const MAX_SIGNATURES_SCANNED: u16 = 25;
+/// Total response bytes one call will accept across every read.
+///
+/// Each individual read is already capped, but a full scan window against two
+/// endpoints multiplies that cap by fifty. This budget bounds the whole call, so
+/// an endpoint that answers every read at its maximum size cannot turn a bounded
+/// window into unbounded parsing inside the host's fuel limit.
+pub const MAX_TOTAL_RESPONSE_BYTES: usize = 1_024 * 1_024;
 
 const MAX_AMOUNT_BYTES: usize = 64;
 const MAX_INVOICE_BYTES: usize = 128;
@@ -429,6 +436,7 @@ pub enum ConfirmError {
     Token2022Disabled,
     Token2022ExtensionsDenied,
     EndpointDisagreement,
+    ReadBudgetExhausted,
     OutputTooLong,
     OutputSerialization,
 }
@@ -448,6 +456,7 @@ impl ConfirmError {
             Self::MintState(_) => "invalid_mint_state",
             Self::Token2022Disabled | Self::Token2022ExtensionsDenied => "token_2022_policy",
             Self::EndpointDisagreement => "endpoint_disagreement",
+            Self::ReadBudgetExhausted => "read_budget_exhausted",
             Self::OutputTooLong | Self::OutputSerialization => "output_failure",
         }
     }
@@ -484,6 +493,9 @@ impl fmt::Display for ConfirmError {
                 .write_str("Token-2022 mint extensions are outside the supported safe subset"),
             Self::EndpointDisagreement => formatter.write_str(
                 "configured RPC endpoints returned different data for the same signature; refusing rather than trusting either",
+            ),
+            Self::ReadBudgetExhausted => formatter.write_str(
+                "configured endpoints returned more data than one confirmation may read; refusing rather than continuing a partial scan",
             ),
             Self::OutputTooLong => formatter.write_str("tool output exceeds the 4000-byte limit"),
             Self::OutputSerialization => formatter.write_str("could not serialize tool output"),
@@ -566,6 +578,9 @@ fn confirm_payment_observed(
         ));
     }
 
+    // One byte budget covers every read this call makes, across both endpoints.
+    let mut budget = ReadBudget::new();
+
     // Decimals come from the mint account, never from config or arguments: this
     // is a money path, and the RPC call is already being made.
     observer(ExecutionPhase::MintRpc);
@@ -574,6 +589,7 @@ fn confirm_payment_observed(
         &config.rpc_url,
         &get_account_info_request(MINT_RPC_ID, &mint),
         MAX_RPC_RESPONSE_BYTES,
+        &mut budget,
     )?;
     let account = parse_account_info_response(&mint_body, MINT_RPC_ID)?;
     let mint_info = parse_mint_account(&account)
@@ -616,6 +632,7 @@ fn confirm_payment_observed(
             config.min_commitment,
         ),
         MAX_RPC_RESPONSE_BYTES,
+        &mut budget,
     )?;
     let candidates = parse_signatures_for_address_response(&signatures_body, SIGNATURES_RPC_ID)?;
 
@@ -624,7 +641,15 @@ fn confirm_payment_observed(
     let mut verified: Vec<VerifiedPayment> = Vec::new();
     let mut first_rejection: Option<Rejection> = None;
     for (index, candidate) in candidates.iter().enumerate() {
-        match verify_candidate(candidate, index, &expected, config, transport, observer) {
+        match verify_candidate(
+            candidate,
+            index,
+            &expected,
+            config,
+            transport,
+            observer,
+            &mut budget,
+        ) {
             Ok(payment) => verified.push(payment),
             Err(CandidateError::Rejected(rejection)) => {
                 first_rejection.get_or_insert(rejection);
@@ -670,12 +695,17 @@ fn verify_candidate(
     config: &ConfirmConfig,
     transport: &impl RpcTransport,
     observer: &mut impl FnMut(ExecutionPhase),
+    budget: &mut ReadBudget,
 ) -> Result<VerifiedPayment, CandidateError> {
-    // Cheap rejections first: neither costs a `getTransaction`.
-    let confirmation_status = candidate
+    // Cheap rejections first: neither costs a `getTransaction`. Both are checked
+    // again inside `verify_record`, which is the authority — this is only an
+    // optimisation, never the gate.
+    if !candidate
         .confirmation_status
-        .filter(|status| status.satisfies(expected.min_commitment))
-        .ok_or(CandidateError::Rejected(Rejection::CommitmentTooWeak))?;
+        .is_some_and(|status| status.satisfies(expected.min_commitment))
+    {
+        return Err(CandidateError::Rejected(Rejection::CommitmentTooWeak));
+    }
     if candidate.failed {
         return Err(CandidateError::Rejected(Rejection::TransactionFailed));
     }
@@ -683,12 +713,12 @@ fn verify_candidate(
     let request_id = TRANSACTION_RPC_ID_BASE.saturating_add(index as u64);
     let request = get_transaction_request(request_id, &candidate.signature, config.min_commitment);
     observer(ExecutionPhase::TransactionRpc);
-    let record = fetch_transaction(transport, &config.rpc_url, &request, request_id)?;
+    let record = fetch_transaction(transport, &config.rpc_url, &request, request_id, budget)?;
     if let Some(secondary) = &config.rpc_url_secondary {
         // A pure read is cheap to duplicate, and requiring agreement means a
         // single dishonest endpoint cannot forge a confirmation.
-        let cross_check =
-            fetch_transaction(transport, secondary, &request, request_id).map_err(|error| {
+        let cross_check = fetch_transaction(transport, secondary, &request, request_id, budget)
+            .map_err(|error| {
                 // One endpoint listing a signature the other has never seen is
                 // itself a disagreement, not a generic endpoint fault.
                 match error {
@@ -703,19 +733,26 @@ fn verify_candidate(
         }
     }
 
-    verify_record(candidate, &record, confirmation_status, expected)
-        .map_err(CandidateError::Rejected)
+    verify_record(candidate, &record, expected).map_err(CandidateError::Rejected)
 }
 
 /// Verify one settled transaction against the invoice, from its raw bytes and
 /// its balance metadata. No `jsonParsed` interpretation is involved.
+///
+/// Every gate lives here, including the commitment gate: the reported
+/// commitment is read from the candidate rather than accepted as an argument, so
+/// no caller of this function — now or later — can hand it a level the endpoint
+/// did not report.
 pub fn verify_record(
     candidate: &SignatureRecord,
     record: &TransactionRecord,
-    confirmation_status: CommitmentLevel,
     expected: &ExpectedPayment,
 ) -> Result<VerifiedPayment, Rejection> {
-    if record.failed {
+    let confirmation_status = candidate
+        .confirmation_status
+        .filter(|status| status.satisfies(expected.min_commitment))
+        .ok_or(Rejection::CommitmentTooWeak)?;
+    if candidate.failed || record.failed {
         return Err(Rejection::TransactionFailed);
     }
     if record.slot != candidate.slot {
@@ -944,20 +981,61 @@ fn fetch_transaction(
     endpoint: &str,
     request: &str,
     request_id: u64,
+    budget: &mut ReadBudget,
 ) -> Result<TransactionRecord, ConfirmError> {
-    let body = rpc_post(transport, endpoint, request, MAX_TRANSACTION_RESPONSE_BYTES)?;
+    let body = rpc_post(
+        transport,
+        endpoint,
+        request,
+        MAX_TRANSACTION_RESPONSE_BYTES,
+        budget,
+    )?;
     parse_transaction_response(&body, request_id).map_err(ConfirmError::from)
+}
+
+/// The remaining response-byte allowance for one tool call.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ReadBudget {
+    remaining: usize,
+}
+
+impl ReadBudget {
+    const fn new() -> Self {
+        Self {
+            remaining: MAX_TOTAL_RESPONSE_BYTES,
+        }
+    }
+
+    /// The limit handed to the transport: never more than what is left, so the
+    /// transport refuses an oversize body before it is buffered.
+    const fn allowance(self, ceiling: usize) -> usize {
+        if ceiling < self.remaining {
+            ceiling
+        } else {
+            self.remaining
+        }
+    }
 }
 
 fn rpc_post(
     transport: &impl RpcTransport,
     endpoint: &str,
     request: &str,
-    maximum_bytes: usize,
+    ceiling: usize,
+    budget: &mut ReadBudget,
 ) -> Result<String, ConfirmError> {
-    transport
-        .post(endpoint, request, maximum_bytes)
-        .map_err(ConfirmError::from)
+    let allowance = budget.allowance(ceiling);
+    if allowance == 0 {
+        return Err(ConfirmError::ReadBudgetExhausted);
+    }
+    let body = transport
+        .post(endpoint, request, allowance)
+        .map_err(ConfirmError::from)?;
+    budget.remaining = budget
+        .remaining
+        .checked_sub(body.len())
+        .ok_or(ConfirmError::ReadBudgetExhausted)?;
+    Ok(body)
 }
 
 fn serialize_output(output: ConfirmOutput) -> Result<String, ConfirmError> {

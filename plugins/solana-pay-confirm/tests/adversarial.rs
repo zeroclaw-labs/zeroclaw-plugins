@@ -517,3 +517,101 @@ fn a_wrong_invoice_derives_a_different_reference_and_finds_nothing() {
         .expect("reference public key");
     assert_ne!(scanned, fixture_reference());
 }
+
+#[test]
+fn an_endpoint_that_answers_every_read_at_maximum_size_exhausts_a_bounded_budget() {
+    // Each read is capped individually, but a full window against two endpoints
+    // multiplies that cap. The per-call budget is what keeps a hostile endpoint
+    // from turning a bounded scan into unbounded parsing.
+    let reference = fixture_reference();
+    let padding = "x".repeat(200_000);
+    let mut entries = Vec::new();
+    let mut transactions = HashMap::new();
+    for byte in 0x40..0x4a_u8 {
+        let mut settled = SettledTransfer::paying(reference);
+        settled.signature_byte = byte;
+        entries.push(signature_entry(
+            &settled.signature(),
+            "finalized",
+            SLOT,
+            false,
+        ));
+        let mut result = settled.result(RAW_AMOUNT);
+        result["meta"]["logMessages"] = json!([padding.clone()]);
+        transactions.insert(settled.signature().to_string(), result);
+    }
+    let mock = MockRpc {
+        mint: Some(mint_result(DECIMALS)),
+        signatures: json!(entries),
+        transactions,
+        ..MockRpc::default()
+    };
+
+    let response = execute_component_input(&host_inject(valid_args(), &valid_config()), &mock);
+    assert!(
+        !response.success,
+        "an unbounded scan was allowed to continue"
+    );
+    assert_eq!(response.category, Some("read_budget_exhausted"));
+    // It refused part-way through rather than reading all ten candidates.
+    let reads = mock
+        .methods()
+        .iter()
+        .filter(|method| *method == "getTransaction")
+        .count();
+    assert!(
+        (1..10).contains(&reads),
+        "expected a partial scan before refusing, saw {reads} transaction reads"
+    );
+}
+
+#[test]
+fn a_verdict_cannot_be_reached_with_a_commitment_the_endpoint_did_not_report() {
+    // The commitment gate lives inside `verify_record`, so it holds for any
+    // caller of the public verifier, not only the internal scan loop.
+    let settled = SettledTransfer::paying(fixture_reference());
+    let mock = MockRpc::paid_with(&settled, RAW_AMOUNT, "confirmed");
+    let listed = nanosol::rpc::parse_signatures_for_address_response(
+        &json!({"jsonrpc": "2.0", "id": 1, "result": mock.signatures}).to_string(),
+        1,
+    )
+    .expect("signature list");
+    let record = nanosol::rpc::parse_transaction_response(
+        &json!({
+            "jsonrpc": "2.0",
+            "id": 100,
+            "result": settled.result(RAW_AMOUNT)
+        })
+        .to_string(),
+        100,
+    )
+    .expect("transaction");
+    let (destination_ata, _) = nanosol::pubkey::derive_associated_token_address(
+        &pubkey(RECIPIENT),
+        &pubkey(MINT),
+        &TokenProgram::Legacy.id(),
+    )
+    .expect("ATA");
+    let expected = solana_pay_confirm::confirm::ExpectedPayment {
+        recipient: pubkey(RECIPIENT),
+        mint: pubkey(MINT),
+        destination_ata,
+        token_program: TokenProgram::Legacy,
+        decimals: DECIMALS,
+        raw_amount: RAW_AMOUNT,
+        reference: fixture_reference(),
+        min_commitment: nanosol::rpc::CommitmentLevel::Finalized,
+    };
+
+    assert_eq!(
+        solana_pay_confirm::confirm::verify_record(&listed[0], &record, &expected),
+        Err(solana_pay_confirm::confirm::Rejection::CommitmentTooWeak)
+    );
+
+    // The same record confirms once the operator accepts `confirmed`.
+    let mut relaxed = expected;
+    relaxed.min_commitment = nanosol::rpc::CommitmentLevel::Confirmed;
+    let verified = solana_pay_confirm::confirm::verify_record(&listed[0], &record, &relaxed)
+        .expect("confirmed candidate");
+    assert_eq!(verified.received_raw, RAW_AMOUNT);
+}

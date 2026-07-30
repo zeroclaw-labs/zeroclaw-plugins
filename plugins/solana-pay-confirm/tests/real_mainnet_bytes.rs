@@ -165,12 +165,7 @@ fn a_real_payment_without_the_invoice_reference_is_refused_for_exactly_that_reas
         "0.005202",
         "m5-mainnet-unbound-payment",
     );
-    let verdict = verify_record(
-        &listed,
-        &record,
-        CommitmentLevel::Finalized,
-        &expected(reference),
-    );
+    let verdict = verify_record(&listed, &record, &expected(reference));
 
     // Reaching the reference gate proves the token program, destination ATA,
     // mint, decimals, and amount checks all passed on real mainnet bytes: every
@@ -195,26 +190,21 @@ fn real_bytes_are_still_refused_when_the_invoice_terms_differ() {
     let mut wrong_amount = expected(reference);
     wrong_amount.raw_amount = RAW_AMOUNT + 1;
     assert_eq!(
-        verify_record(&listed, &record, CommitmentLevel::Finalized, &wrong_amount),
+        verify_record(&listed, &record, &wrong_amount),
         Err(Rejection::WrongInstructionAmount)
     );
 
     let mut wrong_recipient = expected(reference);
     wrong_recipient.destination_ata = key("5RZHGLtc1TLGgX5fuNFKnmhZvBFtN6uFjBTUGP1JRTFN");
     assert_eq!(
-        verify_record(
-            &listed,
-            &record,
-            CommitmentLevel::Finalized,
-            &wrong_recipient
-        ),
+        verify_record(&listed, &record, &wrong_recipient),
         Err(Rejection::WrongDestination)
     );
 
     let mut wrong_program = expected(reference);
     wrong_program.token_program = TokenProgram::Token2022;
     assert_eq!(
-        verify_record(&listed, &record, CommitmentLevel::Finalized, &wrong_program),
+        verify_record(&listed, &record, &wrong_program),
         Err(Rejection::WrongTokenProgram)
     );
 }

@@ -30,7 +30,7 @@ the tree afterwards to prove the build mutated no source.
 
 | Plugin | `test --locked` | clippy host | clippy wasm | `build --locked --release` |
 |---|---|---|---|---|
-| `solana-pay-confirm` | 60 passed / 0 failed / 0 ignored | rc 0 | rc 0 | rc 0, 645 147 bytes |
+| `solana-pay-confirm` | 62 passed / 0 failed / 0 ignored | rc 0 | rc 0 | rc 0, 645 147 bytes |
 | `solana-pay-request` | 30 passed / 0 failed / 0 ignored | rc 0 | rc 0 | rc 0, 229 624 bytes |
 | `spl-transfer-build` | 71 passed / 0 failed / 0 ignored | rc 0 | rc 0 | rc 0, 704 259 bytes |
 
@@ -256,7 +256,29 @@ reconciliation paths are proven against real mainnet data and a real host; a
 first-party `paid: true` on a payment this project itself created is not yet
 recorded.** No test or document in this repository claims otherwise.
 
-## 7. Failed commands, preserved
+## 7. Security audit
+
+`M5_SECURITY_AUDIT.md` in the workspace root records a read-only audit of this
+component and the `nanosol` read delta, with an adversary model per trust
+boundary and 24 concrete attacks run against the production entry points. No
+critical or high findings. Three findings were raised and all three are fixed in
+this tree, each with a regression test:
+
+- **F-1 (Medium, docs)** — the README understated the RPC boundary. A single
+  dishonest endpoint can forge a *positive* confirmation, not merely hide a
+  payment; the README now says so explicitly and explains why in-plugin Ed25519
+  verification would not close it.
+- **F-2 (Low, API)** — `verify_record` took the commitment level as an argument,
+  leaving the gate in the caller. It now reads the level from the candidate, so
+  the gate cannot be bypassed by any caller.
+- **F-3 (Low, availability)** — a full scan window against two endpoints could
+  multiply the per-read cap into ~12.5 MiB of parsing. A 1 MiB per-call read
+  budget now bounds the whole call and refuses cleanly instead of risking a fuel
+  trap.
+
+The counts in §2 are post-remediation.
+
+## 8. Failed commands, preserved
 
 Development failures are recorded so they are not misreported as passes:
 
