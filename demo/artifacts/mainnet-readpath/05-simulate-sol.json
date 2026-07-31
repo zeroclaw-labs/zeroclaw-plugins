@@ -1,0 +1,64 @@
+{
+  "request": {
+    "id": 1,
+    "jsonrpc": "2.0",
+    "method": "simulateTransaction",
+    "params": [
+      "AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABAAMFfowIh2C/3h3dzzLBfyCbgkLuUqrxMfrNiNDqLG0LBvIUmSkcNWZ2gERQawdBskY0Fv4mWyOg5MI+flmvIRb4fgVKU1qZKSEGTSTocWDaOHx8NbXdvJK7geQfqEBBBUSN1b/lh0fSx0zzkBdpuTmicivN7lkqToVOitb4bJZ5ApAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAGZ53ZkMllMdejG8Dm4dVVFcJ6p/07bVjHEVZbnb5e/2AgIAIHplcm9jbGF3IG1haW5uZXQgc2ltdWxhdGlvbiBvbmx5BAMAAQMMAgAAAICWmAAAAAAA",
+      {
+        "commitment": "confirmed",
+        "encoding": "base64",
+        "replaceRecentBlockhash": false,
+        "sigVerify": false
+      }
+    ]
+  },
+  "response": {
+    "id": 1,
+    "jsonrpc": "2.0",
+    "result": {
+      "context": {
+        "apiVersion": "4.1.0",
+        "slot": 436186946
+      },
+      "value": {
+        "accounts": null,
+        "err": null,
+        "fee": 5000,
+        "innerInstructions": null,
+        "loadedAccountsDataSize": 75013,
+        "loadedAddresses": {
+          "readonly": [],
+          "writable": []
+        },
+        "logs": [
+          "Program MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr invoke [1]",
+          "Program log: Memo (len 32): \"zeroclaw mainnet simulation only\"",
+          "Program MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr consumed 12778 of 203000 compute units",
+          "Program MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr success",
+          "Program 11111111111111111111111111111111 invoke [1]",
+          "Program 11111111111111111111111111111111 success"
+        ],
+        "postBalances": [
+          10249012037566677,
+          10000000,
+          523015134,
+          0,
+          1
+        ],
+        "postTokenBalances": [],
+        "preBalances": [
+          10249012047571677,
+          0,
+          523015134,
+          0,
+          1
+        ],
+        "preTokenBalances": [],
+        "replacementBlockhash": null,
+        "returnData": null,
+        "unitsConsumed": 12928
+      }
+    }
+  }
+}

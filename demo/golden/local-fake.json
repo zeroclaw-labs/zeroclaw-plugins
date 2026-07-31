@@ -1,0 +1,113 @@
+{
+  "nonce-missing-account": {
+    "ok": true,
+    "ready": false,
+    "rpc_calls": 1,
+    "text": "MISSING: nonce account 9yXPTQZhqq1yvG22NE8Vz4HobeXUJ1dwirgByV5EJt1 does not exist. Create it once with: solana-keygen new -o nonce.json && solana create-nonce-account nonce.json 0.0015 (rent 1447680 lamports), then set nonce_account in this plugin's config."
+  },
+  "nonce-not-a-nonce-account": {
+    "ok": true,
+    "ready": false,
+    "rpc_calls": 1,
+    "text": "NOT A NONCE ACCOUNT: 4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU is owned by TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA, not the system program. transfer-build cannot use it."
+  },
+  "nonce-ready": {
+    "ok": true,
+    "ready": true,
+    "rpc_calls": 1,
+    "text": "READY: nonce account 8XkoSVfNbLKKzcpsTCyzysXbygqrGrbW8t5RS6Wxsdb1 \u2014 authority 9B5XszUGdMaxCZ7uSQhPzdks5ZQSmWxrmzCSvtJ6Ns6g, current nonce Ab9CuAh7wGin\u2026, fee 5000 lamports/sig. transfer-build transactions built against it stay valid until the nonce advances (i.e. until one of them lands)."
+  },
+  "refuse-config-typo": {
+    "ok": false,
+    "rpc_calls": 0,
+    "text": "policy config error (transfer denied): unknown config key 'max_amout' \u2014 refusing to guess (fail closed)"
+  },
+  "refuse-decimals-mismatch": {
+    "ok": false,
+    "rpc_calls": 2,
+    "text": "transfer refused: operator cap for 4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU was written at 9 decimals but the mint has 6; fix the cap entry (fail closed)"
+  },
+  "refuse-injected-argument": {
+    "ok": false,
+    "rpc_calls": 0,
+    "text": "bad arguments: unknown field `rpc_url`, expected one of `sender`, `recipient`, `amount`, `mint`, `memo`, `reference`, `__config` at line 1 column 146"
+  },
+  "refuse-numeric-amount": {
+    "ok": false,
+    "rpc_calls": 0,
+    "text": "bad arguments: invalid type: floating point `0.05`, expected a string at line 1 column 133"
+  },
+  "refuse-off-allowlist": {
+    "ok": false,
+    "rpc_calls": 0,
+    "text": "transfer refused: recipient SysvarC1ock11111111111111111111111111111111 is not on the operator's allowlist; no transaction was built"
+  },
+  "refuse-over-cap": {
+    "ok": false,
+    "rpc_calls": 0,
+    "text": "transfer refused: amount 0.2 exceeds the operator's per-transfer cap of 0.1 for SOL; no transaction was built"
+  },
+  "refuse-plain-http-endpoint": {
+    "ok": false,
+    "rpc_calls": 0,
+    "text": "policy config error (transfer denied): rpc_url must be https, got 'http://127.0.0.1:1'"
+  },
+  "refuse-wrong-nonce-authority": {
+    "ok": false,
+    "rpc_calls": 1,
+    "text": "transfer refused: nonce account authority mvines9iiHiQTysrwkJjGf2gb9Ex9jXJX8ns3qwf2kN is not the sender 9B5XszUGdMaxCZ7uSQhPzdks5ZQSmWxrmzCSvtJ6Ns6g; refusing to build an unusable transaction"
+  },
+  "sol-durable-nonce": {
+    "durable_nonce": true,
+    "ok": true,
+    "rpc_calls": 1,
+    "text": "UNSIGNED transfer: 0.05 SOL from 9B5XszUGdMaxCZ7uSQhPzdks5ZQSmWxrmzCSvtJ6Ns6g to mvines9iiHiQTysrwkJjGf2gb9Ex9jXJX8ns3qwf2kN, memo \"invoice 042\", with payment reference. Durable nonce: valid until the nonce advances \u2014 safe to approve later. This tool holds no keys; nothing moves until the owner signs.",
+    "tx_base64": "AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABAAQHeXJtpS2Z1gsH6tc7L28L9gg8yFx3qU401pHXj4vK/slv4sIi8ehZszTBZaq0b4vDFII8+/o8MJ4vTvvRTrH35AuCTCqjaZSF8mxm/xoStaH3VVnrhI150KK+4ItGNoTHBqfVFxksVo7gioRfc9KXiM8DXDFFshqzRNgGLqlAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAVKU1qZKSEGTSTocWDaOHx8NbXdvJK7geQfqEBBBUSN1b/lh0fSx0zzkBdpuTmicivN7lkqToVOitb4bJZ5ApCOeDUbnpYgkBTTymBW651r6mx3LDjoTzRKg/E9WBrTkQMEAwEDAAQEAAAABQALaW52b2ljZSAwNDIEAwACBgwCAAAAgPD6AgAAAAA=",
+    "tx_bytes": 368,
+    "tx_sha256": "5fec8ba6d9810a412b1e37a7aa42a6cfd9f53d069d8085d0b788b9ceaff72ccf"
+  },
+  "sol-fresh-blockhash": {
+    "durable_nonce": false,
+    "ok": true,
+    "rpc_calls": 1,
+    "text": "UNSIGNED transfer: 0.05 SOL from 9B5XszUGdMaxCZ7uSQhPzdks5ZQSmWxrmzCSvtJ6Ns6g to mvines9iiHiQTysrwkJjGf2gb9Ex9jXJX8ns3qwf2kN. Fresh blockhash: sign within ~60s or it expires. This tool holds no keys; nothing moves until the owner signs.",
+    "tx_base64": "AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABAAEDeXJtpS2Z1gsH6tc7L28L9gg8yFx3qU401pHXj4vK/skLgkwqo2mUhfJsZv8aErWh91VZ64SNedCivuCLRjaExwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA/lfGNOX/iDEvxw3hqirkFHzdEObGy5vSn6+uTP+vClkBAgIAAQwCAAAAgPD6AgAAAAA=",
+    "tx_bytes": 215,
+    "tx_sha256": "ac0889d0cd553354c603cb94bdc4a669e6a2e77b0cd57dca2346fda7d69f2c98"
+  },
+  "spl-creates-missing-ata": {
+    "durable_nonce": true,
+    "ok": true,
+    "rpc_calls": 3,
+    "text": "UNSIGNED transfer: 25 mint 4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU from 9B5XszUGdMaxCZ7uSQhPzdks5ZQSmWxrmzCSvtJ6Ns6g to mvines9iiHiQTysrwkJjGf2gb9Ex9jXJX8ns3qwf2kN, memo \"invoice 043\", with payment reference. Durable nonce: valid until the nonce advances \u2014 safe to approve later. This tool holds no keys; nothing moves until the owner signs.",
+    "tx_base64": "AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABAAgMeXJtpS2Z1gsH6tc7L28L9gg8yFx3qU401pHXj4vK/slv4sIi8ehZszTBZaq0b4vDFII8+/o8MJ4vTvvRTrH35DQlaEZIz6d2rJzuhIZQeKQHWnNyYTJQ2vs9OYYCxiFA+QO3rLtecxdIAFi8iMcmCYHk03uodmDEqkZSZSWos24Gp9UXGSxWjuCKhF9z0peIzwNcMUWyGrNE2AYuqUAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAC4JMKqNplIXybGb/GhK1ofdVWeuEjXnQor7gi0Y2hMc7RCyzkSFX8TqTPQE0KC0DK1/+zQGi2/G3eQYI3wAupwbd9uHXZaGT2cvhRs7reawctIXtX1s3kTqM9YV+/wCpjJclj04kifG7PRApFI4NgwtaE5na/xCEBI572Nvp+FkFSlNamSkhBk0k6HFg2jh8fDW13bySu4HkH6hAQQVEjdW/5YdH0sdM85AXabk5onIrze5ZKk6FTorW+GyWeQKQjng1G56WIJAU08pgVuuda+psdyw46E80SoPxPVga05EEBQMBBAAEBAAAAAkGAAIGBwUIAQEKAAtpbnZvaWNlIDA0MwgFAwcCAAsKDEB4fQEAAAAABg==",
+    "tx_bytes": 538,
+    "tx_sha256": "2eb44005c76a16a796d2feedc4cc207a0d28f7a9919152e129110338b01b0d03"
+  },
+  "watch-amount-short": {
+    "ok": true,
+    "paid": false,
+    "rpc_calls": 2,
+    "signature": null,
+    "text": "NOT CONFIRMED: received 25 of mint 4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU, expected at least 50"
+  },
+  "watch-nothing-under-reference": {
+    "ok": true,
+    "paid": false,
+    "rpc_calls": 1,
+    "signature": null,
+    "text": "NOT SEEN: no transaction under this reference yet"
+  },
+  "watch-payment-arrived": {
+    "ok": true,
+    "paid": true,
+    "rpc_calls": 2,
+    "signature": "45TB5n9LyxpkQq6AxxE27eqvm5xAUhscMFveT4E3zGvpysPbTQEJCR2EcW7DV9Dp47PiFxrDESxvAReScpU5vNDC",
+    "text": "PAID: 25 of mint 4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU to mvines9iiHiQTysrwkJjGf2gb9Ex9jXJX8ns3qwf2kN \u2014 sig 45TB5n9Lyxpk\u2026 slot 401234567 (finalized)"
+  },
+  "watch-refuse-plain-http-endpoint": {
+    "ok": false,
+    "rpc_calls": 0,
+    "text": "config error: rpc_url must be https, got 'http://127.0.0.1:1'"
+  }
+}
