@@ -1,0 +1,39 @@
+# Redacted operator shape for Caixa — merge into ~/.zeroclaw/config.toml
+# Fill secrets via `zeroclaw` CLI / quickstart. Do not commit real tokens.
+
+[plugins]
+enabled = true
+auto_discover = true
+# plugins_dir = "~/.zeroclaw/plugins"
+
+[[plugins.entries]]
+name = "caixa-charge"
+
+[plugins.entries.config]
+recipient = "<YOUR_MERCHANT_PUBKEY>"
+max_brl = "5000"
+max_usdc = "1000"
+brl_per_usdc = "5.50"
+label = "Caixa"
+
+[[plugins.entries]]
+name = "caixa-watch"
+
+[plugins.entries.config]
+recipient = "<YOUR_MERCHANT_PUBKEY>"
+rpc_url = "https://api.mainnet-beta.solana.com"
+lookback = "25"
+
+[[plugins.entries]]
+name = "caixa-transfer-build"
+
+[plugins.entries.config]
+rpc_url = "https://api.mainnet-beta.solana.com"
+nonce_account = "<YOUR_DURABLE_NONCE_ACCOUNT>"
+require_nonce = "true"
+max_usdc = "1000"
+
+# Example risk profile knobs (names may vary by ZeroClaw version):
+# [risk_profiles.default]
+# auto_approve = ["caixa_charge", "caixa_watch", "caixa_transfer_build", "file_read", "memory_recall"]
+# excluded_tools = ["browser", "shell", "http_request"]

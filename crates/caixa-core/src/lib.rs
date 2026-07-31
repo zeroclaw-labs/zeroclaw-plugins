@@ -19,7 +19,7 @@ pub mod tx;
 pub use encode::Writer;
 pub use memo::{build_invoice_memo, memo_contains_invoice};
 pub use output::{shape_output, MAX_OUTPUT_CHARS};
-pub use pay::{build_solana_pay_url, phantom_browse_https, PayRequest};
+pub use pay::{build_solana_pay_url, phantom_browse_https, solana_pay_qr_https, PayRequest};
 pub use pubkey::{
     associated_token_program, get_associated_token_address, memo_program, system_program,
     token_program, usdc_mint_mainnet, Pubkey, SYSTEM_PROGRAM_ID,

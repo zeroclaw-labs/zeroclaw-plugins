@@ -2,13 +2,16 @@
 
 **Charge in BRL. Settle in USDC on Solana. The agent never holds a key.**
 
-Caixa turns a ZeroClaw Telegram agent into a Brazilian merchant payment terminal: Solana Pay URL in chat, customer pays USDC, SOP alerts when the invoice lands.
+Caixa is a **use case**: a ZeroClaw Telegram agent that turns a Brazilian shop chat into a Solana Pay terminal. Owner: `Cobra mesa 9: R$ 25` → customer gets a Pay QR + `solana:` URL → watch/SOP can confirm settlement.
+
+Showcase write-up (judges / Discord): [`SHOWCASE.md`](SHOWCASE.md)  
+Evening setup: [`operator/README.md`](operator/README.md)
 
 ```
-Merchant: "Cobra mesa 4: R$ 25"
-    → caixa-charge (T1)           → solana: URL + Phantom HTTPS (Telegram-clickable)
-Customer pays USDC
-    → caixa-watch (T0)            → "Invoice #mesa-4 paid…"
+Merchant: "Cobra mesa 9: R$ 25"
+    → caixa-charge (T1)           → Pay QR (HTTPS) + solana: URL
+Customer pays USDC in Phantom
+    → caixa-watch (T0)            → "Invoice #mesa-9 paid…"
 Optional payout / refund
     → caixa-transfer-build (T1)   → unsigned tx + durable nonce → human signs
 ```
@@ -18,73 +21,17 @@ Optional payout / refund
 | [`caixa-charge`](plugins/caixa-charge) | T1 | Solana Pay charge (BRL or USDC, mint allowlist + caps) |
 | [`caixa-transfer-build`](plugins/caixa-transfer-build) | T1 | Unsigned SPL transfer; durable nonce required by default |
 | [`caixa-watch`](plugins/caixa-watch) | T0 | Detect `INV=` settlement; short alert for SOP |
-| [`caixa-core`](crates/caixa-core) | Track E | Shared host-testable substrate (no `solana-sdk`) |
+| [`caixa-core`](crates/caixa-core) | Track E | Shared host-testable substrate |
 
 ## Custody
 
 - **T0** (`caixa-watch`): RPC reads only.
-- **T1** (`caixa-charge`, `caixa-transfer-build`): return a URL or unsigned bytes. Never sign. Never submit.
-- No T2. No session keys. Prompt injection cannot move funds — there is no signing path.
+- **T1** (`caixa-charge`, `caixa-transfer-build`): return a URL/QR or unsigned bytes. Never sign. Never submit.
+- No T2. Prompt injection cannot move funds — there is no signing path.
 
-Brazil-oriented invoices use `INV=` / `BRL=` memos and optional BRL→USDC quote over HTTPS. Not a PIX bank rail.
+## Config (ZeroClaw 0.8+)
 
-## 5-minute install
-
-```bash
-# 1) Host tests (no wasm toolchain)
-(cd crates/caixa-core && cargo test)
-(cd plugins/caixa-charge && cargo test)
-(cd plugins/caixa-transfer-build && cargo test)
-(cd plugins/caixa-watch && cargo test)
-
-# 2) WASM components
-rustup target add wasm32-wasip2
-(cd plugins/caixa-charge && cargo build --target wasm32-wasip2 --release \
-  && cp target/wasm32-wasip2/release/caixa_charge.wasm ./caixa_charge.wasm)
-(cd plugins/caixa-transfer-build && cargo build --target wasm32-wasip2 --release \
-  && cp target/wasm32-wasip2/release/caixa_transfer_build.wasm ./caixa_transfer_build.wasm)
-(cd plugins/caixa-watch && cargo build --target wasm32-wasip2 --release \
-  && cp target/wasm32-wasip2/release/caixa_watch.wasm ./caixa_watch.wasm)
-
-# 3) Install into ZeroClaw plugins dir (copy each plugin folder with wasm next to manifest.toml)
-# Requires a ZeroClaw build with --features plugins-wasm (see redact-text README).
-```
-
-```toml
-[plugins]
-enabled = true
-auto_discover = true
-# ZeroClaw 0.8+ injects per-plugin config via [[plugins.entries]] (not [plugins.<name>]).
-
-[[plugins.entries]]
-name = "caixa-charge"
-
-[plugins.entries.config]
-recipient = "<merchant_pubkey>"
-max_brl = "5000"
-max_usdc = "1000"
-# Optional offline FX fallback (BRL per 1 USDC) when CoinGecko is unreachable:
-# brl_per_usdc = "5.50"
-label = "Caixa"
-
-[[plugins.entries]]
-name = "caixa-transfer-build"
-
-[plugins.entries.config]
-rpc_url = "<your_rpc>"
-nonce_account = "<durable_nonce_account>"
-require_nonce = "true"
-max_usdc = "1000"
-
-[[plugins.entries]]
-name = "caixa-watch"
-
-[plugins.entries.config]
-rpc_url = "<your_rpc>"
-recipient = "<merchant_pubkey>"
-```
-
-SOP template: [`plugins/caixa-watch/sop-payment-watch.yaml`](plugins/caixa-watch/sop-payment-watch.yaml)
+See [`operator/config.example.toml`](operator/config.example.toml). Plugin config is `[[plugins.entries]]` + `[plugins.entries.config]`.
 
 ## Safety
 
@@ -95,23 +42,17 @@ caixa_charge → error: mint not allowlisted
                and/or: memo looks like injection/secret payload
 ```
 
-Allowlists, notional caps, and secret scanners are enforced inside the plugins. Full threat models and injection transcripts are in each plugin README.
+## Design notes
 
-## Design notes (`wasm32-wasip2`) — what fought us
-
-- No `solana-sdk` / `solana-client` inside the WIT component (does not compile cleanly for wasip2 + WIT).
-- Hand-rolled base58, shortvec, legacy message layout, SPL instructions in `caixa-core`.
-- HTTP via host `wasi:http` (`waki`), cfg-gated so host tests never need the wasm toolchain.
-- Transfer-build defaults to durable nonce (Trap #1: approval queues outlive recent blockhashes).
-- Tool outputs are shaped (~200 tokens) so RPC noise never floods the model context.
-- Official Windows/macOS “lean” prebuilds may omit `plugins-wasm`; run a host built with `--features plugins-wasm` (and cranelift or precompiled `.cwasm`) so the agent actually loads the components.
-- Telegram cannot auto-link `solana:`; we also emit `https://phantom.app/ul/browse/…`. That path is a mobile universal link for Phantom’s **in-app browser** — desktop often lands on the download page, and wrapping `solana:` is not a full pay-sheet deep link. Demo with the charge in chat; open pay via copy/QR of the `solana:` URL when needed.
-- ZeroClaw 0.8+ plugin config is `[[plugins.entries]]` + `[plugins.entries.config]`, not `[plugins.<name>]`.
+- Pay UX: Telegram cannot link `solana:`. Phantom `ul/browse` blank-screens on `solana:` URIs. Caixa returns an HTTPS **QR image** link customers can open and scan.
+- Host: stock lean ZeroClaw builds may omit `plugins-wasm` — build with `--features plugins-wasm,plugins-wasm-cranelift`.
+- Trap #1: transfer-build defaults to durable nonce for approval queues.
+- Outputs shaped (~200 tokens).
 
 ## What we'd build next
 
-1. PIX bank-rail reconciliation (out of scope here) as a separate T0 matcher against BRL receipts.
-2. Squads proposal path for transfer-build (agent proposes, human phone-approves).
-3. Publish `caixa-core` on crates.io once `wit/v0` freezes.
+1. PIX bank-rail reconciliation as a separate T0 matcher.
+2. Squads proposal path for transfer-build.
+3. WhatsApp channel with the same operator kit.
 
-Built against experimental `wit/v0` (`tool-plugin`). Dual-licensed MIT OR Apache-2.0.
+MIT OR Apache-2.0. Code lives on this fork for the bounty showcase; registry merge is separate after judging.

@@ -14,27 +14,21 @@ pub struct PayRequest {
     pub message: Option<String>,
 }
 
-/// Telegram-clickable Phantom deep link wrapping a `solana:` Pay URL.
+/// Telegram-clickable HTTPS link that opens a Solana Pay QR (customer scans in Phantom).
 ///
-/// Custom `solana:` schemes are not auto-linked in Telegram; `https://phantom.app/ul/browse/…`
-/// is, and opens the encoded transfer request in Phantom.
-pub fn phantom_browse_https(solana_pay_url: &str) -> String {
-    let dest = urlencoding_encode_path(solana_pay_url);
-    format!("https://phantom.app/ul/browse/{dest}")
+/// `solana:` is not auto-linked in Telegram. Phantom `ul/browse` wrapping a `solana:` URI
+/// opens a blank in-app browser page — it is for HTTPS dApps, not Pay transfer requests.
+/// A QR image URL is the reliable mobile + desktop click path.
+pub fn solana_pay_qr_https(solana_pay_url: &str) -> String {
+    format!(
+        "https://api.qrserver.com/v1/create-qr-code/?size=400x400&data={}",
+        urlencoding_encode(solana_pay_url)
+    )
 }
 
-/// Percent-encode for use as a single path segment (more aggressive than query encoding).
-fn urlencoding_encode_path(s: &str) -> String {
-    let mut out = String::with_capacity(s.len() * 3);
-    for b in s.bytes() {
-        match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                out.push(b as char);
-            }
-            _ => out.push_str(&format!("%{b:02X}")),
-        }
-    }
-    out
+/// Deprecated name kept for call-site clarity in older docs; same as [`solana_pay_qr_https`].
+pub fn phantom_browse_https(solana_pay_url: &str) -> String {
+    solana_pay_qr_https(solana_pay_url)
 }
 
 /// Build a `solana:` transfer request URL per the Solana Pay spec.
@@ -126,9 +120,9 @@ mod tests {
         assert!(url.contains("spl-token=EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"));
         assert!(url.contains("memo=INV%3D412%20BRL%3D25.00"));
         assert!(url.contains("reference=inv-412"));
-        let https = phantom_browse_https(&url);
-        assert!(https.starts_with("https://phantom.app/ul/browse/solana%3A"));
-        assert!(!https.contains('?')); // path-only browse form
+        let https = solana_pay_qr_https(&url);
+        assert!(https.starts_with("https://api.qrserver.com/v1/create-qr-code/"));
+        assert!(https.contains("data=solana%3A"));
     }
 
     #[test]

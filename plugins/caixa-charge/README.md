@@ -59,10 +59,10 @@ label = "Caixa"
 ```
 
 → Summary includes:
-- `https://phantom.app/ul/browse/…` (Telegram-clickable HTTPS; paste as **plain text**, no markdown)
+- HTTPS **Pay QR** (`api.qrserver.com/…`) — tap in Telegram, scan with Phantom
 - `solana:<recipient>?amount=<USDC>&spl-token=<USDC>&memo=INV%3Dmesa-4%20BRL%3D25.00&…`
 
-**Mobile tip:** Phantom `ul/browse` opens the in-app browser. For a pay sheet, copy/scan the `solana:` URL (or QR it). Desktop browsers often fall through to Phantom’s download page even with the extension installed — that is a Phantom universal-link quirk, not a bad invoice.
+Paste the QR link as **plain text** (no markdown). Do not use Phantom `ul/browse` with a `solana:` URI — that opens a blank in-app browser page.
 
 ## Threat model
 
