@@ -2,47 +2,99 @@
 //! tests on the host with a plain `cargo test`, while the wasm component reuses
 //! the exact same logic through `lib.rs`.
 
-use std::collections::HashMap;
+use serde::Deserialize;
+use serde_json::Value;
 
 pub const DEFAULT_REPLACEMENT: &str = "[REDACTED]";
 
-/// Redaction policy resolved from the plugin's own config section.
+/// Redaction policy resolved from this plugin's own config section.
+///
+/// The host validates the operator's values against `[config_schema]` in
+/// `manifest.toml` and injects them as a *typed* JSON object, so these are real
+/// Rust types and there is nothing left for the guest to string-parse. Operator
+/// storage is still a string map; the schema is what tells the host to read
+/// `false` as a boolean and `["a","b"]` as an array before the guest sees them.
+///
+/// Every schema property is optional, so every field has a default here. That
+/// is the same reason a withheld `config_read` grant is safe: the host then
+/// validates and injects `{}`, which yields exactly [`RedactConfig::default`].
+///
+/// Deliberately not `deny_unknown_fields`: `additionalProperties = false` in
+/// the manifest already rejects undeclared operator keys before the guest runs,
+/// so guest-side strictness would add no protection and would turn a
+/// forward-compatible schema addition into a hard failure.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(default)]
 pub struct RedactConfig {
     pub replacement: String,
     pub redact_emails: bool,
     pub patterns: Vec<String>,
 }
 
-impl RedactConfig {
-    /// Build from the flat `string -> string` section the host injects. Absent
-    /// or empty keys fall back to defaults, which is also what an unprivileged
-    /// (no `config_read`) plugin sees.
-    pub fn from_section(section: &HashMap<String, String>) -> Self {
-        let replacement = section
-            .get("replacement")
-            .filter(|v| !v.is_empty())
-            .cloned()
-            .unwrap_or_else(|| DEFAULT_REPLACEMENT.to_string());
-        let redact_emails = section
-            .get("redact_emails")
-            .map(|v| v.eq_ignore_ascii_case("true"))
-            .unwrap_or(true);
-        let patterns = section
-            .get("patterns")
-            .map(|v| {
-                v.split(',')
-                    .map(str::trim)
-                    .filter(|p| !p.is_empty())
-                    .map(str::to_string)
-                    .collect()
-            })
-            .unwrap_or_default();
+impl Default for RedactConfig {
+    fn default() -> Self {
         Self {
-            replacement,
-            redact_emails,
-            patterns,
+            replacement: DEFAULT_REPLACEMENT.to_string(),
+            redact_emails: true,
+            patterns: Vec::new(),
         }
     }
+}
+
+impl RedactConfig {
+    /// Deserialize the typed `__config` object the host injects.
+    ///
+    /// A malformed object is reported, never swallowed. Falling back to the
+    /// default policy would silently drop the operator's `patterns` list and
+    /// under-redact, which is the one failure mode this plugin must not have.
+    /// An absent `__config` (JSON null) is not malformed: it is a host that
+    /// injected nothing, and defaults are the correct policy for it.
+    ///
+    /// The error is a pre-sanitized `String` rather than `serde_json::Error` so
+    /// that a caller cannot leak a config value by formatting it; see
+    /// [`describe_error`].
+    pub fn from_json(config: &Value) -> Result<Self, String> {
+        if config.is_null() {
+            return Ok(Self::default());
+        }
+        serde_json::from_value::<Self>(config.clone())
+            .map(Self::normalized)
+            .map_err(|error| describe_error(&error))
+    }
+
+    /// Re-assert the guest-side invariants that `config_schema` also encodes.
+    ///
+    /// The schema rejects an empty `replacement` and empty `patterns` entries,
+    /// but this runs whether or not a schema-enforcing host was in play. The
+    /// empty-pattern filter in particular is load-bearing, not tidiness: `""`
+    /// matches at every character boundary, so one empty pattern would rewrite
+    /// the entire input into replacement markers.
+    fn normalized(mut self) -> Self {
+        if self.replacement.is_empty() {
+            self.replacement = DEFAULT_REPLACEMENT.to_string();
+        }
+        self.patterns.retain(|pattern| !pattern.is_empty());
+        self
+    }
+}
+
+/// Describe a config deserialization failure without quoting the value that
+/// caused it.
+///
+/// `serde_json::Error`'s `Display` embeds the offending value ("invalid type:
+/// boolean `false`"). Config values are secret-marked by the host, and this
+/// plugin's `patterns` are themselves the sensitive strings an operator wants
+/// scrubbed, so echoing one into a `ToolResult` would hand it straight back to
+/// the model. The category and position are enough to debug the only thing that
+/// can produce this error once the host validates against `config_schema`: a
+/// manifest/guest mismatch.
+fn describe_error(error: &serde_json::Error) -> String {
+    format!(
+        "{:?} error at line {} column {}",
+        error.classify(),
+        error.line(),
+        error.column()
+    )
 }
 
 /// Apply email masking, bearer/API-token masking, and configured literal
