@@ -29,7 +29,7 @@ Ships with three plugins built on top of it in this repo:
 | `message` | legacy message compilation with correct key ordering, unsigned-transaction envelopes |
 | `nonce` | 80-byte durable nonce account state parsing, fail-closed on every tag |
 | `amount` | exact decimal arithmetic, string in, base units out, no floats ever |
-| `pay` | Solana Pay transfer-request URLs per the maintained spec |
+| `pay` | Solana Pay transfer-request URLs per the maintained spec, https://docs.solanapay.com/spec |
 | `rpc` | JSON-RPC bodies + strict parsers for the five calls payment flows need |
 | `policy` | fail-closed operator policy: allowlists + per-mint caps the model cannot argue with |
 

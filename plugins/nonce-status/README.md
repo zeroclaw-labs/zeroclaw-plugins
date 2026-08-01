@@ -31,7 +31,7 @@ that the current runtime never validates.
 ## Config
 
 The host must be built with the WASM plugin backend
-(`--features plugins-wasm,plugins-wasm-cranelift`).
+(`--features plugins-wasm-cranelift`, which implies `plugins-wasm`).
 
 ```toml
 [plugins]

@@ -2,7 +2,11 @@
 //! message, order the account keys per the wire rules, and wrap it in an
 //! unsigned-transaction envelope wallets and simulators accept.
 //!
-//! Key ordering (verified against devnet and the Solana Pay spec's example
+//! Key ordering follows the Solana Pay specification, "Specification: Transfer
+//! Request" at https://docs.solanapay.com/spec : reference keys are carried "in the order
+//! provided as read-only, non-signer keys" on the transfer instruction, and that
+//! instruction is the last instruction of the transaction. Verified against devnet
+//! and against the spec's own example
 //! transaction): writable signers first (fee payer at index 0), then readonly
 //! signers, writable non-signers, readonly non-signers.
 

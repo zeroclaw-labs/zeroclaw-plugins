@@ -26,7 +26,7 @@ PAID: 25 of mint 4zMMC9… to mvines9… — sig 5Kd81vQx3nT2… slot 341887021 
 ## Config
 
 The host must be built with the WASM plugin backend
-(`--features plugins-wasm,plugins-wasm-cranelift`).
+(`--features plugins-wasm-cranelift`, which implies `plugins-wasm`).
 
 ```toml
 [plugins]
@@ -55,6 +55,13 @@ again rather than trusting the host's copy.
 
 `rpc_url` is operator config only; the tool has no argument that can redirect
 it, and unknown config keys are rejected (fail closed).
+
+Reference semantics come from the Solana Pay specification, "Specification: Transfer
+Request" at https://docs.solanapay.com/spec . A reference is a base58-encoded 32-byte value that the wallet
+carries as a read-only, non-signer key on the transfer instruction, which is why
+validators index it and why `getSignaturesForAddress` on the reference is the correct
+lookup. That is what this tool does, rather than watching a wallet and hoping only one
+invoice is in flight.
 
 ## Arguments
 

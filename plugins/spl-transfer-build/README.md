@@ -21,7 +21,7 @@ a one-line digest of exactly what will be signed.
 ## Config
 
 The host must be built with the WASM plugin backend
-(`--features plugins-wasm,plugins-wasm-cranelift`).
+(`--features plugins-wasm-cranelift`, which implies `plugins-wasm`).
 
 ```toml
 [plugins]
