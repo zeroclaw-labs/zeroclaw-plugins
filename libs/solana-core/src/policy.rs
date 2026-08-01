@@ -63,7 +63,7 @@ impl std::fmt::Display for PolicyError {
                 )
             }
             PolicyError::MissingRpcUrl => write!(f, "rpc_url is required"),
-            PolicyError::BadRpcUrl(u) => write!(f, "rpc_url must be https, got '{u}'"),
+            PolicyError::BadRpcUrl(_) => write!(f, "rpc_url must be an https:// endpoint"),
             PolicyError::BadRecipient(r) => {
                 write!(f, "allow_recipients entry '{r}' is not a valid pubkey")
             }
@@ -278,6 +278,19 @@ mod tests {
             p.check(&Pubkey([3; 32]), USDC, 1),
             PolicyVerdict::RecipientNotAllowed
         );
+    }
+
+    #[test]
+    fn a_config_error_never_echoes_the_config_value() {
+        // This message reaches a model-visible ToolResult, and an operator's
+        // rpc_url is the config value most likely to carry an API key.
+        let secret = "http://rpc.example.invalid/v2/secret-key-abc123";
+        let mut c = valid();
+        c.insert("rpc_url".into(), secret.into());
+        let shown = parse_policy(&c).expect_err("plain http must fail closed").to_string();
+        assert!(!shown.contains(secret), "echoed the value: {shown}");
+        assert!(!shown.contains("secret-key-abc123"), "echoed the credential: {shown}");
+        assert!(shown.contains("https://"), "must still say what is required: {shown}");
     }
 
     #[test]

@@ -10,3 +10,34 @@ capabilities = ["tool"]
 # execute args as `__config`; without it every transfer is refused (fail
 # closed, empty policy denies all).
 permissions = ["http_client", "config_read"]
+
+# config_read and config_schema are a biconditional: issue #147 makes the host
+# reject a manifest carrying either without the other, and it validates the
+# operator's values against the schema below before the guest ever runs. Values
+# arrive as typed JSON. The closed object plus an explicit properties map is what
+# makes the config_read grant enumerable.
+[config_schema]
+"$schema" = "https://json-schema.org/draft/2020-12/schema"
+type = "object"
+additionalProperties = false
+required = ["rpc_url", "allow_recipients", "caps"]
+
+[config_schema.properties.rpc_url]
+type = "string"
+minLength = 1
+
+# Comma-separated, because the guest parses both with split(','). Declaring
+# them as arrays without converting the guest in the same commit would fail the
+# whole parse rather than degrade.
+[config_schema.properties.allow_recipients]
+type = "string"
+minLength = 1
+
+[config_schema.properties.caps]
+type = "string"
+minLength = 1
+
+# Optional: absent or empty means fresh-blockhash mode, so the empty string is
+# a meaningful value and takes no minLength.
+[config_schema.properties.nonce_account]
+type = "string"

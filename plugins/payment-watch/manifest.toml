@@ -8,3 +8,18 @@ capabilities = ["tool"]
 # (TLS host-side). config_read: rpc_url is read from this plugin's own config
 # section; the tool never accepts an RPC URL as a call argument.
 permissions = ["http_client", "config_read"]
+
+# config_read and config_schema are a biconditional: issue #147 makes the host
+# reject a manifest carrying either without the other, and it validates the
+# operator's values against the schema below before the guest ever runs. Values
+# arrive as typed JSON. The closed object plus an explicit properties map is what
+# makes the config_read grant enumerable.
+[config_schema]
+"$schema" = "https://json-schema.org/draft/2020-12/schema"
+type = "object"
+additionalProperties = false
+required = ["rpc_url"]
+
+[config_schema.properties.rpc_url]
+type = "string"
+minLength = 1

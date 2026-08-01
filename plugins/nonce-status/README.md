@@ -47,6 +47,21 @@ rpc_url = "https://api.devnet.solana.com"
 nonce_account = ""
 ```
 
+Once the typed-config host lands (issue #147), `[[plugins.entries]]` is keyed on
+the package's full instance id rather than its name, and legacy name-keyed entries
+are not consulted. Set the same values through the CLI, which resolves the key for
+you:
+
+```
+key=$(zeroclaw plugin info nonce-status)   # prints the zpi1_... instance key
+zeroclaw config set "plugins.entries.$key.config.rpc_url" 'https://api.devnet.solana.com'
+zeroclaw config set "plugins.entries.$key.config.nonce_account" ''
+```
+
+The manifest declares a closed `config_schema`, so the host validates these values
+and rejects an unknown key before the component starts. The guest checks them
+again rather than trusting the host's copy.
+
 Unknown config keys are rejected, `rpc_url` must be https and cannot be
 supplied as a call argument (fail closed on all three).
 

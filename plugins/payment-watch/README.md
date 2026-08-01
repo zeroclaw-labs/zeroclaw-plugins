@@ -39,6 +39,20 @@ name = "payment-watch"
 rpc_url = "https://api.devnet.solana.com"
 ```
 
+Once the typed-config host lands (issue #147), `[[plugins.entries]]` is keyed on
+the package's full instance id rather than its name, and legacy name-keyed entries
+are not consulted. Set the same values through the CLI, which resolves the key for
+you:
+
+```
+key=$(zeroclaw plugin info payment-watch)   # prints the zpi1_... instance key
+zeroclaw config set "plugins.entries.$key.config.rpc_url" 'https://api.devnet.solana.com'
+```
+
+The manifest declares a closed `config_schema`, so the host validates these values
+and rejects an unknown key before the component starts. The guest checks them
+again rather than trusting the host's copy.
+
 `rpc_url` is operator config only; the tool has no argument that can redirect
 it, and unknown config keys are rejected (fail closed).
 

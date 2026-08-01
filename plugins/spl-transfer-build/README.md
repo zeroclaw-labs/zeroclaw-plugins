@@ -44,6 +44,22 @@ caps = "SOL:0.1:9,4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU:25:6"
 nonce_account = ""
 ```
 
+Once the typed-config host lands (issue #147), `[[plugins.entries]]` is keyed on
+the package's full instance id rather than its name, and legacy name-keyed entries
+are not consulted. Set the same values through the CLI, which resolves the key for
+you:
+
+```
+key=$(zeroclaw plugin info spl-transfer-build)   # prints the zpi1_... instance key
+zeroclaw config set "plugins.entries.$key.config.rpc_url" 'https://api.devnet.solana.com'
+zeroclaw config set "plugins.entries.$key.config.allow_recipients" 'mvines9iiHiQTysrwkJjGf2gb9Ex9jXJX8ns3qwf2kN'
+zeroclaw config set "plugins.entries.$key.config.caps" 'SOL:0.1:9'
+```
+
+The manifest declares a closed `config_schema`, so the host validates these values
+and rejects an unknown key before the component starts. The guest checks them
+again rather than trusting the host's copy.
+
 Config parsing **fails closed**: an unknown or misspelled key (say
 `max_amout`) refuses every transfer rather than silently dropping the cap; an
 empty allowlist denies everything; `rpc_url` must be https. The RPC endpoint
