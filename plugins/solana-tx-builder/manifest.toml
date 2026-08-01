@@ -1,0 +1,7 @@
+name = "solana-tx-builder"
+version = "0.1.0"
+description = "Offline Solana instruction & address construction for the ZeroClaw agent: PDAs, ATAs, SystemProgram/SPL transfers. Pure compute — no network; the agent builds, a wallet signs."
+author = "furkanefecancaglar"
+wasm_path = "solana_tx_builder.wasm"
+capabilities = ["tool"]
+permissions = []

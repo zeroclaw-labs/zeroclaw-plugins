@@ -1,0 +1,8 @@
+name = "solana-verify"
+version = "0.1.0"
+description = "Offline Solana verification for the ZeroClaw agent: keccak-256 Merkle proofs (TxODDS on-chain settlement primitive), ed25519 signatures, and base58 pubkey conversion. Pure compute — no network."
+author = "furkanefecancaglar"
+wasm_path = "solana_verify.wasm"
+capabilities = ["tool"]
+# Pure-compute: no network, no config, no host permissions required.
+permissions = []

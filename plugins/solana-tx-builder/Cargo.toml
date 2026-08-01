@@ -1,0 +1,32 @@
+[package]
+name = "solana-tx-builder"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "ZeroClaw WIT plugin: offline Solana instruction & address construction — PDAs, ATAs, SystemProgram/SPL transfers. Pure compute, no network; the agent builds, a wallet signs."
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+wit-bindgen = "0.46"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# pure-compute crypto — all confirmed to compile to wasm32-wasip2
+curve25519-dalek = "4"
+sha2 = "0.10"
+bs58 = "0.5"
+hex = "0.4"
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true
+codegen-units = 1
+
+[workspace]
+
+[dev-dependencies]
+bs58 = "0.5"
+curve25519-dalek = "4"

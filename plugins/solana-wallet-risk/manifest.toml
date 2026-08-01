@@ -1,0 +1,9 @@
+name = "solana-wallet-risk"
+version = "0.1.0"
+description = "Scan a Solana wallet's SPL and Token-2022 holdings live and aggregate their risk: which positions can be frozen, diluted by a live mint authority, blocked by a transfer hook, or taxed by a transfer fee. Read-only, no keys."
+author = "furkanefecancaglar"
+wasm_path = "solana_wallet_risk.wasm"
+capabilities = ["tool"]
+# http_client: read-only JSON-RPC (getTokenAccountsByOwner + getAccountInfo). TLS host-side.
+# config_read: optional RPC url from this plugin's config section.
+permissions = ["http_client", "config_read"]
