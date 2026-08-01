@@ -40,6 +40,33 @@ That capture is a simulation accepted by mainnet. It is not a settlement. Nothin
 this repository signs, broadcasts or holds a key, and the sender address in the
 capture is a public mainnet wallet that is not ours.
 
+## Re-checking the devnet evidence yourself
+
+`demo/run-demo.sh` proves the components against a local fake, with no network.
+This suite also has one real settlement behind it, and you can re-check that
+without any credentials:
+
+```
+bash demo/verify-devnet.sh                      # public devnet RPC
+RPC_URL=https://your-node bash demo/verify-devnet.sh
+```
+
+There is no keypair, no wallet and no private key in that script, and nothing in
+it can sign or send. It reads five accounts and one signature.
+
+It separates two kinds of claim on purpose. The invariants are properties of the
+chain and fail the run if they break: the supplier holds exactly 50,000,000
+lamports, which is the whole of invoice 001 and the only payment ever sent to
+that address, and the nonce account is system-owned, 2,000,000 lamports, 80 bytes,
+decoding to version 1, state 1, a 5,000 lamport fee and the owner as authority.
+That decode is the same layout `nonce-status` parses, checked without the plugin.
+
+The settlement signature is reported rather than asserted, because devnet history
+depth is a property of whichever node answers rather than a promise. The same
+signature returned nothing from the public endpoint on 2026-07-30 and returns
+`finalized` at slot 479019906 today. The balance is the durable proof; the
+signature is the convenience.
+
 ## What it does not prove
 
 Stage 3 data comes from a local fake, so no on-chain state is involved. Stage 4

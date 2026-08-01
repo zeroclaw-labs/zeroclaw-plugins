@@ -71,7 +71,7 @@ reporting one as READY would be a lie.
 
 ## What we'd build next
 
-A `nonce-create-build` companion (T1, unsigned) so the whole lifecycle can be
+A `nonce-create-build` companion (unsigned) so the whole lifecycle can be
 proposed from the chat and signed by the owner, closing the one remaining CLI
 step.
 
