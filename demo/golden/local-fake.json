@@ -50,7 +50,7 @@
   "refuse-plain-http-endpoint": {
     "ok": false,
     "rpc_calls": 0,
-    "text": "policy config error (transfer denied): rpc_url must be https, got 'http://127.0.0.1:1'"
+    "text": "policy config error (transfer denied): rpc_url must be an https:// endpoint"
   },
   "refuse-wrong-nonce-authority": {
     "ok": false,
@@ -108,6 +108,6 @@
   "watch-refuse-plain-http-endpoint": {
     "ok": false,
     "rpc_calls": 0,
-    "text": "config error: rpc_url must be https, got 'http://127.0.0.1:1'"
+    "text": "config error: rpc_url must be an https:// endpoint"
   }
 }

@@ -143,7 +143,7 @@
       "driver": "build",
       "what": "an http endpoint in operator config",
       "expect": "refuse",
-      "must_contain": "rpc_url must be https",
+      "must_contain": "rpc_url must be an https:// endpoint",
       "rpc_calls": 0,
       "args": {
         "sender": "9B5XszUGdMaxCZ7uSQhPzdks5ZQSmWxrmzCSvtJ6Ns6g",
@@ -277,7 +277,7 @@
       "driver": "watch",
       "what": "the same https rule on the read-only tool",
       "expect": "refuse",
-      "must_contain": "rpc_url must be https",
+      "must_contain": "rpc_url must be an https:// endpoint",
       "rpc_calls": 0,
       "args": {
         "reference": "FPPZ8UK5r9BiNQ7N9DhGumcQkQJE9JXXvkCRvFG4d5X5",
