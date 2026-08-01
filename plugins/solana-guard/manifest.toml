@@ -1,0 +1,10 @@
+name = "solana-guard"
+version = "0.1.0"
+description = "Solana transaction safety gate: decode, narrate, and ALLOW/HOLD/REJECT before the agent signs"
+author = "OutstandingVick"
+wasm_path = "solana_guard.wasm"
+capabilities = ["tool"]
+# Jailed, plugin-local policy configuration only. No network, files, wallet,
+# signing, or broadcasting capabilities.
+permissions = ["config_read"]
+
