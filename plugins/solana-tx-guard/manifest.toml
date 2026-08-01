@@ -1,0 +1,9 @@
+name = "solana-tx-guard"
+version = "0.1.0"
+description = "Preflight guard for a Solana transaction before it is signed: statically decode every instruction and flag dangerous ones (SetAuthority, delegate Approve, CloseAccount, owner Assign, wallet drains), then simulate it live against mainnet to report the real success/failure and balance effect. Read-only, signs nothing."
+author = "furkanefecancaglar"
+wasm_path = "solana_tx_guard.wasm"
+capabilities = ["tool"]
+# http_client: simulateTransaction against a Solana RPC (read-only; sigVerify=false). TLS host-side.
+# config_read: optional RPC url from this plugin's config section.
+permissions = ["http_client", "config_read"]
