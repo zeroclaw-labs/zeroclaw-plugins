@@ -75,7 +75,9 @@ fn rpc_url(config: &BTreeMap<String, String>) -> Result<String, WatchError> {
         .trim()
         .to_string();
     if !url.starts_with("https://") {
-        return Err(WatchError::Config("rpc_url must be an https:// endpoint".to_string()));
+        return Err(WatchError::Config(
+            "rpc_url must be an https:// endpoint".into(),
+        ));
     }
     Ok(url)
 }

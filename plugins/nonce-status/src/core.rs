@@ -66,7 +66,9 @@ pub fn status(args: &Args, lookups: &mut dyn Lookups) -> Result<String, StatusEr
         .get("rpc_url")
         .ok_or_else(|| StatusError::Config("rpc_url is required".into()))?;
     if !rpc_url.starts_with("https://") {
-        return Err(StatusError::Config("rpc_url must be an https:// endpoint".to_string()));
+        return Err(StatusError::Config(
+            "rpc_url must be an https:// endpoint".into(),
+        ));
     }
 
     let account_str = args

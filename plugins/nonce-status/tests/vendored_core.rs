@@ -10,7 +10,7 @@
 //! Vendoring invites drift, so this pins it. The digest below covers the
 //! core's Rust sources and its manifest. Every plugin carrying the core
 //! asserts the same constant, so editing one copy and not the others turns
-//! that plugin red. Update the core with `vendor-core.sh` (which re-copies
+//! that plugin red. Update the core with `libs/solana-core/vendor.sh` (which re-copies
 //! from a single source), then update this constant in all copies together.
 
 use std::fs;
@@ -21,7 +21,7 @@ use sha2::{Digest, Sha256};
 /// sha256 over the vendored core's `src/*.rs`, `tests/*.rs` and `Cargo.toml`.
 /// Identical in every plugin that vendors the core.
 const VENDORED_CORE_DIGEST: &str =
-    "b03bbf8c0bc83458ff1815a8b4a0aec6b26e89be0b8a5cd306de72a574081f65";
+    "4f07d079822ed3f263b346411db5b8de616fe359b2d7e6e0409408c972296bf2";
 
 /// Hash the vendored tree the same way in every plugin: files in a fixed
 /// order, each contributing its relative path and its bytes, both
@@ -71,7 +71,7 @@ fn vendored_core_matches_the_pinned_digest() {
     assert_eq!(
         actual, VENDORED_CORE_DIGEST,
         "the vendored solana-core in this plugin no longer matches the pinned \
-         digest.\n\nIf you edited the core, re-run vendor-core.sh so every \
+         digest.\n\nIf you edited the core, re-run libs/solana-core/vendor.sh so every \
          plugin gets the same bytes, then set VENDORED_CORE_DIGEST to {actual} \
          in each plugin's tests/vendored_core.rs."
     );

@@ -287,10 +287,18 @@ mod tests {
         let secret = "http://rpc.example.invalid/v2/secret-key-abc123";
         let mut c = valid();
         c.insert("rpc_url".into(), secret.into());
-        let shown = parse_policy(&c).expect_err("plain http must fail closed").to_string();
+        let shown = parse_policy(&c)
+            .expect_err("plain http must fail closed")
+            .to_string();
         assert!(!shown.contains(secret), "echoed the value: {shown}");
-        assert!(!shown.contains("secret-key-abc123"), "echoed the credential: {shown}");
-        assert!(shown.contains("https://"), "must still say what is required: {shown}");
+        assert!(
+            !shown.contains("secret-key-abc123"),
+            "echoed the credential: {shown}"
+        );
+        assert!(
+            shown.contains("https://"),
+            "must still say what is required: {shown}"
+        );
     }
 
     #[test]
