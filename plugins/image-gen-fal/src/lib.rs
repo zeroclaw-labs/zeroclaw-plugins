@@ -78,12 +78,7 @@ mod component {
     ///
     /// `outcome: None` is how the WIT records "unknown"; there is no Unknown
     /// variant, so an in-flight event passes `None` rather than guessing.
-    fn log(
-        level: LogLevel,
-        action: PluginAction,
-        outcome: Option<PluginOutcome>,
-        message: String,
-    ) {
+    fn log(level: LogLevel, action: PluginAction, outcome: Option<PluginOutcome>, message: String) {
         log_record(
             level,
             &PluginEvent {
@@ -121,9 +116,10 @@ mod component {
                 Err(e) => return Ok(failure(e)),
             };
 
-            let parsed: ExecuteArgs = serde_json::from_value(value.clone()).unwrap_or(ExecuteArgs {
-                config: HashMap::new(),
-            });
+            let parsed: ExecuteArgs =
+                serde_json::from_value(value.clone()).unwrap_or(ExecuteArgs {
+                    config: HashMap::new(),
+                });
             let api_key = match fal::api_key(&parsed.config) {
                 Ok(k) => k,
                 Err(e) => return Ok(failure(e)),
