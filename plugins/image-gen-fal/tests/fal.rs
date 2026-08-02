@@ -152,7 +152,11 @@ fn upstream_error_bodies_are_truncated_so_they_cannot_flood_context() {
     let huge = "x".repeat(5_000);
     let msg = truncate_error(&huge, 500);
     assert!(msg.contains("500"));
-    assert!(msg.len() < 600, "error should be clipped, got {}", msg.len());
+    assert!(
+        msg.len() < 600,
+        "error should be clipped, got {}",
+        msg.len()
+    );
 }
 
 #[test]
