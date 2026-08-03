@@ -181,6 +181,25 @@ else
   echo "  The last captured run is committed under demo/artifacts/mainnet-readpath/"
 fi
 
+# ---------------------------------------------------------------- stage 5
+stage "stage 5: every claim re-derived from the bytes this run staged"
+echo "  each check reads a staged artifact or a manifest and exits nonzero if a"
+echo "  property does not hold, so none of it asks to be believed"
+if bash "$HERE/verify-all.sh" -q >"$OUT/verify-all.log" 2>&1; then
+  grep -E '  (pass|FAIL)$|checks pass' "$OUT/verify-all.log" | sed 's/^/  /'
+else
+  sed 's/^/  /' <"$OUT/verify-all.log" | tail -12
+  fail "a claim did not hold, see demo/out/verify-all.log"
+fi
+echo
+echo "  and every one of those checks can be made to fail on purpose:"
+if python3 "$HERE/prove-teeth.py" -q >"$OUT/prove-teeth.log" 2>&1; then
+  grep -E 'controls provoked' "$OUT/prove-teeth.log" | sed 's/^/  /'
+else
+  tail -12 "$OUT/prove-teeth.log" | sed 's/^/  /'
+  fail "a negative control left its check green, see demo/out/prove-teeth.log"
+fi
+
 # ---------------------------------------------------------------- verdict
 stage "verdict"
 python3 - "$OUT/gates.json" "$OUT/fake-run.json" <<'PY'
