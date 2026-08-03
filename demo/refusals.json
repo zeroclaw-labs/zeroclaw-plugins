@@ -1,0 +1,854 @@
+{
+  "note": [
+    "The complete fail-closed surface of the Solana payment suite, one row per",
+    "guard. demo/verify-refusals.py enumerates the same guards straight out of",
+    "the Rust and fails if this file and the code disagree in either direction,",
+    "so the count below cannot drift away from the code without CI noticing.",
+    "A row is one construction of a refusal error or a policy denial. Transport",
+    "failures are not refusals and are excluded by name below.",
+    "'reason' is the longest run of the message that survives formatting, so the",
+    "same string is checkable in the source and in the component's data section.",
+    "'sites' carry the guard line verbatim; the checker resolves the line numbers",
+    "itself, which is why none are written down here."
+  ],
+  "counts": {
+    "refusals": 42,
+    "pre_rpc": 37,
+    "post_rpc": 5,
+    "demo_refusal_cases": 9,
+    "demo_pre_rpc_cases": 7
+  },
+  "components": {
+    "spl-transfer-build": "spl_transfer_build.wasm",
+    "payment-watch": "payment_watch.wasm",
+    "nonce-status": "nonce_status.wasm"
+  },
+  "sources": {
+    "spl-transfer-build": [
+      "plugins/spl-transfer-build/src/builder.rs",
+      "libs/solana-core/src/policy.rs"
+    ],
+    "payment-watch": [
+      "plugins/payment-watch/src/watcher.rs"
+    ],
+    "nonce-status": [
+      "plugins/nonce-status/src/core.rs"
+    ]
+  },
+  "vendored": {
+    "canonical": "libs/solana-core/src/policy.rs",
+    "copies": [
+      "plugins/spl-transfer-build/solana-core/src/policy.rs",
+      "plugins/payment-watch/solana-core/src/policy.rs",
+      "plugins/nonce-status/solana-core/src/policy.rs"
+    ]
+  },
+  "excluded": {
+    "BuildError::Rpc": "transport and response parsing, not a refusal of an unsafe request",
+    "WatchError::Rpc": "transport and response parsing, not a refusal of an unsafe request",
+    "StatusError::Rpc": "transport and response parsing, not a refusal of an unsafe request"
+  },
+  "envelopes": {
+    "BuildError::Policy": {
+      "wraps": "PolicyError",
+      "file": "plugins/spl-transfer-build/src/builder.rs",
+      "line": "let policy = parse_policy(&args.config).map_err(|e| BuildError::Policy(e.to_string()))?;"
+    }
+  },
+  "transport_boundary": {
+    "spl-transfer-build": {
+      "shim": "plugins/spl-transfer-build/src/lib.rs",
+      "entry": "match run(&args, &mut transport) {"
+    },
+    "payment-watch": {
+      "shim": "plugins/payment-watch/src/lib.rs",
+      "entry": "match run(&args, &mut transport) {"
+    },
+    "nonce-status": {
+      "shim": "plugins/nonce-status/src/lib.rs",
+      "entry": "match run(&args, &mut transport) {"
+    }
+  },
+  "demo": {
+    "scenarios": "demo/scenarios/local-fake.json",
+    "golden": "demo/golden/local-fake.json"
+  },
+  "not_refusals": [
+    {
+      "component": "payment-watch",
+      "file": "plugins/payment-watch/src/watcher.rs",
+      "reason": "NOT SEEN: no transaction under this reference yet",
+      "what": "no transaction is indexed under the reference yet",
+      "line": "\"NOT SEEN: no transaction under this reference yet\".to_string(),",
+      "demo_scenario": "watch-nothing-under-reference"
+    },
+    {
+      "component": "payment-watch",
+      "file": "plugins/payment-watch/src/watcher.rs",
+      "reason": "NOT CONFIRMED: ",
+      "what": "a transaction exists but does not satisfy the expectations",
+      "line": "Verdict::NotSatisfied { reason } => (false, format!(\"NOT CONFIRMED: {reason}\"), None),",
+      "demo_scenario": "watch-amount-short"
+    },
+    {
+      "component": "nonce-status",
+      "file": "plugins/nonce-status/src/core.rs",
+      "reason": "MISSING: nonce account ",
+      "what": "the nonce account does not exist, answered with the create command",
+      "line": "\"MISSING: nonce account {account} does not exist. Create it once with: \\",
+      "demo_scenario": "nonce-missing-account"
+    },
+    {
+      "component": "nonce-status",
+      "file": "plugins/nonce-status/src/core.rs",
+      "reason": "NOT A NONCE ACCOUNT: ",
+      "what": "the account exists but is not owned by the system program",
+      "line": "\"NOT A NONCE ACCOUNT: {account} is owned by {owner}, not the system program. \\",
+      "demo_scenario": "nonce-not-a-nonce-account"
+    },
+    {
+      "component": "nonce-status",
+      "file": "plugins/nonce-status/src/core.rs",
+      "reason": "UNINITIALIZED: ",
+      "what": "the account exists but was never initialised as a nonce",
+      "line": "Err(NonceError::Uninitialized) => Ok(format!(",
+      "demo_scenario": null
+    },
+    {
+      "component": "nonce-status",
+      "file": "plugins/nonce-status/src/core.rs",
+      "reason": "UNUSABLE: ",
+      "what": "the nonce account decodes but transfer-build will refuse it",
+      "line": "Err(e) => Ok(format!(",
+      "demo_scenario": null
+    }
+  ],
+  "refusals": [
+    {
+      "id": "config-unknown-key",
+      "component": "spl-transfer-build",
+      "variant": "PolicyError::UnknownKey",
+      "condition": "an unrecognised key in the operator's config section",
+      "reason": "refusing to guess (fail closed)",
+      "reason_file": "libs/solana-core/src/policy.rs",
+      "pre_rpc": true,
+      "sites": [
+        {
+          "file": "libs/solana-core/src/policy.rs",
+          "line": "return Err(PolicyError::UnknownKey(k.clone()));"
+        }
+      ],
+      "demo_scenarios": [
+        "refuse-config-typo"
+      ]
+    },
+    {
+      "id": "config-rpc-url-missing",
+      "component": "spl-transfer-build",
+      "variant": "PolicyError::MissingRpcUrl",
+      "condition": "no rpc_url in the operator's config",
+      "reason": "rpc_url is required",
+      "reason_file": "libs/solana-core/src/policy.rs",
+      "pre_rpc": true,
+      "sites": [
+        {
+          "file": "libs/solana-core/src/policy.rs",
+          "line": ".ok_or(PolicyError::MissingRpcUrl)?"
+        }
+      ],
+      "demo_scenarios": []
+    },
+    {
+      "id": "config-rpc-url-not-https",
+      "component": "spl-transfer-build",
+      "variant": "PolicyError::BadRpcUrl",
+      "condition": "an rpc_url that is not https",
+      "reason": "rpc_url must be an https:// endpoint",
+      "reason_file": "libs/solana-core/src/policy.rs",
+      "pre_rpc": true,
+      "sites": [
+        {
+          "file": "libs/solana-core/src/policy.rs",
+          "line": "return Err(PolicyError::BadRpcUrl(rpc_url));"
+        }
+      ],
+      "demo_scenarios": [
+        "refuse-plain-http-endpoint"
+      ]
+    },
+    {
+      "id": "config-allowlist-entry-not-a-pubkey",
+      "component": "spl-transfer-build",
+      "variant": "PolicyError::BadRecipient",
+      "condition": "an allow_recipients entry that is not a base58 pubkey",
+      "reason": "allow_recipients entry '",
+      "reason_file": "libs/solana-core/src/policy.rs",
+      "pre_rpc": true,
+      "sites": [
+        {
+          "file": "libs/solana-core/src/policy.rs",
+          "line": ".push(Pubkey::parse(entry).map_err(|_| PolicyError::BadRecipient(entry.into()))?);"
+        }
+      ],
+      "demo_scenarios": []
+    },
+    {
+      "id": "config-allowlist-empty",
+      "component": "spl-transfer-build",
+      "variant": "PolicyError::EmptyAllowlist",
+      "condition": "an empty or absent allow_recipients, which denies every recipient",
+      "reason": "allow_recipients is empty",
+      "reason_file": "libs/solana-core/src/policy.rs",
+      "pre_rpc": true,
+      "sites": [
+        {
+          "file": "libs/solana-core/src/policy.rs",
+          "line": "return Err(PolicyError::EmptyAllowlist);"
+        }
+      ],
+      "demo_scenarios": []
+    },
+    {
+      "id": "config-cap-entry-malformed",
+      "component": "spl-transfer-build",
+      "variant": "PolicyError::BadCap",
+      "condition": "a caps entry that is not mint:amount:decimals",
+      "reason": "' is not a valid amount",
+      "reason_file": "libs/solana-core/src/policy.rs",
+      "pre_rpc": true,
+      "sites": [
+        {
+          "file": "libs/solana-core/src/policy.rs",
+          "line": "return Err(PolicyError::BadCap(entry.into()));"
+        }
+      ],
+      "demo_scenarios": []
+    },
+    {
+      "id": "config-cap-mint-not-a-pubkey",
+      "component": "spl-transfer-build",
+      "variant": "PolicyError::BadMint",
+      "condition": "a caps entry whose mint is not a base58 pubkey",
+      "reason": "' is not a valid pubkey",
+      "reason_file": "libs/solana-core/src/policy.rs",
+      "pre_rpc": true,
+      "sites": [
+        {
+          "file": "libs/solana-core/src/policy.rs",
+          "line": "Pubkey::parse(mint).map_err(|_| PolicyError::BadMint(mint.into()))?;"
+        }
+      ],
+      "demo_scenarios": []
+    },
+    {
+      "id": "config-cap-decimals-not-a-number",
+      "component": "spl-transfer-build",
+      "variant": "PolicyError::BadCap",
+      "condition": "a caps entry whose decimals field is not a u8",
+      "reason": "' is not a valid amount",
+      "reason_file": "libs/solana-core/src/policy.rs",
+      "pre_rpc": true,
+      "sites": [
+        {
+          "file": "libs/solana-core/src/policy.rs",
+          "line": ".map_err(|_| PolicyError::BadCap(entry.into()))?;",
+          "within": ".parse()"
+        }
+      ],
+      "demo_scenarios": []
+    },
+    {
+      "id": "config-cap-sol-decimals-wrong",
+      "component": "spl-transfer-build",
+      "variant": "PolicyError::BadCap",
+      "condition": "a SOL cap written at anything other than 9 decimals",
+      "reason": "(SOL is 9 decimals)",
+      "reason_file": "libs/solana-core/src/policy.rs",
+      "pre_rpc": true,
+      "sites": [
+        {
+          "file": "libs/solana-core/src/policy.rs",
+          "line": "return Err(PolicyError::BadCap(format!(\"{entry} (SOL is 9 decimals)\")));"
+        }
+      ],
+      "demo_scenarios": []
+    },
+    {
+      "id": "config-cap-amount-not-a-number",
+      "component": "spl-transfer-build",
+      "variant": "PolicyError::BadCap",
+      "condition": "a caps entry whose amount is not an exact decimal",
+      "reason": "' is not a valid amount",
+      "reason_file": "libs/solana-core/src/policy.rs",
+      "pre_rpc": true,
+      "sites": [
+        {
+          "file": "libs/solana-core/src/policy.rs",
+          "line": "to_base_units(amount, decimals).map_err(|_| PolicyError::BadCap(entry.into()))?;"
+        }
+      ],
+      "demo_scenarios": []
+    },
+    {
+      "id": "config-caps-empty",
+      "component": "spl-transfer-build",
+      "variant": "PolicyError::EmptyMintCaps",
+      "condition": "no caps at all, which denies every mint",
+      "reason": "no mint caps configured",
+      "reason_file": "libs/solana-core/src/policy.rs",
+      "pre_rpc": true,
+      "sites": [
+        {
+          "file": "libs/solana-core/src/policy.rs",
+          "line": "return Err(PolicyError::EmptyMintCaps);"
+        }
+      ],
+      "demo_scenarios": []
+    },
+    {
+      "id": "config-nonce-account-not-a-pubkey",
+      "component": "spl-transfer-build",
+      "variant": "PolicyError::BadNonceAccount",
+      "condition": "a nonce_account that is not a base58 pubkey",
+      "reason": "nonce_account '",
+      "reason_file": "libs/solana-core/src/policy.rs",
+      "pre_rpc": true,
+      "sites": [
+        {
+          "file": "libs/solana-core/src/policy.rs",
+          "line": "Some(s) => Some(Pubkey::parse(s).map_err(|_| PolicyError::BadNonceAccount(s.into()))?),"
+        }
+      ],
+      "demo_scenarios": []
+    },
+    {
+      "id": "recipient-not-on-allowlist",
+      "component": "spl-transfer-build",
+      "variant": "PolicyVerdict::RecipientNotAllowed",
+      "condition": "a recipient the operator never allowlisted",
+      "reason": "is not on the operator's allowlist; no transaction was built",
+      "reason_file": "plugins/spl-transfer-build/src/builder.rs",
+      "pre_rpc": true,
+      "sites": [
+        {
+          "file": "libs/solana-core/src/policy.rs",
+          "line": "return PolicyVerdict::RecipientNotAllowed;"
+        },
+        {
+          "file": "plugins/spl-transfer-build/src/builder.rs",
+          "line": "PolicyVerdict::RecipientNotAllowed => {"
+        },
+        {
+          "file": "plugins/spl-transfer-build/src/builder.rs",
+          "line": "return Err(BuildError::Refused {",
+          "within": "is not on the operator's allowlist"
+        }
+      ],
+      "demo_scenarios": [
+        "refuse-off-allowlist"
+      ]
+    },
+    {
+      "id": "mint-not-on-cap-list",
+      "component": "spl-transfer-build",
+      "variant": "PolicyVerdict::MintNotAllowed",
+      "condition": "a mint with no operator cap, decided inside TransferPolicy::check",
+      "reason": "is not on the operator's cap list; no transaction was built",
+      "reason_file": "plugins/spl-transfer-build/src/builder.rs",
+      "pre_rpc": true,
+      "sites": [
+        {
+          "file": "libs/solana-core/src/policy.rs",
+          "line": "None => PolicyVerdict::MintNotAllowed,"
+        },
+        {
+          "file": "plugins/spl-transfer-build/src/builder.rs",
+          "line": "PolicyVerdict::MintNotAllowed => {"
+        },
+        {
+          "file": "plugins/spl-transfer-build/src/builder.rs",
+          "line": "return Err(BuildError::Refused {",
+          "within": "is not on the operator's cap list"
+        }
+      ],
+      "demo_scenarios": [],
+      "note": "Unreachable from the tool: plan() refuses the same condition earlier at mint-not-in-cap-list, so this arm only fires when TransferPolicy::check is called directly as a library. The string still ships in the component."
+    },
+    {
+      "id": "amount-over-per-transfer-cap",
+      "component": "spl-transfer-build",
+      "variant": "PolicyVerdict::OverCap",
+      "condition": "an amount above the operator's per-transfer cap for that mint",
+      "reason": "exceeds the operator's per-transfer cap of",
+      "reason_file": "plugins/spl-transfer-build/src/builder.rs",
+      "pre_rpc": true,
+      "sites": [
+        {
+          "file": "libs/solana-core/src/policy.rs",
+          "line": "Some(&cap) if amount_base_units > cap => PolicyVerdict::OverCap {"
+        },
+        {
+          "file": "plugins/spl-transfer-build/src/builder.rs",
+          "line": "PolicyVerdict::OverCap { cap_base_units } => {"
+        },
+        {
+          "file": "plugins/spl-transfer-build/src/builder.rs",
+          "line": "return Err(BuildError::Refused {",
+          "within": "exceeds the operator's per-transfer cap of"
+        }
+      ],
+      "demo_scenarios": [
+        "refuse-over-cap"
+      ]
+    },
+    {
+      "id": "args-not-parseable",
+      "component": "spl-transfer-build",
+      "variant": "BuildError::BadArgs",
+      "condition": "tool arguments that do not match the schema: an unknown field such as an injected rpc_url, a JSON number where amount must be a string",
+      "reason": "bad arguments: ",
+      "reason_file": "plugins/spl-transfer-build/src/builder.rs",
+      "pre_rpc": true,
+      "sites": [
+        {
+          "file": "plugins/spl-transfer-build/src/builder.rs",
+          "line": "serde_json::from_str(raw_args).map_err(|e| BuildError::BadArgs(e.to_string()))?;"
+        }
+      ],
+      "demo_scenarios": [
+        "refuse-injected-argument",
+        "refuse-numeric-amount"
+      ],
+      "note": "One guard, two unsafe inputs. #[serde(deny_unknown_fields)] rejects the injected field and the typed amount: String rejects the float."
+    },
+    {
+      "id": "args-sender-not-a-pubkey",
+      "component": "spl-transfer-build",
+      "variant": "BuildError::BadArgs",
+      "condition": "a sender that is not a base58 pubkey",
+      "reason": "sender: ",
+      "reason_file": "plugins/spl-transfer-build/src/builder.rs",
+      "pre_rpc": true,
+      "sites": [
+        {
+          "file": "plugins/spl-transfer-build/src/builder.rs",
+          "line": "Pubkey::parse(&args.sender).map_err(|e| BuildError::BadArgs(format!(\"sender: {e}\")))?;"
+        }
+      ],
+      "demo_scenarios": []
+    },
+    {
+      "id": "args-recipient-not-a-pubkey",
+      "component": "spl-transfer-build",
+      "variant": "BuildError::BadArgs",
+      "condition": "a recipient that is not a base58 pubkey",
+      "reason": "recipient: ",
+      "reason_file": "plugins/spl-transfer-build/src/builder.rs",
+      "pre_rpc": true,
+      "sites": [
+        {
+          "file": "plugins/spl-transfer-build/src/builder.rs",
+          "line": ".map_err(|e| BuildError::BadArgs(format!(\"recipient: {e}\")))?;"
+        }
+      ],
+      "demo_scenarios": []
+    },
+    {
+      "id": "args-mint-not-a-pubkey",
+      "component": "spl-transfer-build",
+      "variant": "BuildError::BadArgs",
+      "condition": "a mint argument that is neither SOL nor a base58 pubkey",
+      "reason": "mint: ",
+      "reason_file": "plugins/spl-transfer-build/src/builder.rs",
+      "pre_rpc": true,
+      "sites": [
+        {
+          "file": "plugins/spl-transfer-build/src/builder.rs",
+          "line": "Pubkey::parse(m).map_err(|e| BuildError::BadArgs(format!(\"mint: {e}\")))?;"
+        }
+      ],
+      "demo_scenarios": []
+    },
+    {
+      "id": "args-reference-not-a-pubkey",
+      "component": "spl-transfer-build",
+      "variant": "BuildError::BadArgs",
+      "condition": "a Solana Pay reference that is not a base58 pubkey",
+      "reason": "reference: ",
+      "reason_file": "plugins/spl-transfer-build/src/builder.rs",
+      "pre_rpc": true,
+      "sites": [
+        {
+          "file": "plugins/spl-transfer-build/src/builder.rs",
+          "line": "Some(Pubkey::parse(r).map_err(|e| BuildError::BadArgs(format!(\"reference: {e}\")))?)"
+        }
+      ],
+      "demo_scenarios": []
+    },
+    {
+      "id": "args-memo-too-long",
+      "component": "spl-transfer-build",
+      "variant": "BuildError::BadArgs",
+      "condition": "a memo over 256 bytes",
+      "reason": "memo exceeds 256 bytes",
+      "reason_file": "plugins/spl-transfer-build/src/builder.rs",
+      "pre_rpc": true,
+      "sites": [
+        {
+          "file": "plugins/spl-transfer-build/src/builder.rs",
+          "line": "return Err(BuildError::BadArgs(\"memo exceeds 256 bytes\".into()));"
+        }
+      ],
+      "demo_scenarios": []
+    },
+    {
+      "id": "mint-not-in-cap-list",
+      "component": "spl-transfer-build",
+      "variant": "BuildError::Refused",
+      "condition": "a mint with no operator cap, caught in plan() before the verdict dispatch",
+      "reason": "is not in the operator's cap list",
+      "reason_file": "plugins/spl-transfer-build/src/builder.rs",
+      "pre_rpc": true,
+      "sites": [
+        {
+          "file": "plugins/spl-transfer-build/src/builder.rs",
+          "line": "let cap_decimals = policy_decimals(&policy, &mint_key).ok_or_else(|| BuildError::Refused {"
+        }
+      ],
+      "demo_scenarios": []
+    },
+    {
+      "id": "args-amount-not-parseable",
+      "component": "spl-transfer-build",
+      "variant": "BuildError::BadArgs",
+      "condition": "an amount that is not an exact decimal at the cap's decimals",
+      "reason": "amount: ",
+      "reason_file": "plugins/spl-transfer-build/src/builder.rs",
+      "pre_rpc": true,
+      "sites": [
+        {
+          "file": "plugins/spl-transfer-build/src/builder.rs",
+          "line": ".map_err(|e| BuildError::BadArgs(format!(\"amount: {e}\")))?;"
+        }
+      ],
+      "demo_scenarios": []
+    },
+    {
+      "id": "nonce-authority-not-the-sender",
+      "component": "spl-transfer-build",
+      "variant": "BuildError::Refused",
+      "condition": "a durable nonce account whose authority is not the sender",
+      "reason": "refusing to build an unusable transaction",
+      "reason_file": "plugins/spl-transfer-build/src/builder.rs",
+      "pre_rpc": false,
+      "sites": [
+        {
+          "file": "plugins/spl-transfer-build/src/builder.rs",
+          "line": "return Err(BuildError::Refused {",
+          "within": "refusing to build an unusable transaction"
+        }
+      ],
+      "demo_scenarios": [
+        "refuse-wrong-nonce-authority"
+      ]
+    },
+    {
+      "id": "cap-decimals-disagree-with-mint",
+      "component": "spl-transfer-build",
+      "variant": "BuildError::Refused",
+      "condition": "an operator cap written at different decimals than the mint reports",
+      "reason": "fix the cap entry (fail closed)",
+      "reason_file": "plugins/spl-transfer-build/src/builder.rs",
+      "pre_rpc": false,
+      "sites": [
+        {
+          "file": "plugins/spl-transfer-build/src/builder.rs",
+          "line": "return Err(BuildError::Refused {",
+          "within": "fix the cap entry (fail closed)"
+        }
+      ],
+      "demo_scenarios": [
+        "refuse-decimals-mismatch"
+      ]
+    },
+    {
+      "id": "amount-not-parseable-at-sol-build",
+      "component": "spl-transfer-build",
+      "variant": "BuildError::BadArgs",
+      "condition": "a SOL amount that fails the build-time re-parse",
+      "reason": "bad arguments: ",
+      "reason_file": "plugins/spl-transfer-build/src/builder.rs",
+      "pre_rpc": false,
+      "sites": [
+        {
+          "file": "plugins/spl-transfer-build/src/builder.rs",
+          "line": ".map_err(|e| BuildError::BadArgs(e.to_string()))?;",
+          "within": "to_base_units(&plan.amount_display, 9)"
+        }
+      ],
+      "demo_scenarios": [],
+      "note": "Unreachable in practice: plan() already parsed the same string at 9 decimals for SOL, so this re-parse cannot fail. Kept as a guard, listed as one."
+    },
+    {
+      "id": "amount-not-parseable-at-spl-build",
+      "component": "spl-transfer-build",
+      "variant": "BuildError::BadArgs",
+      "condition": "an SPL amount that fails the build-time re-parse",
+      "reason": "bad arguments: ",
+      "reason_file": "plugins/spl-transfer-build/src/builder.rs",
+      "pre_rpc": false,
+      "sites": [
+        {
+          "file": "plugins/spl-transfer-build/src/builder.rs",
+          "line": ".map_err(|e| BuildError::BadArgs(e.to_string()))?;",
+          "within": "on_chain_decimals)"
+        }
+      ],
+      "demo_scenarios": [],
+      "note": "Unreachable in practice: cap-decimals-disagree-with-mint has already refused any case where the build-time decimals differ from the ones plan() used."
+    },
+    {
+      "id": "watch-config-unknown-key",
+      "component": "payment-watch",
+      "variant": "WatchError::Config",
+      "condition": "an unrecognised key in the operator's config section",
+      "reason": "refusing to guess (fail closed)",
+      "reason_file": "plugins/payment-watch/src/watcher.rs",
+      "pre_rpc": true,
+      "sites": [
+        {
+          "file": "plugins/payment-watch/src/watcher.rs",
+          "line": "return Err(WatchError::Config(format!("
+        }
+      ],
+      "demo_scenarios": []
+    },
+    {
+      "id": "watch-config-rpc-url-missing",
+      "component": "payment-watch",
+      "variant": "WatchError::Config",
+      "condition": "no rpc_url in the operator's config",
+      "reason": "rpc_url is required",
+      "reason_file": "plugins/payment-watch/src/watcher.rs",
+      "pre_rpc": true,
+      "sites": [
+        {
+          "file": "plugins/payment-watch/src/watcher.rs",
+          "line": ".ok_or_else(|| WatchError::Config(\"rpc_url is required\".into()))?"
+        }
+      ],
+      "demo_scenarios": []
+    },
+    {
+      "id": "watch-config-rpc-url-not-https",
+      "component": "payment-watch",
+      "variant": "WatchError::Config",
+      "condition": "an rpc_url that is not https",
+      "reason": "rpc_url must be an https:// endpoint",
+      "reason_file": "plugins/payment-watch/src/watcher.rs",
+      "pre_rpc": true,
+      "sites": [
+        {
+          "file": "plugins/payment-watch/src/watcher.rs",
+          "line": "return Err(WatchError::Config("
+        }
+      ],
+      "demo_scenarios": [
+        "watch-refuse-plain-http-endpoint"
+      ]
+    },
+    {
+      "id": "watch-args-not-parseable",
+      "component": "payment-watch",
+      "variant": "WatchError::BadArgs",
+      "condition": "tool arguments that do not match the schema, unknown fields included",
+      "reason": "bad arguments: ",
+      "reason_file": "plugins/payment-watch/src/watcher.rs",
+      "pre_rpc": true,
+      "sites": [
+        {
+          "file": "plugins/payment-watch/src/watcher.rs",
+          "line": "serde_json::from_str(raw_args).map_err(|e| WatchError::BadArgs(e.to_string()))?;"
+        }
+      ],
+      "demo_scenarios": []
+    },
+    {
+      "id": "watch-args-reference-not-a-pubkey",
+      "component": "payment-watch",
+      "variant": "WatchError::BadArgs",
+      "condition": "a reference that is not a base58 pubkey",
+      "reason": "reference: ",
+      "reason_file": "plugins/payment-watch/src/watcher.rs",
+      "pre_rpc": true,
+      "sites": [
+        {
+          "file": "plugins/payment-watch/src/watcher.rs",
+          "line": ".map_err(|e| WatchError::BadArgs(format!(\"reference: {e}\")))?;"
+        }
+      ],
+      "demo_scenarios": []
+    },
+    {
+      "id": "watch-args-amount-without-mint",
+      "component": "payment-watch",
+      "variant": "WatchError::BadArgs",
+      "condition": "an expected_amount with no mint, so no decimals to read it at",
+      "reason": "expected_amount requires mint",
+      "reason_file": "plugins/payment-watch/src/watcher.rs",
+      "pre_rpc": true,
+      "sites": [
+        {
+          "file": "plugins/payment-watch/src/watcher.rs",
+          "line": "return Err(WatchError::BadArgs("
+        }
+      ],
+      "demo_scenarios": []
+    },
+    {
+      "id": "watch-args-mint-not-a-pubkey",
+      "component": "payment-watch",
+      "variant": "WatchError::BadArgs",
+      "condition": "a mint that is not a base58 pubkey",
+      "reason": "mint: ",
+      "reason_file": "plugins/payment-watch/src/watcher.rs",
+      "pre_rpc": true,
+      "sites": [
+        {
+          "file": "plugins/payment-watch/src/watcher.rs",
+          "line": "Pubkey::parse(m).map_err(|e| WatchError::BadArgs(format!(\"mint: {e}\")))?;"
+        }
+      ],
+      "demo_scenarios": []
+    },
+    {
+      "id": "watch-args-recipient-not-a-pubkey",
+      "component": "payment-watch",
+      "variant": "WatchError::BadArgs",
+      "condition": "a recipient that is not a base58 pubkey",
+      "reason": "recipient: ",
+      "reason_file": "plugins/payment-watch/src/watcher.rs",
+      "pre_rpc": true,
+      "sites": [
+        {
+          "file": "plugins/payment-watch/src/watcher.rs",
+          "line": "Pubkey::parse(r).map_err(|e| WatchError::BadArgs(format!(\"recipient: {e}\")))?;"
+        }
+      ],
+      "demo_scenarios": []
+    },
+    {
+      "id": "watch-args-expected-amount-not-parseable",
+      "component": "payment-watch",
+      "variant": "WatchError::BadArgs",
+      "condition": "an expected_amount that is not an exact decimal at the mint's decimals",
+      "reason": "expected_amount: ",
+      "reason_file": "plugins/payment-watch/src/watcher.rs",
+      "pre_rpc": false,
+      "sites": [
+        {
+          "file": "plugins/payment-watch/src/watcher.rs",
+          "line": ".map_err(|e| WatchError::BadArgs(format!(\"expected_amount: {e}\")))?;"
+        }
+      ],
+      "demo_scenarios": [],
+      "note": "Post-RPC by construction: the mint's decimals come from the transaction the second lookup returned, so the parse cannot happen earlier."
+    },
+    {
+      "id": "nonce-config-unknown-key",
+      "component": "nonce-status",
+      "variant": "StatusError::Config",
+      "condition": "an unrecognised key in the operator's config section",
+      "reason": "refusing to guess (fail closed)",
+      "reason_file": "plugins/nonce-status/src/core.rs",
+      "pre_rpc": true,
+      "sites": [
+        {
+          "file": "plugins/nonce-status/src/core.rs",
+          "line": "return Err(StatusError::Config(format!("
+        }
+      ],
+      "demo_scenarios": []
+    },
+    {
+      "id": "nonce-config-rpc-url-missing",
+      "component": "nonce-status",
+      "variant": "StatusError::Config",
+      "condition": "no rpc_url in the operator's config",
+      "reason": "rpc_url is required",
+      "reason_file": "plugins/nonce-status/src/core.rs",
+      "pre_rpc": true,
+      "sites": [
+        {
+          "file": "plugins/nonce-status/src/core.rs",
+          "line": ".ok_or_else(|| StatusError::Config(\"rpc_url is required\".into()))?;"
+        }
+      ],
+      "demo_scenarios": []
+    },
+    {
+      "id": "nonce-config-rpc-url-not-https",
+      "component": "nonce-status",
+      "variant": "StatusError::Config",
+      "condition": "an rpc_url that is not https",
+      "reason": "rpc_url must be an https:// endpoint",
+      "reason_file": "plugins/nonce-status/src/core.rs",
+      "pre_rpc": true,
+      "sites": [
+        {
+          "file": "plugins/nonce-status/src/core.rs",
+          "line": "return Err(StatusError::Config("
+        }
+      ],
+      "demo_scenarios": []
+    },
+    {
+      "id": "nonce-config-no-account",
+      "component": "nonce-status",
+      "variant": "StatusError::Config",
+      "condition": "no account argument and no configured nonce_account",
+      "reason": "no nonce account: pass `account` or set nonce_account in config",
+      "reason_file": "plugins/nonce-status/src/core.rs",
+      "pre_rpc": true,
+      "sites": [
+        {
+          "file": "plugins/nonce-status/src/core.rs",
+          "line": "StatusError::Config("
+        }
+      ],
+      "demo_scenarios": []
+    },
+    {
+      "id": "nonce-args-account-not-a-pubkey",
+      "component": "nonce-status",
+      "variant": "StatusError::BadArgs",
+      "condition": "an account argument that is not a base58 pubkey",
+      "reason": "nonce account: ",
+      "reason_file": "plugins/nonce-status/src/core.rs",
+      "pre_rpc": true,
+      "sites": [
+        {
+          "file": "plugins/nonce-status/src/core.rs",
+          "line": ".map_err(|e| StatusError::BadArgs(format!(\"nonce account: {e}\")))?;"
+        }
+      ],
+      "demo_scenarios": []
+    },
+    {
+      "id": "nonce-args-not-parseable",
+      "component": "nonce-status",
+      "variant": "StatusError::BadArgs",
+      "condition": "tool arguments that do not match the schema, unknown fields included",
+      "reason": "bad arguments: ",
+      "reason_file": "plugins/nonce-status/src/core.rs",
+      "pre_rpc": true,
+      "sites": [
+        {
+          "file": "plugins/nonce-status/src/core.rs",
+          "line": "serde_json::from_str(raw_args).map_err(|e| StatusError::BadArgs(e.to_string()))?;"
+        }
+      ],
+      "demo_scenarios": []
+    }
+  ]
+}
