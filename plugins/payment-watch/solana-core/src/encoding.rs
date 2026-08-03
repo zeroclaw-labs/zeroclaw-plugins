@@ -17,11 +17,18 @@ pub fn push_compact_u16(n: u16, out: &mut Vec<u8>) {
     }
 }
 
-/// Read a compact-u16, returning (value, bytes consumed). Fails on overflow
-/// or truncation.
+/// Read a compact-u16, returning (value, bytes consumed). Fails on overflow, on
+/// truncation and on an aliased encoding (a length written in more bytes than
+/// it needs).
 pub fn read_compact_u16(data: &[u8]) -> Option<(u16, usize)> {
     let mut value: u32 = 0;
     for (i, &b) in data.iter().enumerate().take(3) {
+        // A zero byte after the first writes a length in more bytes than it
+        // needs, so two different byte strings would claim the same length.
+        // solana-sdk's short-vec rejects the same shape (VisitError::Alias).
+        if b == 0 && i != 0 {
+            return None;
+        }
         value |= ((b & 0x7f) as u32) << (7 * i);
         if b & 0x80 == 0 {
             if value > u16::MAX as u32 {

@@ -22,4 +22,5 @@ required = ["rpc_url"]
 
 [config_schema.properties.rpc_url]
 type = "string"
+description = "HTTPS Solana JSON-RPC endpoint every read goes through. Operator-set, never a call argument."
 minLength = 1

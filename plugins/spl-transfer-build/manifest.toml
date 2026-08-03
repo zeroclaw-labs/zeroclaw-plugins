@@ -24,6 +24,7 @@ required = ["rpc_url", "allow_recipients", "caps"]
 
 [config_schema.properties.rpc_url]
 type = "string"
+description = "HTTPS Solana JSON-RPC endpoint every read goes through. Operator-set, never a call argument."
 minLength = 1
 
 # Comma-separated, because the guest parses both with split(','). Declaring
@@ -31,13 +32,16 @@ minLength = 1
 # whole parse rather than degrade.
 [config_schema.properties.allow_recipients]
 type = "string"
+description = "Comma-separated base58 recipient addresses. Empty denies every transfer."
 minLength = 1
 
 [config_schema.properties.caps]
 type = "string"
+description = "Comma-separated per-transfer caps as mint:amount:decimals, SOL for native. Empty denies every transfer."
 minLength = 1
 
 # Optional: absent or empty means fresh-blockhash mode, so the empty string is
 # a meaningful value and takes no minLength.
 [config_schema.properties.nonce_account]
 type = "string"
+description = "Base58 durable nonce account. Empty or absent builds against a fresh blockhash."

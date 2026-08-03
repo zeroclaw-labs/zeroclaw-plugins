@@ -80,18 +80,30 @@ pub fn to_base_units(amount: &str, decimals: u8) -> Result<u64, AmountError> {
 
 /// Render base units back to a decimal string for display ("25000000", 6 ->
 /// "25", "25500000", 6 -> "25.5").
+///
+/// Total for every `(u64, u8)` pair. `decimals` arrives off the wire, and
+/// computing `10^decimals` in a u64 panics in debug and wraps in release for
+/// anything past 19, so the split runs on the digits instead of on a divisor.
 pub fn from_base_units(units: u64, decimals: u8) -> String {
     if decimals == 0 {
         return units.to_string();
     }
-    let divisor = 10u64.pow(decimals as u32);
-    let whole = units / divisor;
-    let frac = units % divisor;
-    if frac == 0 {
-        whole.to_string()
+    let places = decimals as usize;
+    let digits = units.to_string();
+    let (whole, frac) = if digits.len() > places {
+        let split = digits.len() - places;
+        (digits[..split].to_string(), digits[split..].to_string())
     } else {
-        let s = format!("{frac:0width$}", width = decimals as usize);
-        format!("{whole}.{}", s.trim_end_matches('0'))
+        (
+            "0".to_string(),
+            format!("{:0>width$}", digits, width = places),
+        )
+    };
+    let frac = frac.trim_end_matches('0');
+    if frac.is_empty() {
+        whole
+    } else {
+        format!("{whole}.{frac}")
     }
 }
 

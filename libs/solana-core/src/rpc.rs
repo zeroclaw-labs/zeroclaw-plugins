@@ -164,6 +164,11 @@ pub fn parse_token_deltas(raw: &str) -> Result<Vec<TokenDelta>, RpcError> {
     }
     #[derive(Deserialize)]
     struct Bal {
+        /// The token account's index in the transaction's account list. This is
+        /// the account's identity: a wallet can hold several token accounts for
+        /// one mint, so (owner, mint) identifies nothing.
+        #[serde(rename = "accountIndex")]
+        account_index: u64,
         owner: Option<String>,
         mint: String,
         #[serde(rename = "uiTokenAmount")]
@@ -174,6 +179,17 @@ pub fn parse_token_deltas(raw: &str) -> Result<Vec<TokenDelta>, RpcError> {
         amount: String,
         decimals: u8,
     }
+    /// Base units or a refusal. Reading an unparsable amount as zero inflates
+    /// the delta: a zero pre-balance against a real post-balance reads as a
+    /// full payment that never happened.
+    fn base_units(b: &Bal) -> Result<u64, RpcError> {
+        b.ui.amount.parse::<u64>().map_err(|_| {
+            RpcError::BadData(format!(
+                "token balance for account index {} is not a u64 of base units",
+                b.account_index
+            ))
+        })
+    }
     let parse_bals = |key: &'static str| -> Result<Vec<Bal>, RpcError> {
         serde_json::from_value(meta.get(key).cloned().unwrap_or_else(|| json!([])))
             .map_err(|e| RpcError::BadJson(format!("{key}: {e}")))
@@ -182,16 +198,22 @@ pub fn parse_token_deltas(raw: &str) -> Result<Vec<TokenDelta>, RpcError> {
     let post = parse_bals("postTokenBalances")?;
     let mut deltas = Vec::new();
     for p in &post {
-        let owner = p.owner.clone().unwrap_or_default();
-        let pre_amt: u64 = pre
-            .iter()
-            .find(|b| b.owner.as_deref() == p.owner.as_deref() && b.mint == p.mint)
-            .and_then(|b| b.ui.amount.parse().ok())
-            .unwrap_or(0);
-        let post_amt: u64 = p.ui.amount.parse().unwrap_or(0);
+        let post_amt = base_units(p)?;
+        let pre_amt = match pre.iter().find(|b| b.account_index == p.account_index) {
+            Some(b) => {
+                if b.mint != p.mint || b.ui.decimals != p.ui.decimals {
+                    return Err(RpcError::BadData(format!(
+                        "account index {} reports a different mint or decimals before and after",
+                        p.account_index
+                    )));
+                }
+                base_units(b)?
+            }
+            None => 0,
+        };
         if post_amt > pre_amt {
             deltas.push(TokenDelta {
-                owner,
+                owner: p.owner.clone().unwrap_or_default(),
                 mint: p.mint.clone(),
                 received_base_units: post_amt - pre_amt,
                 decimals: p.ui.decimals,

@@ -10,18 +10,26 @@ use solana_core_wasi::instruction::{
 };
 use solana_core_wasi::message::{compile_legacy, unsigned_transaction_base64};
 use solana_core_wasi::nonce::parse_nonce_account;
-use solana_core_wasi::pubkey::{derive_ata, Pubkey};
+use solana_core_wasi::pubkey::{derive_ata, token_2022_program, token_program, Pubkey};
 
 /// The canonical ATA test vector: (mvines wallet, mainnet USDC) must derive
 /// the documented associated token account. Confirmed against mainnet
 /// getTokenAccountsByOwner during recon.
+///
+/// The same wallet and mint under Token-2022 is a different address, which is
+/// why the derivation takes the owning program instead of assuming one.
 #[test]
 fn ata_derivation_mainnet_vector() {
     let wallet = Pubkey::parse("mvines9iiHiQTysrwkJjGf2gb9Ex9jXJX8ns3qwf2kN").unwrap();
     let mint = Pubkey::parse("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v").unwrap();
     assert_eq!(
-        derive_ata(&wallet, &mint).to_base58(),
+        derive_ata(&wallet, &mint, &token_program()).to_base58(),
         "5ZGPSxMzV9xV5s3Wep73r8k5MsPAtLYs11dGDdknznM5"
+    );
+    assert_ne!(
+        derive_ata(&wallet, &mint, &token_2022_program()),
+        derive_ata(&wallet, &mint, &token_program()),
+        "the token program is a seed, so the two programs cannot share an ATA"
     );
 }
 
@@ -36,16 +44,24 @@ fn durable_nonce_payment_shape() {
     let mint = Pubkey([3; 32]);
     let nonce_acct = Pubkey([4; 32]);
     let reference = Pubkey([5; 32]);
-    let src_ata = derive_ata(&payer, &mint);
-    let dst_ata = derive_ata(&recipient, &mint);
+    let src_ata = derive_ata(&payer, &mint, &token_program());
+    let dst_ata = derive_ata(&recipient, &mint, &token_program());
 
     let stored_nonce = [9u8; 32]; // from the parsed nonce account
 
-    let mut transfer = spl_transfer_checked(&src_ata, &mint, &dst_ata, &payer, 25_000_000, 6);
+    let mut transfer = spl_transfer_checked(
+        &token_program(),
+        &src_ata,
+        &mint,
+        &dst_ata,
+        &payer,
+        25_000_000,
+        6,
+    );
     attach_references(&mut transfer, &[reference]);
     let ixs = vec![
         advance_nonce(&nonce_acct, &payer),
-        ata_create_idempotent(&payer, &dst_ata, &recipient, &mint),
+        ata_create_idempotent(&token_program(), &payer, &dst_ata, &recipient, &mint),
         memo("invoice #412"),
         transfer,
     ];
@@ -94,9 +110,10 @@ fn reference_lands_in_account_keys() {
     let mint = Pubkey([3; 32]);
     let reference = Pubkey([42; 32]);
     let mut transfer = spl_transfer_checked(
-        &derive_ata(&payer, &mint),
+        &token_program(),
+        &derive_ata(&payer, &mint, &token_program()),
         &mint,
-        &derive_ata(&Pubkey([2; 32]), &mint),
+        &derive_ata(&Pubkey([2; 32]), &mint, &token_program()),
         &payer,
         1,
         0,
@@ -112,6 +129,7 @@ fn reference_lands_in_account_keys() {
 fn amount_to_wire() {
     let amt = to_base_units("25", 6).unwrap();
     let ix = spl_transfer_checked(
+        &token_program(),
         &Pubkey([1; 32]),
         &Pubkey([2; 32]),
         &Pubkey([3; 32]),

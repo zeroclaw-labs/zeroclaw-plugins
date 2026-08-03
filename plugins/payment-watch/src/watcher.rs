@@ -110,20 +110,18 @@ pub fn watch(args: &Args, lookups: &mut dyn Lookups) -> Result<Verdict, WatchErr
     let reference = Pubkey::parse(&args.reference)
         .map_err(|e| WatchError::BadArgs(format!("reference: {e}")))?;
 
-    // Validate expectations before spending RPC calls.
-    let expected = match (&args.expected_amount, &args.mint) {
-        (Some(_), None) => {
-            return Err(WatchError::BadArgs(
-                "expected_amount requires mint (decimals come from the chain)".into(),
-            ))
-        }
-        (amt, mint) => {
-            if let Some(m) = mint {
-                Pubkey::parse(m).map_err(|e| WatchError::BadArgs(format!("mint: {e}")))?;
-            }
-            amt.clone().zip(mint.clone())
-        }
-    };
+    // Validate expectations before spending RPC calls. Each one is a filter of
+    // its own: the reference travels in a public payment request, so anyone can
+    // tag a transfer with it, and a caller that names only the mint still needs
+    // the mint checked.
+    if args.expected_amount.is_some() && args.mint.is_none() {
+        return Err(WatchError::BadArgs(
+            "expected_amount requires mint (decimals come from the chain)".into(),
+        ));
+    }
+    if let Some(m) = &args.mint {
+        Pubkey::parse(m).map_err(|e| WatchError::BadArgs(format!("mint: {e}")))?;
+    }
     if let Some(r) = &args.recipient {
         Pubkey::parse(r).map_err(|e| WatchError::BadArgs(format!("recipient: {e}")))?;
     }
@@ -156,11 +154,13 @@ pub fn watch(args: &Args, lookups: &mut dyn Lookups) -> Result<Verdict, WatchErr
         };
         // Match expectations against positive deltas.
         for d in &deltas {
-            if let Some((ref amt, ref mint)) = expected {
+            if let Some(mint) = &args.mint {
                 if &d.mint != mint {
                     last_reason = format!("transfer was in mint {}, expected {}", d.mint, mint);
                     continue;
                 }
+            }
+            if let Some(amt) = &args.expected_amount {
                 let want = to_base_units(amt, d.decimals)
                     .map_err(|e| WatchError::BadArgs(format!("expected_amount: {e}")))?;
                 if d.received_base_units < want {
@@ -190,7 +190,7 @@ pub fn watch(args: &Args, lookups: &mut dyn Lookups) -> Result<Verdict, WatchErr
                     from_base_units(d.received_base_units, d.decimals),
                     d.mint,
                     d.owner,
-                    &entry.signature[..entry.signature.len().min(12)],
+                    short(&entry.signature, 12),
                     entry.slot,
                     status
                 ),
@@ -207,6 +207,17 @@ pub fn watch(args: &Args, lookups: &mut dyn Lookups) -> Result<Verdict, WatchErr
             last_reason
         },
     })
+}
+
+/// The first `n` characters of a string the endpoint chose. Slicing by byte
+/// index panics when the index lands inside a multi-byte character, and a
+/// signature is whatever the response carried, not necessarily base58: one
+/// hostile getSignaturesForAddress reply was enough to take the component down.
+fn short(s: &str, n: usize) -> &str {
+    match s.char_indices().nth(n) {
+        Some((at, _)) => &s[..at],
+        None => s,
+    }
 }
 
 /// Entry point the shim calls: JSON in, one-line JSON out.

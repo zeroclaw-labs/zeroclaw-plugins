@@ -6,8 +6,7 @@
 //! raw discriminants. No borsh anywhere.
 
 use crate::pubkey::{
-    ata_program, memo_program, recent_blockhashes_sysvar, rent_sysvar, token_program, Pubkey,
-    SYSTEM_PROGRAM,
+    ata_program, memo_program, recent_blockhashes_sysvar, rent_sysvar, Pubkey, SYSTEM_PROGRAM,
 };
 
 /// How an account participates in an instruction.
@@ -59,7 +58,12 @@ pub fn system_transfer(from: &Pubkey, to: &Pubkey, lamports: u64) -> Instruction
 
 /// spl-token TransferChecked — discriminant 12, u64 LE amount, u8 decimals.
 /// Metas: source ATA (w), mint (r), destination ATA (w), owner (s).
+///
+/// `token_program` is the program that owns the mint: the classic SPL token
+/// program or Token-2022. TransferChecked has the same layout under both, but
+/// the instruction has to be addressed to the program that owns the accounts.
 pub fn spl_transfer_checked(
+    token_program: &Pubkey,
     source_ata: &Pubkey,
     mint: &Pubkey,
     dest_ata: &Pubkey,
@@ -71,7 +75,7 @@ pub fn spl_transfer_checked(
     data.extend_from_slice(&amount.to_le_bytes());
     data.push(decimals);
     Instruction {
-        program_id: token_program(),
+        program_id: *token_program,
         accounts: vec![
             AccountMeta::writable(*source_ata, false),
             AccountMeta::readonly(*mint, false),
@@ -85,7 +89,12 @@ pub fn spl_transfer_checked(
 /// ATA CreateIdempotent — discriminant [1]. Creates the destination ATA when
 /// missing; a no-op when it already exists.
 /// Metas: payer (w,s), ata (w), wallet (r), mint (r), system (r), token (r).
+///
+/// The last meta is the program that owns the mint, and it is also the middle
+/// seed of the address being created, so it has to be the same program
+/// [`crate::pubkey::derive_ata`] was given.
 pub fn ata_create_idempotent(
+    token_program: &Pubkey,
     payer: &Pubkey,
     ata: &Pubkey,
     wallet: &Pubkey,
@@ -99,7 +108,7 @@ pub fn ata_create_idempotent(
             AccountMeta::readonly(*wallet, false),
             AccountMeta::readonly(*mint, false),
             AccountMeta::readonly(SYSTEM_PROGRAM, false),
-            AccountMeta::readonly(token_program(), false),
+            AccountMeta::readonly(*token_program, false),
         ],
         data: vec![1u8],
     }
@@ -180,6 +189,7 @@ pub fn attach_references(ix: &mut Instruction, references: &[Pubkey]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::pubkey::{token_2022_program, token_program};
 
     #[test]
     fn system_transfer_data_layout() {
@@ -196,6 +206,7 @@ mod tests {
     #[test]
     fn transfer_checked_layout() {
         let ix = spl_transfer_checked(
+            &token_program(),
             &Pubkey([1; 32]),
             &Pubkey([2; 32]),
             &Pubkey([3; 32]),
@@ -211,6 +222,25 @@ mod tests {
         assert_eq!(ix.data[9], 6);
         assert_eq!(ix.accounts.len(), 4);
         assert!(ix.accounts[3].is_signer, "owner signs");
+        assert_eq!(ix.program_id, token_program());
+    }
+
+    /// A Token-2022 transfer is the same layout addressed to the other program.
+    /// Nothing may quietly send it to the classic one.
+    #[test]
+    fn transfer_checked_carries_the_owning_program() {
+        let ix = spl_transfer_checked(
+            &token_2022_program(),
+            &Pubkey([1; 32]),
+            &Pubkey([2; 32]),
+            &Pubkey([3; 32]),
+            &Pubkey([4; 32]),
+            1,
+            0,
+        );
+        assert_eq!(ix.program_id, token_2022_program());
+        assert_ne!(ix.program_id, token_program());
+        assert_eq!(ix.data[0], 12, "the discriminant is the same under both");
     }
 
     #[test]
@@ -225,6 +255,7 @@ mod tests {
     #[test]
     fn create_idempotent_discriminant() {
         let ix = ata_create_idempotent(
+            &token_program(),
             &Pubkey([1; 32]),
             &Pubkey([2; 32]),
             &Pubkey([3; 32]),
@@ -232,6 +263,19 @@ mod tests {
         );
         assert_eq!(ix.data, vec![1]);
         assert_eq!(ix.accounts.len(), 6);
+        assert_eq!(ix.accounts[5].pubkey, token_program());
+        let ix = ata_create_idempotent(
+            &token_2022_program(),
+            &Pubkey([1; 32]),
+            &Pubkey([2; 32]),
+            &Pubkey([3; 32]),
+            &Pubkey([4; 32]),
+        );
+        assert_eq!(
+            ix.accounts[5].pubkey,
+            token_2022_program(),
+            "the token program meta is also the address's middle seed"
+        );
     }
 
     #[test]

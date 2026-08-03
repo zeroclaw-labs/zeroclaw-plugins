@@ -18,7 +18,9 @@ use solana_core_wasi::instruction::{
 use solana_core_wasi::message::{compile_legacy, unsigned_transaction_base64};
 use solana_core_wasi::nonce::parse_nonce_account;
 use solana_core_wasi::policy::{parse_policy, PolicyVerdict, TransferPolicy};
-use solana_core_wasi::pubkey::{derive_ata, Pubkey};
+use solana_core_wasi::pubkey::{
+    derive_ata, token_2022_program, token_program, Pubkey, SYSTEM_PROGRAM,
+};
 use solana_core_wasi::rpc;
 
 /// Tool arguments, exactly as the LLM supplies them. `sender` is the wallet
@@ -197,8 +199,17 @@ pub fn build(plan: &Plan, lookups: &mut dyn Lookups) -> Result<Built, BuildError
         let raw = lookups
             .rpc(&rpc::get_account_info(&nonce_acct))
             .map_err(BuildError::Rpc)?;
-        let (data, _owner) =
+        let (data, owner) =
             rpc::parse_account_info(&raw).map_err(|e| BuildError::Rpc(e.to_string()))?;
+        // The stored hash becomes the transaction's recent_blockhash, so
+        // whoever owns those 80 bytes chooses it. Only the system program can.
+        if owner != SYSTEM_PROGRAM {
+            return Err(BuildError::Refused {
+                reason: format!(
+                    "nonce account {nonce_acct} is owned by {owner}, not the system program; refusing to build a transaction around a hash it cannot hold"
+                ),
+            });
+        }
         let state = parse_nonce_account(&data)
             .map_err(|e| BuildError::Rpc(format!("nonce account {nonce_acct}: {e}")))?;
         if state.authority != plan.sender {
@@ -224,17 +235,33 @@ pub fn build(plan: &Plan, lookups: &mut dyn Lookups) -> Result<Built, BuildError
         parse_blockhash(&raw)?
     };
 
-    let (amount_base, decimals, digest_asset) = if plan.mint_key == "SOL" {
+    let (amount_base, decimals, digest_asset, mint_program) = if plan.mint_key == "SOL" {
         let base = to_base_units(&plan.amount_display, 9)
             .map_err(|e| BuildError::BadArgs(e.to_string()))?;
-        (base, 9u8, "SOL".to_string())
+        (base, 9u8, "SOL".to_string(), None)
     } else {
         let mint = Pubkey::parse(&plan.mint_key).expect("validated in plan");
         let raw = lookups
             .rpc(&rpc::get_account_info(&mint))
             .map_err(BuildError::Rpc)?;
-        let (data, _) =
+        let (data, owner) =
             rpc::parse_account_info(&raw).map_err(|e| BuildError::Rpc(e.to_string()))?;
+        // The mint's owner decides both the ATA derivation and the program the
+        // transfer instruction is addressed to. Assuming the classic program for
+        // a Token-2022 mint derives an account that program will never accept,
+        // so the transaction cannot execute while the digest describes one that
+        // can. An owner that is neither program is refused by name rather than
+        // guessed at.
+        let mint_program = if owner == token_program() || owner == token_2022_program() {
+            owner
+        } else {
+            return Err(BuildError::Refused {
+                reason: format!(
+                    "mint {} is owned by {owner}, which is neither the SPL token program nor Token-2022; refusing to guess which program a transfer should be addressed to",
+                    plan.mint_key
+                ),
+            });
+        };
         let on_chain_decimals =
             rpc::mint_decimals(&data).map_err(|e| BuildError::Rpc(e.to_string()))?;
         let cap_decimals = plan
@@ -251,7 +278,12 @@ pub fn build(plan: &Plan, lookups: &mut dyn Lookups) -> Result<Built, BuildError
         }
         let base = to_base_units(&plan.amount_display, on_chain_decimals)
             .map_err(|e| BuildError::BadArgs(e.to_string()))?;
-        (base, on_chain_decimals, format!("mint {}", plan.mint_key))
+        let label = if mint_program == token_2022_program() {
+            format!("mint {} (Token-2022)", plan.mint_key)
+        } else {
+            format!("mint {}", plan.mint_key)
+        };
+        (base, on_chain_decimals, label, Some(mint_program))
     };
 
     if plan.mint_key == "SOL" {
@@ -265,8 +297,9 @@ pub fn build(plan: &Plan, lookups: &mut dyn Lookups) -> Result<Built, BuildError
         ixs.push(transfer);
     } else {
         let mint = Pubkey::parse(&plan.mint_key).expect("validated");
-        let src_ata = derive_ata(&plan.sender, &mint);
-        let dst_ata = derive_ata(&plan.recipient, &mint);
+        let token = mint_program.expect("the mint lookup resolved the owning program");
+        let src_ata = derive_ata(&plan.sender, &mint, &token);
+        let dst_ata = derive_ata(&plan.recipient, &mint, &token);
         // Create the destination ATA when missing (idempotent either way, but
         // we check to keep the digest honest about what the tx does).
         let raw = lookups
@@ -276,6 +309,7 @@ pub fn build(plan: &Plan, lookups: &mut dyn Lookups) -> Result<Built, BuildError
             rpc::parse_account_exists(&raw).map_err(|e| BuildError::Rpc(e.to_string()))?;
         if !dst_exists {
             ixs.push(ata_create_idempotent(
+                &token,
                 &plan.sender,
                 &dst_ata,
                 &plan.recipient,
@@ -286,6 +320,7 @@ pub fn build(plan: &Plan, lookups: &mut dyn Lookups) -> Result<Built, BuildError
             ixs.push(memo_ix(m)); // memo second-to-last, per Solana Pay ordering
         }
         let mut transfer = spl_transfer_checked(
+            &token,
             &src_ata,
             &mint,
             &dst_ata,

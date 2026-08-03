@@ -22,9 +22,11 @@ required = ["rpc_url"]
 
 [config_schema.properties.rpc_url]
 type = "string"
+description = "HTTPS Solana JSON-RPC endpoint every read goes through. Operator-set, never a call argument."
 minLength = 1
 
 # Optional: absent falls back to the read-only `account` argument, and failing
 # that the tool returns the create-a-nonce-account instructions.
 [config_schema.properties.nonce_account]
 type = "string"
+description = "Base58 durable nonce account inspected by default. Absent falls back to the `account` argument."
