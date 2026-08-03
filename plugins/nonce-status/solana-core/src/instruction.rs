@@ -42,7 +42,7 @@ pub struct Instruction {
     pub data: Vec<u8>,
 }
 
-/// SystemProgram::Transfer — tag 2, u64 LE lamports.
+/// SystemProgram::Transfer: tag 2, u64 LE lamports.
 pub fn system_transfer(from: &Pubkey, to: &Pubkey, lamports: u64) -> Instruction {
     let mut data = 2u32.to_le_bytes().to_vec();
     data.extend_from_slice(&lamports.to_le_bytes());
@@ -56,7 +56,7 @@ pub fn system_transfer(from: &Pubkey, to: &Pubkey, lamports: u64) -> Instruction
     }
 }
 
-/// spl-token TransferChecked — discriminant 12, u64 LE amount, u8 decimals.
+/// spl-token TransferChecked: discriminant 12, u64 LE amount, u8 decimals.
 /// Metas: source ATA (w), mint (r), destination ATA (w), owner (s).
 ///
 /// `token_program` is the program that owns the mint: the classic SPL token
@@ -86,7 +86,7 @@ pub fn spl_transfer_checked(
     }
 }
 
-/// ATA CreateIdempotent — discriminant [1]. Creates the destination ATA when
+/// ATA CreateIdempotent: discriminant [1]. Creates the destination ATA when
 /// missing; a no-op when it already exists.
 /// Metas: payer (w,s), ata (w), wallet (r), mint (r), system (r), token (r).
 ///
@@ -114,7 +114,7 @@ pub fn ata_create_idempotent(
     }
 }
 
-/// SPL memo — raw UTF-8 bytes, no accounts required.
+/// SPL memo: raw UTF-8 bytes, no accounts required.
 pub fn memo(text: &str) -> Instruction {
     Instruction {
         program_id: memo_program(),
@@ -123,7 +123,7 @@ pub fn memo(text: &str) -> Instruction {
     }
 }
 
-/// SystemProgram::AdvanceNonceAccount — tag 4, no payload. MUST be the first
+/// SystemProgram::AdvanceNonceAccount: tag 4, no payload. MUST be the first
 /// instruction of a durable-nonce transaction.
 /// Metas: nonce account (w), RecentBlockhashes sysvar (r), authority (s).
 pub fn advance_nonce(nonce_account: &Pubkey, authority: &Pubkey) -> Instruction {
@@ -138,7 +138,7 @@ pub fn advance_nonce(nonce_account: &Pubkey, authority: &Pubkey) -> Instruction 
     }
 }
 
-/// SystemProgram::CreateAccount — tag 0, lamports u64, space u64, owner 32B.
+/// SystemProgram::CreateAccount: tag 0, lamports u64, space u64, owner 32B.
 /// The new account must also sign.
 pub fn system_create_account(
     payer: &Pubkey,
@@ -161,7 +161,7 @@ pub fn system_create_account(
     }
 }
 
-/// SystemProgram::InitializeNonceAccount — tag 6, authority 32B.
+/// SystemProgram::InitializeNonceAccount: tag 6, authority 32B.
 /// Metas: nonce (w), RecentBlockhashes sysvar (r), Rent sysvar (r).
 pub fn initialize_nonce_account(nonce_account: &Pubkey, authority: &Pubkey) -> Instruction {
     let mut data = 6u32.to_le_bytes().to_vec();
@@ -196,7 +196,7 @@ mod tests {
         let a = Pubkey([1; 32]);
         let b = Pubkey([2; 32]);
         let ix = system_transfer(&a, &b, 1);
-        // [2,0,0,0] tag ++ u64 LE 1 — the exact bytes from the Solana Pay
+        // [2,0,0,0] tag ++ u64 LE 1, the exact bytes from the Solana Pay
         // spec's example transaction.
         assert_eq!(ix.data, vec![2, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0]);
         assert!(ix.accounts[0].is_signer && ix.accounts[0].is_writable);

@@ -59,7 +59,7 @@ impl std::fmt::Display for PolicyError {
             PolicyError::UnknownKey(k) => {
                 write!(
                     f,
-                    "unknown config key '{k}' — refusing to guess (fail closed)"
+                    "unknown config key '{k}', refusing to guess (fail closed)"
                 )
             }
             PolicyError::MissingRpcUrl => write!(f, "rpc_url is required"),

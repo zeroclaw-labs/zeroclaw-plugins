@@ -6,7 +6,7 @@
 use crate::pubkey::Pubkey;
 
 /// Fields of a transfer request. `recipient` must be a wallet address (never
-/// an ATA — the paying wallet derives the ATA from `spl_token`).
+/// an ATA, so the paying wallet derives the ATA from `spl_token`).
 #[derive(Debug, Default)]
 pub struct TransferRequest {
     pub recipient: String,

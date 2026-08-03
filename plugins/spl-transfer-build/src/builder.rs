@@ -1,6 +1,6 @@
 //! Pure core of the `spl-transfer-build` tool: parse args, enforce policy,
 //! decide which RPC lookups are needed, build the unsigned transaction, and
-//! shape the human-readable digest. No wasm, no network — the shim performs
+//! shape the human-readable digest. No wasm, no network. The shim performs
 //! the RPC round-trips this module requests via [`Lookups`].
 //!
 //! Custody: this tool holds no keys, cannot sign, and cannot broadcast. It
@@ -167,7 +167,7 @@ fn policy_decimals(policy: &TransferPolicy, mint_key: &str) -> Option<u8> {
     // decimals. SOL is fixed; for SPL we re-derive from the raw caps entry at
     // plan time via the decimals catalog the operator wrote. To keep the
     // policy surface minimal we conservatively use: SOL = 9, SPL = looked up
-    // on-chain at build time, but the CAP was written in base units already —
+    // on-chain at build time, but the CAP was written in base units already,
     // so for validation we only need "some" decimals to parse the user
     // amount. We require the operator's cap entry decimals to equal the
     // mint's real decimals, verified at build time.
@@ -348,7 +348,7 @@ pub fn build(plan: &Plan, lookups: &mut dyn Lookups) -> Result<Built, BuildError
         digest.push_str(", with payment reference");
     }
     digest.push_str(if used_nonce {
-        ". Durable nonce: valid until the nonce advances — safe to approve later."
+        ". Durable nonce: valid until the nonce advances, so it is safe to approve later."
     } else {
         ". Fresh blockhash: sign within ~60s or it expires."
     });

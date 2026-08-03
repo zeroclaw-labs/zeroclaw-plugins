@@ -3,7 +3,7 @@
 //! Read-only check: has an expected Solana payment (identified by its Solana
 //! Pay reference key) landed? Two bounded RPC calls, one short line back.
 //! Pairs with `spl-transfer-build`/`solana-pay-request` flows: they attach
-//! the reference, this closes the loop ("Invoice #412 paid — 25 USDC").
+//! the reference, this closes the loop ("Invoice #412 paid, 25 USDC").
 //!
 //! All logic lives in [`watcher`] with no wasm dependency; this file is the
 //! thin `#[cfg(target_family = "wasm")]` component shim plus the waki-backed

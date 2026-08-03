@@ -212,9 +212,9 @@ ALLOWED_METHODS = {
 # The bytes this script was written against, the same pins the capability check carries.
 # Size and digest both, because a length collision is cheap and a sha256 collision is not.
 PINNED = {
-    "nonce_status.wasm": (332052, "6a13fb62"),
-    "payment_watch.wasm": (366822, "e9f6b118"),
-    "spl_transfer_build.wasm": (406680, "4c1af93e"),
+    "nonce_status.wasm": (332253, "ffd4f0ad"),
+    "payment_watch.wasm": (367973, "7f6b8106"),
+    "spl_transfer_build.wasm": (409058, "d57ad6be"),
 }
 
 # Proof the parser reached the RPC request builder. Without this an artifact whose data

@@ -15,12 +15,12 @@
     "ok": true,
     "ready": true,
     "rpc_calls": 1,
-    "text": "READY: nonce account 8XkoSVfNbLKKzcpsTCyzysXbygqrGrbW8t5RS6Wxsdb1 \u2014 authority 9B5XszUGdMaxCZ7uSQhPzdks5ZQSmWxrmzCSvtJ6Ns6g, current nonce Ab9CuAh7wGin\u2026, fee 5000 lamports/sig. transfer-build transactions built against it stay valid until the nonce advances (i.e. until one of them lands)."
+    "text": "READY: nonce account 8XkoSVfNbLKKzcpsTCyzysXbygqrGrbW8t5RS6Wxsdb1, authority 9B5XszUGdMaxCZ7uSQhPzdks5ZQSmWxrmzCSvtJ6Ns6g, current nonce Ab9CuAh7wGin\u2026, fee 5000 lamports/sig. transfer-build transactions built against it stay valid until the nonce advances (i.e. until one of them lands)."
   },
   "refuse-config-typo": {
     "ok": false,
     "rpc_calls": 0,
-    "text": "policy config error (transfer denied): unknown config key 'max_amout' \u2014 refusing to guess (fail closed)"
+    "text": "policy config error (transfer denied): unknown config key 'max_amout', refusing to guess (fail closed)"
   },
   "refuse-decimals-mismatch": {
     "ok": false,
@@ -61,7 +61,7 @@
     "durable_nonce": true,
     "ok": true,
     "rpc_calls": 1,
-    "text": "UNSIGNED transfer: 0.05 SOL from 9B5XszUGdMaxCZ7uSQhPzdks5ZQSmWxrmzCSvtJ6Ns6g to mvines9iiHiQTysrwkJjGf2gb9Ex9jXJX8ns3qwf2kN, memo \"invoice 042\", with payment reference. Durable nonce: valid until the nonce advances \u2014 safe to approve later. This tool holds no keys; nothing moves until the owner signs.",
+    "text": "UNSIGNED transfer: 0.05 SOL from 9B5XszUGdMaxCZ7uSQhPzdks5ZQSmWxrmzCSvtJ6Ns6g to mvines9iiHiQTysrwkJjGf2gb9Ex9jXJX8ns3qwf2kN, memo \"invoice 042\", with payment reference. Durable nonce: valid until the nonce advances, so it is safe to approve later. This tool holds no keys; nothing moves until the owner signs.",
     "tx_base64": "AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABAAQHeXJtpS2Z1gsH6tc7L28L9gg8yFx3qU401pHXj4vK/slv4sIi8ehZszTBZaq0b4vDFII8+/o8MJ4vTvvRTrH35AuCTCqjaZSF8mxm/xoStaH3VVnrhI150KK+4ItGNoTHBqfVFxksVo7gioRfc9KXiM8DXDFFshqzRNgGLqlAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAVKU1qZKSEGTSTocWDaOHx8NbXdvJK7geQfqEBBBUSN1b/lh0fSx0zzkBdpuTmicivN7lkqToVOitb4bJZ5ApCOeDUbnpYgkBTTymBW651r6mx3LDjoTzRKg/E9WBrTkQMEAwEDAAQEAAAABQALaW52b2ljZSAwNDIEAwACBgwCAAAAgPD6AgAAAAA=",
     "tx_bytes": 368,
     "tx_sha256": "5fec8ba6d9810a412b1e37a7aa42a6cfd9f53d069d8085d0b788b9ceaff72ccf"
@@ -79,7 +79,7 @@
     "durable_nonce": true,
     "ok": true,
     "rpc_calls": 3,
-    "text": "UNSIGNED transfer: 25 mint 4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU from 9B5XszUGdMaxCZ7uSQhPzdks5ZQSmWxrmzCSvtJ6Ns6g to mvines9iiHiQTysrwkJjGf2gb9Ex9jXJX8ns3qwf2kN, memo \"invoice 043\", with payment reference. Durable nonce: valid until the nonce advances \u2014 safe to approve later. This tool holds no keys; nothing moves until the owner signs.",
+    "text": "UNSIGNED transfer: 25 mint 4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU from 9B5XszUGdMaxCZ7uSQhPzdks5ZQSmWxrmzCSvtJ6Ns6g to mvines9iiHiQTysrwkJjGf2gb9Ex9jXJX8ns3qwf2kN, memo \"invoice 043\", with payment reference. Durable nonce: valid until the nonce advances, so it is safe to approve later. This tool holds no keys; nothing moves until the owner signs.",
     "tx_base64": "AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABAAgMeXJtpS2Z1gsH6tc7L28L9gg8yFx3qU401pHXj4vK/slv4sIi8ehZszTBZaq0b4vDFII8+/o8MJ4vTvvRTrH35DQlaEZIz6d2rJzuhIZQeKQHWnNyYTJQ2vs9OYYCxiFA+QO3rLtecxdIAFi8iMcmCYHk03uodmDEqkZSZSWos24Gp9UXGSxWjuCKhF9z0peIzwNcMUWyGrNE2AYuqUAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAC4JMKqNplIXybGb/GhK1ofdVWeuEjXnQor7gi0Y2hMc7RCyzkSFX8TqTPQE0KC0DK1/+zQGi2/G3eQYI3wAupwbd9uHXZaGT2cvhRs7reawctIXtX1s3kTqM9YV+/wCpjJclj04kifG7PRApFI4NgwtaE5na/xCEBI572Nvp+FkFSlNamSkhBk0k6HFg2jh8fDW13bySu4HkH6hAQQVEjdW/5YdH0sdM85AXabk5onIrze5ZKk6FTorW+GyWeQKQjng1G56WIJAU08pgVuuda+psdyw46E80SoPxPVga05EEBQMBBAAEBAAAAAkGAAIGBwUIAQEKAAtpbnZvaWNlIDA0MwgFAwcCAAsKDEB4fQEAAAAABg==",
     "tx_bytes": 538,
     "tx_sha256": "2eb44005c76a16a796d2feedc4cc207a0d28f7a9919152e129110338b01b0d03"
@@ -103,7 +103,7 @@
     "paid": true,
     "rpc_calls": 2,
     "signature": "45TB5n9LyxpkQq6AxxE27eqvm5xAUhscMFveT4E3zGvpysPbTQEJCR2EcW7DV9Dp47PiFxrDESxvAReScpU5vNDC",
-    "text": "PAID: 25 of mint 4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU to mvines9iiHiQTysrwkJjGf2gb9Ex9jXJX8ns3qwf2kN \u2014 sig 45TB5n9Lyxpk\u2026 slot 401234567 (finalized)"
+    "text": "PAID: 25 of mint 4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU to mvines9iiHiQTysrwkJjGf2gb9Ex9jXJX8ns3qwf2kN, sig 45TB5n9Lyxpk\u2026 slot 401234567 (finalized)"
   },
   "watch-refuse-plain-http-endpoint": {
     "ok": false,

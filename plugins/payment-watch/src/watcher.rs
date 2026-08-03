@@ -65,7 +65,7 @@ fn rpc_url(config: &BTreeMap<String, String>) -> Result<String, WatchError> {
     for k in config.keys() {
         if !KNOWN_KEYS.contains(&k.as_str()) {
             return Err(WatchError::Config(format!(
-                "unknown config key '{k}' — refusing to guess (fail closed)"
+                "unknown config key '{k}', refusing to guess (fail closed)"
             )));
         }
     }
@@ -186,7 +186,7 @@ pub fn watch(args: &Args, lookups: &mut dyn Lookups) -> Result<Verdict, WatchErr
             return Ok(Verdict::Paid {
                 signature: entry.signature.clone(),
                 summary: format!(
-                    "PAID: {} of mint {} to {} — sig {}… slot {} ({})",
+                    "PAID: {} of mint {} to {}, sig {}… slot {} ({})",
                     from_base_units(d.received_base_units, d.decimals),
                     d.mint,
                     d.owner,

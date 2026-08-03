@@ -12,9 +12,9 @@
     "itself, which is why none are written down here."
   ],
   "counts": {
-    "refusals": 42,
+    "refusals": 44,
     "pre_rpc": 37,
-    "post_rpc": 5,
+    "post_rpc": 7,
     "demo_refusal_cases": 9,
     "demo_pre_rpc_cases": 7
   },
@@ -846,6 +846,40 @@
         {
           "file": "plugins/nonce-status/src/core.rs",
           "line": "serde_json::from_str(raw_args).map_err(|e| StatusError::BadArgs(e.to_string()))?;"
+        }
+      ],
+      "demo_scenarios": []
+    },
+    {
+      "id": "nonce-account-not-system-owned",
+      "component": "spl-transfer-build",
+      "variant": "BuildError::Refused",
+      "condition": "the durable nonce account is owned by a program other than the system program",
+      "reason": "not the system program; refusing to build a transaction around a hash it cannot hold",
+      "reason_file": "plugins/spl-transfer-build/src/builder.rs",
+      "pre_rpc": false,
+      "sites": [
+        {
+          "file": "plugins/spl-transfer-build/src/builder.rs",
+          "line": "return Err(BuildError::Refused {",
+          "within": "not the system program"
+        }
+      ],
+      "demo_scenarios": []
+    },
+    {
+      "id": "mint-owner-is-neither-token-program",
+      "component": "spl-transfer-build",
+      "variant": "BuildError::Refused",
+      "condition": "the mint account is owned by neither the SPL token program nor Token-2022",
+      "reason": "which is neither the SPL token program nor Token-2022; refusing to guess which program a transfer should be addressed to",
+      "reason_file": "plugins/spl-transfer-build/src/builder.rs",
+      "pre_rpc": false,
+      "sites": [
+        {
+          "file": "plugins/spl-transfer-build/src/builder.rs",
+          "line": "return Err(BuildError::Refused {",
+          "within": "neither the SPL token program nor Token-2022"
         }
       ],
       "demo_scenarios": []

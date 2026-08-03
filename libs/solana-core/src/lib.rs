@@ -17,7 +17,7 @@
 //!   approval-gated flows ([`nonce`])
 //! - exact decimal amount arithmetic, no floats ever ([`amount`])
 //! - Solana Pay transfer-request URLs ([`pay`])
-//! - transport-agnostic JSON-RPC request/response shaping ([`rpc`]) — the
+//! - transport-agnostic JSON-RPC request/response shaping ([`rpc`]), which is the
 //!   wasm shim plugs in `waki`, host tests plug in mocks
 //! - fail-closed operator policy: allowlists and caps that the model cannot
 //!   talk its way past ([`policy`])

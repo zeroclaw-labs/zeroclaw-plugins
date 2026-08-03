@@ -21,7 +21,7 @@ use sha2::{Digest, Sha256};
 /// sha256 over the vendored core's `src/*.rs`, `tests/*.rs` and `Cargo.toml`.
 /// Identical in every plugin that vendors the core.
 const VENDORED_CORE_DIGEST: &str =
-    "e56e0abe8af5153aef228f6fa0661c2f93571cbe0a8254a4d94558c67c2817c3";
+    "1707bb69c692dc4dd9a62da040f1eb106846c97e642ee4da923f36a826c2648f";
 
 /// Hash the vendored tree the same way in every plugin: files in a fixed
 /// order, each contributing its relative path and its bytes, both

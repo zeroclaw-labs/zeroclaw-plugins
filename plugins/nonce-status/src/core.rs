@@ -3,7 +3,7 @@
 //!
 //! Why this exists: `spl-transfer-build` in durable-nonce mode depends on a
 //! healthy nonce account. When a build fails, the operator's first question
-//! is "what state is my nonce account in?" — this tool answers it without
+//! is "what state is my nonce account in?", and this tool answers it without
 //! leaving the chat: current nonce value, authority, rent balance, and
 //! whether transfer-build can use it right now.
 
@@ -57,7 +57,7 @@ pub fn status(args: &Args, lookups: &mut dyn Lookups) -> Result<String, StatusEr
     for k in args.config.keys() {
         if !KNOWN_KEYS.contains(&k.as_str()) {
             return Err(StatusError::Config(format!(
-                "unknown config key '{k}' — refusing to guess (fail closed)"
+                "unknown config key '{k}', refusing to guess (fail closed)"
             )));
         }
     }
@@ -110,7 +110,7 @@ pub fn status(args: &Args, lookups: &mut dyn Lookups) -> Result<String, StatusEr
 
     match parse_nonce_account(&data) {
         Ok(state) => Ok(format!(
-            "READY: nonce account {account} — authority {}, current nonce {}…, \
+            "READY: nonce account {account}, authority {}, current nonce {}…, \
              fee {} lamports/sig. transfer-build transactions built against it stay valid \
              until the nonce advances (i.e. until one of them lands).",
             state.authority,
@@ -122,7 +122,7 @@ pub fn status(args: &Args, lookups: &mut dyn Lookups) -> Result<String, StatusEr
              Run: solana create-nonce-account against a fresh keypair instead."
         )),
         Err(e) => Ok(format!(
-            "UNUSABLE: {account} — {e}. transfer-build will refuse it."
+            "UNUSABLE: {account}, {e}. transfer-build will refuse it."
         )),
     }
 }
