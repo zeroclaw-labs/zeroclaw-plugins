@@ -1,9 +1,9 @@
 # solana-tx-builder — a ZeroClaw tool plugin
 
-The companion to `solana-verify`: where that **verifies**, this **constructs**. Offline,
-pure-compute construction of Solana instructions and addresses an agent can build with no
-network egress — a human or wallet signs and sends the result. Nothing here can move funds;
-it only produces the bytes to sign.
+The companion to `solana-verify`: where that **verifies**, this **constructs**. Local,
+pure-compute construction of Solana instructions and addresses an agent can build with
+**zero network surface** — a human or wallet signs and sends the result. Nothing here can move
+funds; it only produces the bytes to sign, so it deliberately takes no `http_client` grant.
 
 ## Ops (dispatch by an `op` field)
 

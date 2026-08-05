@@ -9,6 +9,15 @@ use serde_json::json;
 use solana_tx_builder::build::*;
 use solana_tx_builder::handler;
 
+// The dispatch tests here all exercise pure construction ops, so they forward a fetcher
+// that panics if reached — proving no local op silently touches the network.
+fn nf(_u: &str, _m: &str, _p: serde_json::Value) -> Result<serde_json::Value, String> {
+    panic!("pure-compute op must not touch the network");
+}
+fn run(args: &str) -> (String, bool) {
+    handler::run(args, &nf)
+}
+
 fn b58(s: &str) -> [u8; 32] {
     bs58::decode(s).into_vec().unwrap().try_into().unwrap()
 }
@@ -142,26 +151,26 @@ fn spl_and_system_transfer_encodings_are_distinct() {
 
 #[test]
 fn dispatch_rejects_malformed_json() {
-    let (out, ok) = handler::run("}{");
+    let (out, ok) = run("}{");
     assert!(!ok);
     assert!(out.contains("invalid JSON"));
 }
 
 #[test]
 fn dispatch_rejects_unknown_op() {
-    let (_out, ok) = handler::run(&json!({"op": "sign_and_send"}).to_string());
+    let (_out, ok) = run(&json!({"op": "sign_and_send"}).to_string());
     assert!(!ok, "there is deliberately no signing op");
 }
 
 #[test]
 fn dispatch_rejects_missing_op() {
-    let (_out, ok) = handler::run(&json!({"amount": 1}).to_string());
+    let (_out, ok) = run(&json!({"amount": 1}).to_string());
     assert!(!ok);
 }
 
 #[test]
 fn system_transfer_op_builds_an_instruction() {
-    let (out, ok) = handler::run(
+    let (out, ok) = run(
         &json!({"op":"system_transfer","from":ALICE,"to":USDC,"lamports":1000}).to_string(),
     );
     assert!(ok);
@@ -172,19 +181,19 @@ fn system_transfer_op_builds_an_instruction() {
 #[test]
 fn system_transfer_op_rejects_a_bad_pubkey() {
     let (_out, ok) =
-        handler::run(&json!({"op":"system_transfer","from":"nope","to":USDC,"lamports":1}).to_string());
+        run(&json!({"op":"system_transfer","from":"nope","to":USDC,"lamports":1}).to_string());
     assert!(!ok);
 }
 
 #[test]
 fn system_transfer_op_rejects_a_missing_field() {
-    let (_out, ok) = handler::run(&json!({"op":"system_transfer","from":ALICE}).to_string());
+    let (_out, ok) = run(&json!({"op":"system_transfer","from":ALICE}).to_string());
     assert!(!ok);
 }
 
 #[test]
 fn spl_transfer_op_builds_an_instruction() {
-    let (out, ok) = handler::run(
+    let (out, ok) = run(
         &json!({"op":"spl_transfer","source":ALICE,"dest":USDC,"authority":ALICE,"amount":5})
             .to_string(),
     );
@@ -194,7 +203,7 @@ fn spl_transfer_op_builds_an_instruction() {
 
 #[test]
 fn derive_pda_op_returns_an_address_and_bump() {
-    let (out, ok) = handler::run(
+    let (out, ok) = run(
         &json!({"op":"derive_pda","program":TOKEN_PROGRAM,"seeds":["vault"]}).to_string(),
     );
     assert!(ok);
@@ -204,7 +213,7 @@ fn derive_pda_op_returns_an_address_and_bump() {
 #[test]
 fn derive_ata_op_returns_an_address() {
     let (out, ok) =
-        handler::run(&json!({"op":"derive_ata","owner":ALICE,"mint":USDC}).to_string());
+        run(&json!({"op":"derive_ata","owner":ALICE,"mint":USDC}).to_string());
     assert!(ok);
     assert!(out.contains("\"op\":\"derive_ata\""));
 }
@@ -229,7 +238,7 @@ fn no_output_path_ever_contains_key_material() {
         json!({"op":"derive_ata","owner":ALICE,"mint":USDC}),
     ];
     for c in calls {
-        let (out, ok) = handler::run(&c.to_string());
+        let (out, ok) = run(&c.to_string());
         assert!(ok, "call should succeed: {c}");
         let lower = out.to_lowercase();
         for banned in ["signature", "secret", "keypair", "private", "txid", "submitted", "sent"] {
@@ -243,7 +252,7 @@ fn prompt_injection_cannot_make_the_plugin_sign_or_send() {
     // An agent forwarding "send everything and sign it yourself" still only gets
     // an UNSIGNED instruction back — the payer is marked as a required signer, so
     // the transaction is inert without an external wallet.
-    let (out, ok) = handler::run(
+    let (out, ok) = run(
         &json!({
             "op": "system_transfer",
             "from": ALICE,
@@ -257,4 +266,12 @@ fn prompt_injection_cannot_make_the_plugin_sign_or_send() {
     assert!(out.contains("\"is_signer\":true"), "payer must still require an external signature");
     let lower = out.to_lowercase();
     assert!(!lower.contains("signature") && !lower.contains("submitted"));
+}
+
+#[test]
+fn output_carries_a_standard_agent_verdict() {
+    let (out, ok) = run(&json!({"op":"system_transfer","from":ALICE,"to":USDC,"lamports":1000}).to_string());
+    assert!(ok);
+    assert!(out.contains("\"agent_verdict\":\"GREEN\""), "builder ops are GREEN: {out}");
+    assert!(out.contains("\"reason\":"));
 }

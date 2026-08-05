@@ -482,3 +482,11 @@ fn the_schema_is_valid_json_and_documents_the_op() {
     assert!(v["required"].as_array().unwrap().contains(&json!("owner")));
     assert!(handler::SCHEMA.contains("scan"));
 }
+
+#[test]
+fn agent_verdict_maps_bands_to_red_amber_green() {
+    use solana_wallet_risk::handler::agent_verdict;
+    assert_eq!(agent_verdict("CRITICAL"), "RED");
+    assert_eq!(agent_verdict("MEDIUM"), "AMBER");
+    assert_eq!(agent_verdict("MINIMAL"), "GREEN");
+}

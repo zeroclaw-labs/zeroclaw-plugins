@@ -161,6 +161,9 @@ pub mod handler {
             "program": f.program,
             "risk_score": r.score,
             "risk_band": r.band,
+            // Standard cross-plugin verdict so an agent gets the same shape from every tool.
+            "agent_verdict": agent_verdict(r.band),
+            "reason": summary_line(f, r),
             "summary": summary_line(f, r),
             "authorities": {
                 "mint_authority": f.mint_authority,
@@ -180,6 +183,16 @@ pub mod handler {
             "disclaimer": "Deterministic on-chain evidence, not financial advice. Absence of flags is not a guarantee of safety.",
         })
         .to_string()
+    }
+
+    /// Standard cross-plugin verdict vocabulary: RED (act / do not proceed),
+    /// AMBER (review before proceeding), GREEN (no blocking risk found).
+    pub fn agent_verdict(band: &str) -> &'static str {
+        match band {
+            "CRITICAL" | "HIGH" => "RED",
+            "MEDIUM" => "AMBER",
+            _ => "GREEN",
+        }
     }
 
     fn summary_line(f: &TokenFacts, r: &RiskReport) -> String {

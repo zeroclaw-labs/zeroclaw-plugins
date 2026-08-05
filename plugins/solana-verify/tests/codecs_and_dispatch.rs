@@ -8,6 +8,15 @@ use serde_json::json;
 use solana_verify::handler;
 use solana_verify::verify::*;
 
+// These dispatch tests all exercise pure-compute ops, so they forward a fetcher that
+// panics if reached — proving no local op silently touches the network.
+fn nf(_u: &str, _m: &str, _p: serde_json::Value) -> Result<serde_json::Value, String> {
+    panic!("pure-compute op must not touch the network");
+}
+fn run(args: &str) -> (String, bool) {
+    handler::run(args, &nf)
+}
+
 // ── hex ─────────────────────────────────────────────────────────────────────
 
 #[test]
@@ -115,21 +124,21 @@ fn base58_and_hex_describe_the_same_bytes() {
 
 #[test]
 fn dispatch_rejects_malformed_json() {
-    let (out, ok) = handler::run("{not json");
+    let (out, ok) = run("{not json");
     assert!(!ok);
     assert!(out.contains("invalid JSON"));
 }
 
 #[test]
 fn dispatch_rejects_missing_op() {
-    let (out, ok) = handler::run(&json!({"leaf": "00"}).to_string());
+    let (out, ok) = run(&json!({"leaf": "00"}).to_string());
     assert!(!ok);
     assert!(out.contains("missing 'op'"));
 }
 
 #[test]
 fn dispatch_rejects_unknown_op() {
-    let (out, ok) = handler::run(&json!({"op": "drain_wallet"}).to_string());
+    let (out, ok) = run(&json!({"op": "drain_wallet"}).to_string());
     assert!(!ok);
     assert!(out.contains("unknown op"));
 }
@@ -149,7 +158,7 @@ fn merkle_verify_op_reports_a_true_verdict() {
         "proof": [{"hash": to_hex(&sib), "right": true}]
     })
     .to_string();
-    let (out, ok) = handler::run(&args);
+    let (out, ok) = run(&args);
     assert!(ok);
     assert!(out.contains("\"valid\":true"));
     assert!(out.contains("\"depth\":1"));
@@ -167,7 +176,7 @@ fn merkle_verify_op_reports_a_false_verdict_as_a_successful_call() {
         "proof": []
     })
     .to_string();
-    let (out, ok) = handler::run(&args);
+    let (out, ok) = run(&args);
     assert!(ok, "a truthful negative verdict is a successful call");
     assert!(out.contains("\"valid\":false"));
 }
@@ -175,7 +184,7 @@ fn merkle_verify_op_reports_a_false_verdict_as_a_successful_call() {
 #[test]
 fn merkle_verify_op_rejects_a_bad_leaf_encoding() {
     let args = json!({"op": "merkle_verify", "leaf": "xyz", "root": to_hex(&[0u8; 32])}).to_string();
-    let (_out, ok) = handler::run(&args);
+    let (_out, ok) = run(&args);
     assert!(!ok);
 }
 
@@ -188,7 +197,7 @@ fn merkle_verify_op_rejects_a_malformed_proof_node() {
         "proof": [{"hash": "not-hex", "right": true}]
     })
     .to_string();
-    let (out, ok) = handler::run(&args);
+    let (out, ok) = run(&args);
     assert!(!ok);
     assert!(out.contains("proof node"));
 }
@@ -209,7 +218,7 @@ fn merkle_verify_op_defaults_a_missing_side_flag_to_left() {
         "proof": [{"hash": to_hex(&sib)}]
     })
     .to_string();
-    let (out, ok) = handler::run(&args);
+    let (out, ok) = run(&args);
     assert!(ok);
     assert!(out.contains("\"valid\":true"));
 }
@@ -217,7 +226,7 @@ fn merkle_verify_op_defaults_a_missing_side_flag_to_left() {
 #[test]
 fn pubkey_decode_op_returns_raw_bytes() {
     let args = json!({"op": "pubkey_decode", "pubkey": "11111111111111111111111111111111"}).to_string();
-    let (out, ok) = handler::run(&args);
+    let (out, ok) = run(&args);
     assert!(ok);
     assert!(out.contains(&to_hex(&[0u8; 32])));
 }
@@ -225,7 +234,7 @@ fn pubkey_decode_op_returns_raw_bytes() {
 #[test]
 fn pubkey_decode_op_accepts_hex_as_well_as_base58() {
     let args = json!({"op": "pubkey_decode", "pubkey": to_hex(&[9u8; 32])}).to_string();
-    let (out, ok) = handler::run(&args);
+    let (out, ok) = run(&args);
     assert!(ok);
     assert!(out.contains(&to_hex(&[9u8; 32])));
 }
@@ -233,25 +242,25 @@ fn pubkey_decode_op_accepts_hex_as_well_as_base58() {
 #[test]
 fn pubkey_decode_op_rejects_a_short_key() {
     let args = json!({"op": "pubkey_decode", "pubkey": "abc"}).to_string();
-    let (_out, ok) = handler::run(&args);
+    let (_out, ok) = run(&args);
     assert!(!ok);
 }
 
 #[test]
 fn pubkey_encode_op_roundtrips_with_decode() {
     let raw = to_hex(&[5u8; 32]);
-    let (enc_out, ok) = handler::run(&json!({"op": "pubkey_encode", "bytes": raw}).to_string());
+    let (enc_out, ok) = run(&json!({"op": "pubkey_encode", "bytes": raw}).to_string());
     assert!(ok);
     let v: serde_json::Value = serde_json::from_str(&enc_out).unwrap();
     let pk = v["pubkey"].as_str().unwrap().to_string();
-    let (dec_out, ok2) = handler::run(&json!({"op": "pubkey_decode", "pubkey": pk}).to_string());
+    let (dec_out, ok2) = run(&json!({"op": "pubkey_decode", "pubkey": pk}).to_string());
     assert!(ok2);
     assert!(dec_out.contains(&raw));
 }
 
 #[test]
 fn pubkey_encode_op_rejects_wrong_byte_count() {
-    let (_out, ok) = handler::run(&json!({"op": "pubkey_encode", "bytes": to_hex(&[1u8; 31])}).to_string());
+    let (_out, ok) = run(&json!({"op": "pubkey_encode", "bytes": to_hex(&[1u8; 31])}).to_string());
     assert!(!ok);
 }
 
@@ -264,7 +273,7 @@ fn ed25519_op_rejects_a_wrong_length_signature() {
         "signature": to_hex(&[0u8; 63])
     })
     .to_string();
-    let (out, ok) = handler::run(&args);
+    let (out, ok) = run(&args);
     assert!(!ok);
     assert!(out.contains("64 bytes"));
 }
@@ -278,7 +287,7 @@ fn ed25519_op_reports_false_for_an_unverifiable_signature() {
         "signature": to_hex(&[0u8; 64])
     })
     .to_string();
-    let (out, ok) = handler::run(&args);
+    let (out, ok) = run(&args);
     assert!(ok);
     assert!(out.contains("\"valid\":false"));
 }

@@ -28,9 +28,8 @@ fn ata_matches_the_canonical_derivation_for_a_real_wallet_and_mint() {
     let mint = b58("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v");
     let token = b58(TOKEN_PROGRAM);
     let atap = b58(ASSOCIATED_TOKEN_PROGRAM);
-    let (ata, bump) = associated_token_address(&owner, &mint, &token, &atap);
+    let (ata, _bump) = associated_token_address(&owner, &mint, &token, &atap);
     assert!(off_curve(&ata));
-    assert!(bump <= 255);
     // stable across calls
     assert_eq!(associated_token_address(&owner, &mint, &token, &atap).0, ata);
 }

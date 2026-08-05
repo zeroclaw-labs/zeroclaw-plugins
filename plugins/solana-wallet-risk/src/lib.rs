@@ -105,6 +105,16 @@ pub mod handler {
         (report_json(owner, rpc, &holdings, &report), true)
     }
 
+    /// Standard cross-plugin verdict vocabulary: RED (act / do not proceed),
+    /// AMBER (review before proceeding), GREEN (no blocking risk found).
+    pub fn agent_verdict(band: &str) -> &'static str {
+        match band {
+            "CRITICAL" | "HIGH" => "RED",
+            "MEDIUM" => "AMBER",
+            _ => "GREEN",
+        }
+    }
+
     fn report_json(owner: &str, rpc: &str, holdings: &[Holding], r: &WalletReport) -> String {
         let items: Vec<Value> = holdings
             .iter()
@@ -133,6 +143,9 @@ pub mod handler {
             "worst_position_band": r.worst_band,
             "wallet_risk_score": r.score,
             "wallet_risk_band": r.band,
+            // Standard cross-plugin verdict so an agent gets the same shape from every tool.
+            "agent_verdict": agent_verdict(r.band),
+            "reason": r.summary,
             "summary": r.summary,
             "holdings": items,
             "notes": r.notes,

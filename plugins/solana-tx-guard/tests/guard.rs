@@ -152,7 +152,8 @@ fn system_transfer_is_info_and_reports_lamports() {
 
 #[test]
 fn an_unknown_program_call_is_flagged_for_review() {
-    let unknown = b58("Stake11111111111111111111111111111111111111");
+    // A real program that is not on our known-safe list (Jupiter aggregator).
+    let unknown = b58("JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4");
     let keys = [wallet(), unknown];
     let tx = build(&keys, &[(1, vec![0], vec![1, 2, 3])]);
     let d = decode_tx(&tx).unwrap();
@@ -252,9 +253,29 @@ fn safe_transfer_tx_b64() -> String {
 }
 
 fn sim(err: Value) -> impl Fn(&str, &str, Value) -> Result<Value, String> {
-    move |_u: &str, method: &str, _p: Value| {
-        assert_eq!(method, "simulateTransaction");
-        Ok(json!({"result":{"value":{"err": err.clone(), "unitsConsumed": 150, "logs": ["Program 111 success"]}}}))
+    move |_u: &str, method: &str, _p: Value| match method {
+        // Balance-delta pre-fetch: not provided by this mock, so deltas are skipped and
+        // the static + simulation verdict stands (exactly the degraded path on a throttled RPC).
+        "getMultipleAccounts" => Err("not provided by this mock".to_string()),
+        "simulateTransaction" => Ok(json!({"result":{"value":{
+            "err": err.clone(), "unitsConsumed": 150, "logs": ["Program 111 success"]}}})),
+        other => panic!("unexpected RPC method {other}"),
+    }
+}
+
+/// A mock that provides pre-balances (getMultipleAccounts) and post-balances (in the
+/// simulateTransaction `accounts` field) so the guard can compute the real drain.
+fn sim_with_balances(
+    pre: Vec<u64>,
+    post: Vec<u64>,
+) -> impl Fn(&str, &str, Value) -> Result<Value, String> {
+    move |_u: &str, method: &str, _p: Value| match method {
+        "getMultipleAccounts" => Ok(json!({"result":{"value":
+            pre.iter().map(|l| json!({"lamports": l})).collect::<Vec<_>>()}})),
+        "simulateTransaction" => Ok(json!({"result":{"value":{
+            "err": Value::Null, "unitsConsumed": 200, "logs": ["ok"],
+            "accounts": post.iter().map(|l| json!({"lamports": l})).collect::<Vec<_>>()}}})),
+        other => panic!("unexpected RPC method {other}"),
     }
 }
 
@@ -264,6 +285,7 @@ fn guard_flags_a_dangerous_transaction() {
     let (out, ok) = handler::run(&json!({"transaction": set_authority_tx_b64()}).to_string(), &f);
     assert!(ok);
     assert!(out.contains("\"verdict\":\"DANGEROUS\""));
+    assert!(out.contains("\"agent_verdict\":\"RED\""), "DANGEROUS maps to RED: {out}");
     assert!(out.contains("SetAuthority"));
     assert!(out.contains("\"units_consumed\":150"));
 }
@@ -274,6 +296,39 @@ fn guard_passes_a_plain_transfer() {
     let (out, ok) = handler::run(&json!({"transaction": safe_transfer_tx_b64()}).to_string(), &f);
     assert!(ok);
     assert!(out.contains("\"verdict\":\"SAFE\""));
+    assert!(out.contains("\"agent_verdict\":\"GREEN\""), "SAFE maps to GREEN: {out}");
+}
+
+#[test]
+fn a_big_simulated_drain_escalates_a_static_safe_to_dangerous() {
+    // Static decode: a plain transfer (SAFE). But the simulation shows the fee payer
+    // losing 0.2 SOL — the guard must flag that no static decoder can see.
+    let f = sim_with_balances(vec![1_000_000_000, 0, 0], vec![800_000_000, 200_000_000, 0]);
+    let (out, ok) = handler::run(&json!({"transaction": safe_transfer_tx_b64()}).to_string(), &f);
+    assert!(ok, "{out}");
+    assert!(out.contains("\"verdict\":\"DANGEROUS\""), "a 0.2 SOL drain must be DANGEROUS: {out}");
+    assert!(out.contains("drain_warning"));
+    assert!(out.contains("SENDS 0.200000 SOL"), "must quantify the outflow: {out}");
+    assert!(out.contains("\"is_fee_payer\":true"));
+}
+
+#[test]
+fn a_small_outflow_beyond_fees_escalates_to_review() {
+    // 0.01 SOL out — more than fees, less than a big drain: REVIEW, not DANGEROUS.
+    let f = sim_with_balances(vec![1_000_000_000, 0, 0], vec![990_000_000, 10_000_000, 0]);
+    let (out, ok) = handler::run(&json!({"transaction": safe_transfer_tx_b64()}).to_string(), &f);
+    assert!(ok, "{out}");
+    assert!(out.contains("\"verdict\":\"REVIEW\""), "{out}");
+    assert!(out.contains("beyond fees"));
+}
+
+#[test]
+fn fee_only_change_stays_safe() {
+    // Only signature fees leave the fee payer (5000 lamports) — no escalation.
+    let f = sim_with_balances(vec![1_000_000_000, 0, 0], vec![999_995_000, 1000, 0]);
+    let (out, ok) = handler::run(&json!({"transaction": safe_transfer_tx_b64()}).to_string(), &f);
+    assert!(ok, "{out}");
+    assert!(out.contains("\"verdict\":\"SAFE\""), "fee-only movement must stay SAFE: {out}");
 }
 
 #[test]
@@ -347,4 +402,70 @@ fn schema_is_valid_json_and_documents_the_op() {
     assert_eq!(v["type"], "object");
     assert!(v["required"].as_array().unwrap().contains(&json!("transaction")));
     assert!(handler::SCHEMA.contains("guard"));
+}
+
+// ── broadened program coverage (backlog #2): program-hijack, stake/vote, freeze ──
+
+fn tx_with(program_id: &str, tag_u32: u32) -> String {
+    let keys = [wallet(), some_key(), b58(program_id)];
+    let data = tag_u32.to_le_bytes().to_vec();
+    STANDARD.encode(build(&keys, &[(2, vec![0, 1], data)]))
+}
+
+#[test]
+fn bpf_upgrade_authority_change_is_critical() {
+    // Changing a program's upgrade authority is a hijack vector — must be DANGEROUS.
+    let f = sim(Value::Null);
+    let (out, ok) = handler::run(&json!({"transaction": tx_with(BPF_UPGRADEABLE, 3)}).to_string(), &f);
+    assert!(ok, "{out}");
+    assert!(out.contains("\"verdict\":\"DANGEROUS\""), "{out}");
+    assert!(out.contains("SetAuthority") && out.contains("UPGRADE AUTHORITY"));
+}
+
+#[test]
+fn bpf_program_upgrade_is_critical() {
+    let f = sim(Value::Null);
+    let (out, _) = handler::run(&json!({"transaction": tx_with(BPF_UPGRADEABLE, 4)}).to_string(), &f);
+    assert!(out.contains("\"verdict\":\"DANGEROUS\"") && out.contains("Upgrade"));
+}
+
+#[test]
+fn stake_authorize_is_dangerous() {
+    let f = sim(Value::Null);
+    let (out, _) = handler::run(&json!({"transaction": tx_with(STAKE, 1)}).to_string(), &f);
+    assert!(out.contains("\"verdict\":\"DANGEROUS\"") && out.contains("Authorize"));
+}
+
+#[test]
+fn vote_withdraw_is_dangerous() {
+    let f = sim(Value::Null);
+    let (out, _) = handler::run(&json!({"transaction": tx_with(VOTE, 4)}).to_string(), &f);
+    assert!(out.contains("\"verdict\":\"DANGEROUS\"") && out.contains("Withdraw"));
+}
+
+#[test]
+fn spl_freeze_account_is_flagged() {
+    // Freezing a holder's token account (tag 10) is a High-severity control action.
+    let keys = [wallet(), some_key(), b58(TOKEN)];
+    let tx = STANDARD.encode(build(&keys, &[(2, vec![0, 1], vec![10u8])]));
+    let f = sim(Value::Null);
+    let (out, _) = handler::run(&json!({"transaction": tx}).to_string(), &f);
+    assert!(out.contains("\"verdict\":\"DANGEROUS\"") && out.contains("FreezeAccount"), "{out}");
+}
+
+#[test]
+fn spl_transfer_checked_is_not_a_false_delegate_approval() {
+    // Regression: tag 12 is TransferChecked (benign), NOT ApproveChecked. It must not
+    // be flagged as a High-severity delegate approval.
+    let keys = [wallet(), some_key(), b58(TOKEN)];
+    let mut data = vec![12u8];
+    data.extend(1000u64.to_le_bytes()); // amount
+    data.push(6); // decimals
+    let tx = STANDARD.encode(build(&keys, &[(2, vec![0, 1, 1], data)]));
+    let f = sim(Value::Null);
+    let (out, ok) = handler::run(&json!({"transaction": tx}).to_string(), &f);
+    assert!(ok, "{out}");
+    assert!(out.contains("TransferChecked"), "tag 12 must decode as TransferChecked: {out}");
+    assert!(!out.contains("ApproveChecked"), "tag 12 must NOT be mislabeled ApproveChecked");
+    assert!(out.contains("\"verdict\":\"SAFE\""), "a checked transfer is not dangerous: {out}");
 }

@@ -1,8 +1,12 @@
 name = "solana-verify"
 version = "0.1.0"
-description = "Offline Solana verification for the ZeroClaw agent: keccak-256 Merkle proofs (TxODDS on-chain settlement primitive), ed25519 signatures, and base58 pubkey conversion. Pure compute — no network."
+description = "Solana verification for the ZeroClaw agent: keccak-256 Merkle proofs (TxODDS on-chain settlement primitive), ed25519 signatures, and base58 pubkey conversion — with a live 'merkle_verify_onchain' op that reads the anchored root from chain over wasi:http so the proof is checked against real on-chain state, not a caller-supplied root. Deterministic, read-only, no keys."
 author = "furkanefecancaglar"
 wasm_path = "solana_verify.wasm"
 capabilities = ["tool"]
-# Pure-compute: no network, no config, no host permissions required.
-permissions = []
+# http_client: read-only getAccountInfo to fetch an anchored Merkle root live from a
+#   Solana RPC endpoint (merkle_verify_onchain). The pure-compute ops need no network;
+#   the grant is only exercised when the caller asks to read the root from chain.
+# config_read: read the RPC url from this plugin's config (falls back to a public
+#   mainnet endpoint; the caller may also pass `rpc_url` per call).
+permissions = ["http_client", "config_read"]

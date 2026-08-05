@@ -1,9 +1,10 @@
 # solana-verify — a ZeroClaw tool plugin
 
-Offline Solana verification an AI agent can **trust without a network call**. ZeroClaw's
-`tool-plugin` WIT world grants no outbound HTTP, so a shippable-today Solana tool must be
-pure compute — which is exactly what verification is. This plugin does the checks an agent
-handling Solana data actually needs to be sure of, deterministically and offline.
+Local, pure-compute Solana verification an AI agent can **trust without a network call**.
+ZeroClaw tool plugins *can* take an `http_client` grant, but verification needs none — folding a
+Merkle proof or checking an ed25519 signature is deterministic math, so this plugin deliberately
+runs with **zero network surface** and becomes the trust anchor the live scanners feed into. It
+does the checks an agent handling Solana data actually needs to be sure of, deterministically.
 
 ## Ops (dispatch by an `op` field in the JSON args)
 

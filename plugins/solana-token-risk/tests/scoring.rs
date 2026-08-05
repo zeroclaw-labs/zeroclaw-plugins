@@ -512,3 +512,13 @@ fn every_flag_carries_non_empty_evidence_and_a_title() {
         assert!(f.points > 0, "{} scores nothing", f.code);
     }
 }
+
+#[test]
+fn agent_verdict_maps_bands_to_red_amber_green() {
+    use solana_token_risk::handler::agent_verdict;
+    assert_eq!(agent_verdict("CRITICAL"), "RED");
+    assert_eq!(agent_verdict("HIGH"), "RED");
+    assert_eq!(agent_verdict("MEDIUM"), "AMBER");
+    assert_eq!(agent_verdict("LOW"), "GREEN");
+    assert_eq!(agent_verdict("MINIMAL"), "GREEN");
+}
