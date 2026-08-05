@@ -102,6 +102,19 @@ pub struct Policy {
     pub velocity: Option<VelocityPolicy>,
     #[serde(default)]
     pub fee: Option<FeePolicy>,
+    /// Authorization by what a transaction *does* rather than by which
+    /// instructions it contains. Absent (the default) leaves every existing
+    /// policy behaving exactly as it did.
+    ///
+    /// Omitted from the canonical form when absent, and that is load-bearing.
+    /// `policy_sha256` is inside every `decision_id`, so a section serialising
+    /// as `null` where nothing serialised before would change the digest of
+    /// every policy in existence — invalidating every receipt ever issued and
+    /// every entry in the transparency log, for a feature the operator does
+    /// not use. Additive schema changes must be silent for policies that do
+    /// not opt in.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effects: Option<EffectsPolicy>,
     #[serde(default = "default_true")]
     pub require_unsigned: bool,
     #[serde(default = "default_max_bytes")]
@@ -115,6 +128,59 @@ fn default_true() -> bool {
 }
 fn default_max_bytes() -> usize {
     1232
+}
+
+/// Bounds on what a transaction may do to the balances an operator protects.
+///
+/// This is the rail-agnostic half of the engine. The instruction rules above
+/// ask *"do I recognize this?"*; these ask *"what does it cost me?"* — a
+/// question that has an answer for programs the decoder has never seen, and one
+/// that catches value moved through CPI where instruction bytes show nothing.
+///
+/// Absent from a policy, the whole layer is inert.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct EffectsPolicy {
+    /// Observe effects and enforce these bounds. When true, evidence that
+    /// cannot be obtained is UNKNOWN rather than assumed harmless.
+    pub required: bool,
+    /// Whose balances are protected. Usually the vault, and the payer.
+    pub guarded: BTreeSet<String>,
+    /// Maximum net decrease per asset, in raw units. Keyed by mint address, or
+    /// `"SOL"` for lamports. An asset with no entry may not leave at all: an
+    /// unlisted asset is refused rather than allowed by omission.
+    #[serde(default)]
+    pub max_outflow_raw: BTreeMap<String, String>,
+    /// Programs whose unfamiliarity is forgiven when every effect is within
+    /// its cap.
+    ///
+    /// This is the line that turns a decoder into a firewall, and it is
+    /// deliberately an allowlist rather than a blanket "admit anything that
+    /// stays under the cap". The operator still names the program; effects
+    /// bound what naming it can cost them.
+    #[serde(default)]
+    pub admitted_programs: BTreeSet<String>,
+}
+
+impl EffectsPolicy {
+    /// The cap for one asset. `None` means this asset may not leave at all —
+    /// either because the operator did not list it, or because what they wrote
+    /// is not a raw integer. A cap nobody can read is not a permission.
+    pub fn cap_for(&self, asset: &str) -> Option<u128> {
+        self.max_outflow_raw.get(asset)?.parse::<u128>().ok()
+    }
+
+    /// Report unreadable caps, so a typo fails at load time with a clear
+    /// message instead of silently becoming a refusal at decision time.
+    pub fn validate_caps(&self) -> Result<(), String> {
+        for (asset, raw) in &self.max_outflow_raw {
+            if raw.parse::<u128>().is_err() {
+                return Err(format!(
+                    "max_outflow_raw[{asset}] is not a raw integer: {raw:?}"
+                ));
+            }
+        }
+        Ok(())
+    }
 }
 
 /// Simulation requirements.
@@ -135,7 +201,7 @@ impl Policy {
         let obj = raw
             .as_object()
             .ok_or_else(|| "policy_json must be a JSON object".to_string())?;
-        const KNOWN: [&str; 17] = [
+        const KNOWN: [&str; 18] = [
             "version",
             "default_action",
             "assets",
@@ -148,6 +214,7 @@ impl Policy {
             "durable_nonce",
             "velocity",
             "fee",
+            "effects",
             "require_unsigned",
             "max_transaction_bytes",
             "token_2022",
@@ -184,6 +251,29 @@ impl Policy {
         }
         for (name, asset) in &policy.assets {
             asset.max_raw().map_err(|e| format!("asset {name}: {e}"))?;
+        }
+        if let Some(effects) = &policy.effects {
+            // A required effects policy that guards nobody would silently
+            // enforce nothing while reading as protection.
+            if effects.required && effects.guarded.is_empty() {
+                return Err(
+                    "effects.required is set but effects.guarded is empty — that would enforce \
+                     nothing while looking like protection"
+                        .into(),
+                );
+            }
+            effects
+                .validate_caps()
+                .map_err(|e| format!("effects: {e}"))?;
+            // Admitting a program only means something when effects are
+            // actually enforced; otherwise it silently widens the firewall.
+            if !effects.admitted_programs.is_empty() && !effects.required {
+                return Err(
+                    "effects.admitted_programs is set but effects.required is false — that would \
+                     admit unknown programs with nothing bounding them"
+                        .into(),
+                );
+            }
         }
         Ok(policy)
     }
@@ -259,6 +349,10 @@ pub struct TxFacts {
     pub estimated_fee_lamports: u64,
     pub account_creation_lamports: u64,
     pub simulation_ok: bool,
+    /// Net balance movements observed for this transaction, when effect
+    /// analysis ran. `None` means it did not — which a policy that requires
+    /// effects must treat as missing evidence, never as "nothing moved".
+    pub effects: Option<Vec<crate::effects::Movement>>,
     pub intent: Option<Intent>,
 }
 
@@ -333,9 +427,23 @@ pub fn evaluate(policy: &Policy, facts: &TxFacts) -> Report {
         }
 
         if ix.program.starts_with("unknown:") {
-            match policy.unknown_program {
-                Outcome::Deny => deny!("SH-DENY-PROGRAM-011", "UNKNOWN_PROGRAM"),
-                Outcome::Review => review!("SH-REVIEW-PROGRAM-013", "UNKNOWN_PROGRAM"),
+            // An unfamiliar program is forgiven only when the operator named
+            // it AND effect analysis actually produced evidence. Both halves
+            // matter: naming without evidence is a blank cheque, and evidence
+            // without naming would admit any program that happened to stay
+            // under a cap.
+            let admitted = policy.effects.as_ref().is_some_and(|effects| {
+                effects.required
+                    && facts.effects.is_some()
+                    && effects
+                        .admitted_programs
+                        .contains(ix.program.trim_start_matches("unknown:"))
+            });
+            if !admitted {
+                match policy.unknown_program {
+                    Outcome::Deny => deny!("SH-DENY-PROGRAM-011", "UNKNOWN_PROGRAM"),
+                    Outcome::Review => review!("SH-REVIEW-PROGRAM-013", "UNKNOWN_PROGRAM"),
+                }
             }
             continue;
         }
@@ -430,6 +538,40 @@ pub fn evaluate(policy: &Policy, facts: &TxFacts) -> Report {
         }
     }
 
+    // 7b. Effects: what the transaction actually costs the accounts the
+    // operator protects.
+    //
+    // This is the rail-agnostic half. Everything above reasons about
+    // instructions the decoder recognizes; this reasons about balances, which
+    // exist for every program including ones written after this code. It also
+    // sees value moved through CPI, where the top-level instruction bytes show
+    // nothing at all.
+    //
+    // Two rules, both fail-closed. Evidence that could not be obtained is
+    // UNKNOWN, never "nothing moved". An asset with no cap may not leave at
+    // all, so forgetting to list one refuses rather than permits.
+    if let Some(effects) = &policy.effects {
+        if effects.required {
+            match &facts.effects {
+                None => unknown!("SH-UNKNOWN-EFFECT-072", "EFFECT_EVIDENCE"),
+                Some(movements) => {
+                    for movement in movements {
+                        if movement.out_raw == 0 || !effects.guarded.contains(&movement.owner) {
+                            continue;
+                        }
+                        match effects.cap_for(&movement.asset) {
+                            None => deny!("SH-DENY-EFFECT-071", "EFFECT_UNLISTED_ASSET"),
+                            Some(cap) if movement.out_raw > cap => {
+                                deny!("SH-DENY-EFFECT-070", "EFFECT_CAP")
+                            }
+                            Some(_) => {}
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     // 8. Reserved future fee/rent enforcement. Policy::from_json rejects the
     // fee section in safe v0.1 because complete evidence is not yet available.
     //
@@ -457,6 +599,56 @@ pub fn evaluate(policy: &Policy, facts: &TxFacts) -> Report {
             Outcome::Deny => deny!("SH-DENY-NOINTENT-006", "MISSING_INTENT"),
             Outcome::Review => review!("SH-REVIEW-NOINTENT-005", "MISSING_INTENT"),
         },
+        // An economic intent, for transactions whose instructions the decoder
+        // cannot read. The caller declares what the transaction should *cost*
+        // rather than which transfer it should contain, and the engine checks
+        // the observed movements against that.
+        //
+        // It bounds only the asset it names, and deliberately says nothing
+        // about the others. Every transaction costs its payer lamports; an
+        // intent that had to enumerate the fee alongside the spend is one
+        // nobody could write correctly. Undeclared assets are bounded by the
+        // policy caps instead — numbers the operator chose, enforced just
+        // above, which is why "spend at most 25 USDC" still cannot become "and
+        // quietly ten SOL as well".
+        //
+        // Nothing is given up by this. A transaction that moves only assets the
+        // caller never named never touches the declared one, so the
+        // declared-spend-never-happened rule below refuses it anyway.
+        Some(intent) if intent.action == "effect" => {
+            let declared = intent.amount_raw.parse::<u128>();
+            let declared_asset = intent.mint.clone().unwrap_or_else(|| "SOL".to_string());
+            match (&facts.effects, &policy.effects) {
+                (Some(movements), Some(effects_policy)) => {
+                    let mut matched = false;
+                    for movement in movements {
+                        if movement.out_raw == 0
+                            || !effects_policy.guarded.contains(&movement.owner)
+                        {
+                            continue;
+                        }
+                        if movement.asset != declared_asset {
+                            continue;
+                        }
+                        matched = true;
+                        match declared {
+                            Ok(limit) if movement.out_raw <= limit => {}
+                            _ => deny!("SH-INTENT-EFFECT-AMOUNT-037", "INTENT_EFFECT_MISMATCH"),
+                        }
+                    }
+                    // A declared spend that costs nothing is not a match. It
+                    // means the transaction does something other than what the
+                    // caller said, and the engine cannot tell what.
+                    if !matched && declared.map(|limit| limit > 0).unwrap_or(true) {
+                        deny!("SH-INTENT-EFFECT-AMOUNT-037", "INTENT_EFFECT_MISMATCH");
+                    }
+                }
+                // Declaring an effect intent without effect evidence is not a
+                // refusal, it is an absence of evidence — the same position as
+                // any other missing simulation.
+                _ => unknown!("SH-UNKNOWN-EFFECT-072", "EFFECT_EVIDENCE"),
+            }
+        }
         Some(intent) => {
             let intent_mint = intent.mint.clone().unwrap_or_else(|| "SOL".to_string());
             let intent_amount = intent.amount_raw.parse::<u128>();

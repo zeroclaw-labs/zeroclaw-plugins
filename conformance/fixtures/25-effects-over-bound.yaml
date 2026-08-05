@@ -1,0 +1,8 @@
+# The same call, one unit over the line the operator drew. Admitting a program
+# is not admitting an amount.
+name: "level-25 unfamiliar program spending past the bound → DENY"
+policy: merchant_effects
+intent: {action: effect, mint: USDC, amount_raw: "25000001", recipient: ""}
+tx: {kind: unknown_only, unknown_program: true}
+simulation: "effects:25000001:5000:30000000"
+expect: {verdict: DENY, reason_codes: ["SH-DENY-EFFECT-070"]}

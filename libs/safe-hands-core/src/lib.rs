@@ -27,6 +27,7 @@ pub mod codec;
 pub mod commitment;
 pub mod crypto;
 pub mod decode;
+pub mod effects;
 pub mod invoice;
 pub mod ix;
 pub mod log;

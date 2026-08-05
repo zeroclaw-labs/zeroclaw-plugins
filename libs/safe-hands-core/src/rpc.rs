@@ -22,12 +22,25 @@ pub fn envelope(method: &str, params: Value) -> Value {
 #[derive(Default)]
 pub struct MockTransport {
     pub responses: std::collections::HashMap<String, Value>,
+    /// Answers that depend on what was asked. Needed for calls whose response
+    /// must line up positionally with a list in the request — effect
+    /// observation asks about a specific set of addresses and a canned answer
+    /// cannot know how many.
+    #[allow(clippy::type_complexity)]
+    responders: std::collections::HashMap<String, Box<dyn Fn(&Value) -> Value>>,
     calls: std::cell::RefCell<Vec<(String, Value)>>,
 }
 
 impl MockTransport {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Answer `method` by computing a response from its params.
+    #[allow(clippy::type_complexity)]
+    pub fn with_responder(mut self, method: &str, responder: Box<dyn Fn(&Value) -> Value>) -> Self {
+        self.responders.insert(method.to_string(), responder);
+        self
     }
 
     pub fn with(mut self, method: &str, response: Value) -> Self {
@@ -43,7 +56,12 @@ impl MockTransport {
 
 impl RpcTransport for MockTransport {
     fn call(&self, method: &str, params: Value) -> Result<Value, String> {
-        self.calls.borrow_mut().push((method.to_string(), params));
+        self.calls
+            .borrow_mut()
+            .push((method.to_string(), params.clone()));
+        if let Some(responder) = self.responders.get(method) {
+            return Ok(responder(&params));
+        }
         self.responses
             .get(method)
             .cloned()

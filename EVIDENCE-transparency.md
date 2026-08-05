@@ -35,20 +35,27 @@ Below it is demonstrated, then attacked four ways.
 
 ## The anchors
 
-Two, on Solana devnet, both under the same authority
+Three, on Solana devnet, all under the same authority
 `BJqcN1wqvpakoMtu5xVepNHRTVbQohnDAfARtwe9HNcV`:
 
 | Slot | Signature | Memo |
 |---|---|---|
 | 478989134 | [`dyiyH5fw…1xH1wGj`](https://explorer.solana.com/tx/dyiyH5fwBsYNuT6H9ZytdBV8YoCxDgMh8sa2WjBtMpKsFPnomUyr8dAH84GNMRGKf262Y2dCjBpVQTxx1xH1wGj?cluster=devnet) | `sh1 n=22 head=b9f032a7…add55` |
 | 478991446 | [`2HczD1C7…1mu7FV`](https://explorer.solana.com/tx/2HczD1C7wzCtR1h3vzCrDUg8xoE4MySmjGZycUmg9UxJBkcGW3HybMKfiNHGmN69odQPEBohAy5Ft71rQP1mu7FV?cluster=devnet) | `sh1 n=22 head=b9f032a7…add55` |
+| 478999926 | [`5c3C2v3L…hu3tr`](https://explorer.solana.com/tx/5c3C2v3LExKPQLc56j75PFgHXrx83uirunfJXSV76ERav9HYYuEVTkytwyEs2EzWuqwxuAYtZc25AqKacykhu3tr?cluster=devnet) | `sh1 n=27 head=40de23bd…10645` |
 
 Each transaction is one SPL Memo instruction, ~76 bytes of payload. Safe Hands
-built both **unsigned** — it holds no key here any more than it does when
+built all three **unsigned** — it holds no key here any more than it does when
 preparing a refund — and the operator signed them.
 
-Anchoring repeatedly is the intended pattern, not a duplicate: each anchor
-narrows the window of entries that are chained but not yet pinned.
+Anchoring repeatedly is the intended pattern, not duplication: each anchor
+narrows the window of entries that are chained but not yet pinned, and every
+past anchor keeps pinning the prefix it covered.
+
+**The third anchor shows that directly.** It was published after the
+effect-analysis fixtures were added, growing the log from 22 entries to 27. The
+two earlier anchors did not go stale — they still pin entries 0–21 exactly as
+before. A log grows; its history does not move.
 
 ### Signing without handing a library your key
 
@@ -90,27 +97,28 @@ leaving the memo being attested untouched.
 
 | Verdict | Entries |
 |---|---|
-| DENY | 15 |
-| ALLOW | 3 |
+| DENY | 18 |
+| ALLOW | 4 |
 | REVIEW | 2 |
-| UNKNOWN | 2 |
+| UNKNOWN | 3 |
 
 It is deliberately not a curated list of approvals. A transparency log made
 only of successes proves nothing, and the refusals are the interesting part.
 
-It is also reproducible from source — `just log-rebuild` reruns all 23 fixtures
-through the real plugins, emits a receipt for each, appends them, and arrives
-at the identical head:
+Fixture 20 is a `squads-proposal-build` case and produces a proposal rather than
+an authorization decision, so 28 fixtures yield 27 logged decisions.
 
 ```text
 PASS  every entry re-derives from its own inputs
-      22 entries recomputed from bytes + policy + intent
+      27 entries recomputed from bytes + policy + intent
 PASS  the chain is unbroken from genesis
-      genesis dd79c5eb… → head b9f032a72a192ebb505fc79b685d6cd5d00f86682ea4301ea858e6bf9c4add55
+      genesis dd79c5eb… → head 40de23bd8ac186449b5addd92702be927f4f1483505b087284b8989acac10645
 ```
 
-Fixture 20 is a `squads-proposal-build` case and produces a proposal rather than
-an authorization decision, so 23 fixtures yield 22 logged decisions.
+The file is append-only and grew as the suite did, which is why `just
+log-rebuild` builds a *fresh* log rather than claiming to reproduce this one.
+Rebuilding demonstrates the pipeline; this file is the artifact, and the anchors
+above are what make it one.
 
 ---
 
@@ -127,10 +135,12 @@ authority: BJqcN1wqvpakoMtu5xVepNHRTVbQohnDAfARtwe9HNcV
         dyiyH5fwBsYNuT6H9ZytdBV8YoCxDgMh8sa2WjBtMpKsFPnomUyr8dAH84GNMRGKf262Y2dCjBpVQTxx1xH1wGj
   OK    slot 478991446 — 22 entries (unix 1785054912)
         2HczD1C7wzCtR1h3vzCrDUg8xoE4MySmjGZycUmg9UxJBkcGW3HybMKfiNHGmN69odQPEBohAy5Ft71rQP1mu7FV
+  OK    slot 478999926 — 27 entries (unix 1785058017)
+        5c3C2v3LExKPQLc56j75PFgHXrx83uirunfJXSV76ERav9HYYuEVTkytwyEs2EzWuqwxuAYtZc25AqKacykhu3tr
 
-  All 2 anchors agree. 22 of 22 entries are pinned on chain; the earliest at slot 478989134.
+  All 3 anchors agree. 27 of 27 entries are pinned on chain; the earliest at slot 478989134.
   Those entries can no longer be altered, reordered, or removed without
-  contradicting a value published at slot 478991446 by a key we do not hold.
+  contradicting a value published at slot 478999926 by a key we do not hold.
 ```
 
 Run against `https://api.devnet.solana.com` — the public endpoint, no API key.
@@ -149,9 +159,10 @@ Drop the last two decisions. The remaining file is internally flawless — the
 chain still verifies against itself.
 
 ```text
+PASS  every entry re-derives from its own inputs
 PASS  the chain is unbroken from genesis
 FAIL  every on-chain anchor agrees with this log
-      slot 478989134: TRUNCATED: an anchor covers 22 entries, the log holds 20.
+      slot 478999926: TRUNCATED: an anchor covers 27 entries, the log holds 25.
       2 published entries are gone.
 ```
 
@@ -159,14 +170,20 @@ This is the attack the chain alone cannot see, and the reason anchoring exists.
 
 ### 2. Delete a decision from the middle and rebuild every head
 
-Remove entry 11, renumber, recompute all 21 heads so nothing is inconsistent.
+Remove entry 11, renumber, recompute all 26 heads so nothing is inconsistent.
+
+The *oldest* anchor catches it: an edit made today contradicts a value published
+before the effect-analysis work existed. That is the argument for anchoring
+early and often.
 
 ```text
 PASS  every entry re-derives from its own inputs
 PASS  the chain is unbroken from genesis
 FAIL  every on-chain anchor agrees with this log
-      slot 478989134: TRUNCATED: an anchor covers 22 entries, the log holds 21.
-      1 published entry is gone.
+      slot 478989134: FORKED at 22 entries:
+        chain published  b9f032a7…add55
+        this log computes c91ae955…8c207
+      slot 478999926: TRUNCATED: an anchor covers 27 entries, the log holds 26.
 ```
 
 ### 3. Rewrite a refusal into an approval
@@ -188,18 +205,25 @@ verdict written next to them.
 
 ### 4. Substitute one decision and rebuild the whole chain
 
-The hardest version: keep 22 entries, swap entry 11 for a different genuine
-decision, recompute every head. The file is perfect by every internal measure.
+The hardest version: keep all 27 entries, swap entry 11 for a different genuine
+decision, recompute every head. The file is perfect by every internal measure —
+every receipt re-derives, the chain is unbroken, and the newest anchor's entry
+count matches exactly.
+
+All three anchors refuse it.
 
 ```text
 PASS  every entry re-derives from its own inputs
-      22 entries recomputed from bytes + policy + intent
+      27 entries recomputed from bytes + policy + intent
 PASS  the chain is unbroken from genesis
 PASS  the published head covers every entry
 FAIL  every on-chain anchor agrees with this log
       slot 478989134: FORKED at 22 entries:
         chain published  b9f032a72a192ebb505fc79b685d6cd5d00f86682ea4301ea858e6bf9c4add55
         this log computes 87e235bf5f21c3a782241e72c6ee2adf06bc22b341e2fa1bdd84e87a8915ca3d
+      slot 478999926: FORKED at 27 entries:
+        chain published  40de23bd8ac186449b5addd92702be927f4f1483505b087284b8989acac10645
+        this log computes f2512ab23544f16c3cc372d377de5d8a5f397e99e6f6d44cb37afa556d57c9cd
       Two histories exist under one authority.
 ```
 
@@ -288,3 +312,8 @@ disclosure would be a poor joke.
   obtained, and a receipt that misstates it fails to re-derive.
 - **A single anchor cannot prove an entry was logged promptly**, only that it
   existed by the anchored slot. Frequent anchoring is what tightens that.
+- **One authority keeps one log.** The genesis binds to the anchoring key on
+  purpose, so an operator cannot quietly start over under the same key without
+  every past anchor calling it a fork. That is the property working rather than
+  a limitation to route around — but it does mean starting a log is a
+  commitment.

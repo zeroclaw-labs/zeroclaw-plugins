@@ -96,9 +96,13 @@ log-verify authority="BJqcN1wqvpakoMtu5xVepNHRTVbQohnDAfARtwe9HNcV":
 log-audit rpc="https://api.devnet.solana.com" authority="BJqcN1wqvpakoMtu5xVepNHRTVbQohnDAfARtwe9HNcV":
     cargo run --locked --release --manifest-path conformance/Cargo.toml -- --log-audit --log conformance/log/arena.jsonl --authority {{authority}} --rpc "{{rpc}}"
 
-# Rebuild the log from scratch: run the attack arena, emit a receipt per
-# fixture, and append each one. Reproduces conformance/log/arena.jsonl except
-# for its timestamps, which the chain does not commit to.
+# Build a log from scratch: run the attack arena, emit a receipt per fixture,
+# and append each one, then verify the result.
+#
+# This does not reproduce conformance/log/arena.jsonl byte for byte, and should
+# not: that file is an append-only record that grew as the suite did, with
+# historical anchors pinning the prefixes it had at the time. Rebuilding
+# demonstrates the pipeline; the committed log is the artifact.
 log-rebuild out="target/log-rebuild":
     #!/usr/bin/env bash
     set -euo pipefail

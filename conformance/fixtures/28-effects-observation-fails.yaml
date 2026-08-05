@@ -1,0 +1,13 @@
+# Simulation is healthy, but the balances cannot be read — a node that answers
+# the freshness call and declines the state call. This is the gap between
+# "the transaction would succeed" and "and here is what it would cost you",
+# and only the second one authorizes anything here.
+#
+# The program is therefore not admitted, and falls back to being simply
+# unfamiliar. Both objections are reported; the stricter wins.
+name: "level-28 simulation fine, effects unreadable → DENY (fail closed)"
+policy: merchant_effects
+intent: {action: effect, mint: USDC, amount_raw: "1000000", recipient: ""}
+tx: {kind: unknown_only, unknown_program: true}
+simulation: "effects:blind"
+expect: {verdict: DENY, reason_codes: ["SH-DENY-PROGRAM-011", "SH-UNKNOWN-EFFECT-072"]}

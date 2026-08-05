@@ -88,6 +88,16 @@ pub struct ResolvedFacts {
     pub velocity_exceeded: bool,
     // 11. Simulation.
     pub simulation_missing: bool,
+    /// Effects were required and could not be observed. Missing evidence, not
+    /// an absence of movement.
+    pub effect_evidence_missing: bool,
+    /// A guarded owner loses more of some asset than its cap permits.
+    pub effect_over_cap: bool,
+    /// A guarded owner loses an asset the operator never listed. Unlisted is
+    /// refused rather than unbounded.
+    pub effect_unlisted_asset: bool,
+    /// A declared effect intent does not match what the transaction costs.
+    pub intent_effect_mismatch: bool,
 }
 
 impl ResolvedFacts {
@@ -132,6 +142,10 @@ impl ResolvedFacts {
             intent_memo_mismatch: false,
             velocity_exceeded: false,
             simulation_missing: false,
+            effect_evidence_missing: false,
+            effect_over_cap: false,
+            effect_unlisted_asset: false,
+            intent_effect_mismatch: false,
         }
     }
 
@@ -152,6 +166,12 @@ impl ResolvedFacts {
             || self.has_unlisted_mint
             || self.over_fee_cap
             || self.over_rent_cap
+            // Effects: a bound the operator wrote down, and an asset they
+            // never did. Neither is configurable — a firewall whose spending
+            // limit could be downgraded to a review queue is not a limit.
+            || self.effect_over_cap
+            || self.effect_unlisted_asset
+            || self.intent_effect_mismatch
             // A durable nonce the operator allowlisted is still refused when
             // AdvanceNonceAccount is not instruction zero: the runtime would
             // reject it, and a half-honored durable transaction is never
@@ -184,7 +204,7 @@ impl ResolvedFacts {
 
     /// Is any evidence missing or untrustworthy?
     fn any_unknown(&self) -> bool {
-        self.simulation_missing
+        self.simulation_missing || self.effect_evidence_missing
     }
 
     /// Does anything need a human?
@@ -323,9 +343,57 @@ pub fn resolve(policy: &Policy, facts: &TxFacts) -> ResolvedFacts {
         r.over_rent_cap = facts.account_creation_lamports > fee.max_account_creation_lamports;
     }
 
+    // 7b. Effects.
+    if let Some(effects) = &policy.effects {
+        if effects.required {
+            match &facts.effects {
+                None => r.effect_evidence_missing = true,
+                Some(movements) => {
+                    for movement in movements {
+                        if movement.out_raw == 0 || !effects.guarded.contains(&movement.owner) {
+                            continue;
+                        }
+                        match effects.cap_for(&movement.asset) {
+                            None => r.effect_unlisted_asset = true,
+                            Some(cap) if movement.out_raw > cap => r.effect_over_cap = true,
+                            Some(_) => {}
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     // 9. Intent binding.
     match &facts.intent {
         None => r.intent_missing = true,
+        Some(intent) if intent.action == "effect" => {
+            let declared = intent.amount_raw.parse::<u128>();
+            let declared_asset = intent.mint.clone().unwrap_or_else(|| "SOL".to_string());
+            match (&facts.effects, &policy.effects) {
+                (Some(movements), Some(effects_policy)) => {
+                    let mut matched = false;
+                    for movement in movements {
+                        if movement.out_raw == 0
+                            || !effects_policy.guarded.contains(&movement.owner)
+                        {
+                            continue;
+                        }
+                        if movement.asset != declared_asset {
+                            continue;
+                        }
+                        matched = true;
+                        if !matches!(declared, Ok(limit) if movement.out_raw <= limit) {
+                            r.intent_effect_mismatch = true;
+                        }
+                    }
+                    if !matched && declared.map(|limit| limit > 0).unwrap_or(true) {
+                        r.intent_effect_mismatch = true;
+                    }
+                }
+                _ => r.effect_evidence_missing = true,
+            }
+        }
         Some(intent) => {
             let intent_mint = intent.mint.clone().unwrap_or_else(|| "SOL".to_string());
             let intent_amount = intent.amount_raw.parse::<u128>();

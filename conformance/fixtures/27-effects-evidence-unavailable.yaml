@@ -1,0 +1,12 @@
+# The failure this layer has to survive: the node will not answer.
+#
+# An unfamiliar program is admitted only when effect evidence exists, so with no
+# evidence there is nothing to admit it. The verdict is UNKNOWN rather than
+# ALLOW — missing evidence is a position, not a permission — and the operator is
+# told to retry rather than told everything is fine.
+name: "level-27 unfamiliar program with no evidence at all → UNKNOWN (fail closed)"
+policy: merchant_effects
+intent: {action: effect, mint: USDC, amount_raw: "1000000", recipient: ""}
+tx: {kind: unknown_only, unknown_program: true}
+simulation: "down"
+expect: {verdict: UNKNOWN, reason_codes: ["SH-UNKNOWN-RPC-050"]}

@@ -25,6 +25,10 @@ const ATTACKER: &str = "AKnL4NNf3DGWZJS6cPknBuEGnVsV4A4m5tgebLHaRSZ9";
 const USDC: &str = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 const CREATE_KEY: &str = "J2xccRtuG43drESLYznHhLhQkLTdfepcKYbiQ9BsJVaf";
 const PROPOSER: &str = "5Z6Ay5NEcbg3xhopc522sBCRXQujkTiuDRnHGfQdcnSf";
+/// The unfamiliar program the effects fixtures admit. Its bytes are all `0xab`,
+/// matching the `unknown_program` instruction the builder emits — deliberately
+/// a program the decoder cannot read, because that is the point.
+const ADMITTED_PROGRAM: &str = "CZ8YUVdk7znjrUmnb5n7kgySk9yRAsQDYmyCxzfSky9t";
 
 fn key(name: &str) -> Pubkey {
     let s = match name {
@@ -121,6 +125,22 @@ fn policy_json(name: &str) -> Option<String> {
             "token_2022":{{"permanent_delegate":"deny","transfer_hook":"review","transfer_fee":"review","default_frozen":"deny"}},
             "simulation":{{"required":true,"max_slot_age":32}}}}"#
         )),
+        // The merchant persona again, plus the rail-agnostic half: one
+        // unfamiliar program named by the operator, and an explicit bound on
+        // what naming it may cost. Fixtures 24-27 are the same call, allowed
+        // and refused, differing only by what it does to the vault.
+        "merchant_effects" => Some(format!(
+            r#"{{"version":"1.0.0","default_action":"deny",
+            "assets":{{"SOL":{{"decimals":9,"max_per_tx_raw":"2000000000"}},"{USDC}":{{"decimals":6,"max_per_tx_raw":"25000000"}}}},
+            "allowed_recipients":["{RECIP}"],
+            "allowed_instructions":{{"system":["transfer"],"spl_token":["transfer_checked"],"associated_token":["create_idempotent"],"memo":["memo"]}},
+            "unknown_program":"deny","unknown_instruction":"deny","missing_intent":"review","durable_nonce":"deny",
+            "effects":{{"required":true,"guarded":["{PAYER}"],
+              "admitted_programs":["{ADMITTED_PROGRAM}"],
+              "max_outflow_raw":{{"{USDC}":"25000000","SOL":"10000000"}}}},
+            "token_2022":{{"permanent_delegate":"deny","transfer_hook":"review","transfer_fee":"review","default_frozen":"deny"}},
+            "simulation":{{"required":true,"max_slot_age":32}}}}"#
+        )),
         _ => None,
     }
 }
@@ -168,15 +188,28 @@ fn build_tx_for_payer(spec: &TxSpec, payer: Pubkey) -> Vec<u8> {
                 6,
             ));
         }
+        // Nothing decodable at all — the shape a swap, an x402 payment, or any
+        // call into an unfamiliar program actually has. The instruction layer
+        // has nothing to say about it; the effect layer has everything.
+        "unknown_only" => {}
         _ => {}
     }
     if let Some((recip, amt)) = &spec.extra_transfer {
         ixs.push(ix::system_transfer(&payer, &key(recip), *amt));
     }
     if spec.unknown_program {
+        // A real call into an unfamiliar program names the accounts it touches
+        // — a swap names its source token account, an x402 payment names the
+        // payer's. Naming the payer's USDC account here is what gives effect
+        // analysis something to observe, and is what makes the instruction
+        // undecodable without being unrealistic.
+        let source =
+            safe_hands_core::crypto::ata_address(&payer, &ix::spl_token_program(), &key("USDC"));
         ixs.push(safe_hands_core::solana_instruction::Instruction {
             program_id: Pubkey::new_from_array([0xabu8; 32]),
-            accounts: vec![],
+            accounts: vec![safe_hands_core::solana_instruction::AccountMeta::new(
+                source, false,
+            )],
             data: vec![1, 2, 3],
         });
     }
@@ -222,7 +255,131 @@ fn classic_mint_b64(decimals: u8) -> String {
     base64_encode(&mint)
 }
 
+/// A token account as `getMultipleAccounts` / `simulateTransaction` render it.
+fn token_account_b64(mint: &str, owner: &str, amount: u64) -> String {
+    let mut data = vec![0u8; 165];
+    data[0..32].copy_from_slice(&key(mint).to_bytes());
+    data[32..64].copy_from_slice(&key(owner).to_bytes());
+    data[64..72].copy_from_slice(&amount.to_le_bytes());
+    data[108] = 1; // initialized
+    base64_encode(&data)
+}
+
+/// Answers the two calls effect analysis makes, with the payer's USDC balance
+/// falling by `spent` and their lamports by `fee`.
+///
+/// The address list the plugin asks about is sorted and derived from the
+/// transaction, so this answers positionally by echoing whatever was asked —
+/// the payer's own account is recognised by address, everything else is
+/// reported unchanged.
+fn effects_transport(spent: u64, fee: u64, before: u64) -> MockTransport {
+    let payer = PAYER.to_string();
+    let payer_ata =
+        safe_hands_core::crypto::ata_address(&key("PAYER"), &ix::spl_token_program(), &key("USDC"))
+            .to_string();
+    fn render(
+        payer: String,
+        payer_ata: String,
+        after_token: u64,
+        after_lamports: u64,
+    ) -> impl Fn(&str) -> Value {
+        move |address: &str| -> Value {
+            if address == payer {
+                json!({"lamports": after_lamports, "owner": "11111111111111111111111111111111", "data": ["", "base64"]})
+            } else if address == payer_ata {
+                json!({
+                    "lamports": 2_039_280,
+                    "owner": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
+                    "data": [token_account_b64(USDC, PAYER, after_token), "base64"],
+                })
+            } else {
+                json!({"lamports": 1, "owner": "11111111111111111111111111111111", "data": ["", "base64"]})
+            }
+        }
+    }
+    let (pre_payer, pre_ata) = (payer.clone(), payer_ata.clone());
+    MockTransport::new()
+        .with("getSlot", json!({"result": 100}))
+        .with(
+            "getAccountInfo",
+            json!({"result": {"value": {"owner": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA", "data": [classic_mint_b64(6), "base64"]}}}),
+        )
+        .with_responder(
+            "getMultipleAccounts",
+            Box::new(move |params| {
+                let addresses = address_list(params);
+                let render = render(pre_payer.clone(), pre_ata.clone(), before, 1_000_000_000);
+                json!({"result": {"value": addresses.iter().map(|a| render(a)).collect::<Vec<_>>()}})
+            }),
+        )
+        .with_responder(
+            "simulateTransaction",
+            Box::new(move |params| {
+                let addresses = address_list_from_config(params);
+                let render = render(
+                    payer.clone(),
+                    payer_ata.clone(),
+                    before.saturating_sub(spent),
+                    1_000_000_000 - fee,
+                );
+                match addresses {
+                    // The effects call names the accounts it wants back.
+                    Some(addresses) => json!({"result": {"context": {"slot": 100}, "value": {
+                        "err": null, "logs": [],
+                        "accounts": addresses.iter().map(|a| render(a)).collect::<Vec<_>>()
+                    }}}),
+                    // The freshness call does not.
+                    None => json!({"result": {"context": {"slot": 100}, "value": {"err": null, "logs": []}}}),
+                }
+            }),
+        )
+}
+
+fn address_list(params: &Value) -> Vec<String> {
+    params
+        .get(0)
+        .and_then(Value::as_array)
+        .map(|list| {
+            list.iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn address_list_from_config(params: &Value) -> Option<Vec<String>> {
+    let addresses = params.pointer("/1/accounts/addresses")?.as_array()?;
+    Some(
+        addresses
+            .iter()
+            .filter_map(Value::as_str)
+            .map(str::to_string)
+            .collect(),
+    )
+}
+
 fn transport_for(simulation: &str) -> Box<dyn RpcTransport> {
+    // Effect fixtures encode their observation in the simulation field:
+    // "effects:<spent>:<fee>:<before>".
+    if let Some(rest) = simulation.strip_prefix("effects:") {
+        // A node that answers the freshness call and declines the state call:
+        // simulation succeeds, effect observation does not.
+        if rest == "blind" {
+            return Box::new(
+                MockTransport::new()
+                    .with(
+                        "simulateTransaction",
+                        json!({"result": {"context": {"slot": 100}, "value": {"err": null, "logs": []}}}),
+                    )
+                    .with("getSlot", json!({"result": 100})),
+            );
+        }
+        let parts: Vec<u64> = rest.split(':').filter_map(|p| p.parse().ok()).collect();
+        if parts.len() == 3 {
+            return Box::new(effects_transport(parts[0], parts[1], parts[2]));
+        }
+    }
     match simulation {
         "down" => Box::new(DownTransport),
         // A real node always returns a context.slot even when the tx errors;

@@ -168,6 +168,7 @@ pub fn run(args_json: &str, transport: Option<&dyn RpcTransport>) -> ExecuteOutp
                     "RETRY_OR_ALERT_OPERATOR",
                     args.detail_level.as_deref(),
                     Evidence::SimulationStale,
+                    None,
                 ));
             }
             SimulationOutcome::Unavailable { .. } => {
@@ -183,9 +184,26 @@ pub fn run(args_json: &str, transport: Option<&dyn RpcTransport>) -> ExecuteOutp
                     "RETRY_OR_ALERT_OPERATOR",
                     args.detail_level.as_deref(),
                     Evidence::SimulationUnavailable,
+                    None,
                 ));
             }
         };
+    }
+
+    // --- 3b. Effects: what this transaction costs the guarded accounts ----
+    //
+    // Only attempted when the operator asked for it. The observation needs the
+    // same RPC as simulation, and the same rule applies: evidence that cannot
+    // be obtained is recorded as absent, so the engine can call it UNKNOWN
+    // rather than reading silence as "nothing moved".
+    if policy
+        .effects
+        .as_ref()
+        .is_some_and(|effects| effects.required)
+    {
+        facts.effects = transport
+            .and_then(|rpc| safe_hands_core::effects::observe(rpc, &decoded).ok())
+            .map(|observed| observed.movements());
     }
 
     // --- 4. Classic SPL mint evidence ------------------------------------
@@ -212,6 +230,7 @@ pub fn run(args_json: &str, transport: Option<&dyn RpcTransport>) -> ExecuteOutp
                 "RETRY_OR_ALERT_OPERATOR",
                 args.detail_level.as_deref(),
                 Evidence::MintEvidenceMissing,
+                facts.effects.as_deref(),
             ));
         };
         if verify_classic_transfer_mints(rpc, &decoded).is_err() {
@@ -227,6 +246,7 @@ pub fn run(args_json: &str, transport: Option<&dyn RpcTransport>) -> ExecuteOutp
                 "RETRY_OR_ALERT_OPERATOR",
                 args.detail_level.as_deref(),
                 Evidence::MintEvidenceMissing,
+                facts.effects.as_deref(),
             ));
         }
     }
@@ -251,6 +271,7 @@ pub fn run(args_json: &str, transport: Option<&dyn RpcTransport>) -> ExecuteOutp
         next_action,
         args.detail_level.as_deref(),
         evidence,
+        facts.effects.as_deref(),
     ))
 }
 
@@ -356,6 +377,7 @@ impl Evidence {
 }
 
 /// The verdict object. Slim (~150 tokens) unless detail_level=full.
+#[allow(clippy::too_many_arguments)]
 fn verdict_json(
     report: &Report,
     tx_summary: &str,
@@ -364,6 +386,7 @@ fn verdict_json(
     next_action: &str,
     detail_level: Option<&str>,
     evidence: Evidence,
+    effects: Option<&[safe_hands_core::effects::Movement]>,
 ) -> Value {
     let summary = format!(
         "{} — {}",
@@ -386,6 +409,9 @@ fn verdict_json(
     if detail_level == Some("full") {
         out["matched_rules"] = json!(report.matched_rules);
         out["evidence"] = json!(evidence.as_str());
+        if let Some(movements) = effects {
+            out["effects"] = json!(movements);
+        }
     }
     out
 }

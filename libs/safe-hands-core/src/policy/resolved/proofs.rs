@@ -60,6 +60,10 @@ fn any_facts() -> ResolvedFacts {
         intent_memo_mismatch: kani::any(),
         velocity_exceeded: kani::any(),
         simulation_missing: kani::any(),
+        effect_evidence_missing: kani::any(),
+        effect_over_cap: kani::any(),
+        effect_unlisted_asset: kani::any(),
+        intent_effect_mismatch: kani::any(),
     }
 }
 
@@ -95,6 +99,10 @@ fn allow_requires_every_hard_check_to_pass() {
         assert!(!facts.over_rent_cap);
         assert!(!facts.simulation_missing);
         assert!(!facts.velocity_exceeded);
+        assert!(!facts.effect_evidence_missing);
+        assert!(!facts.effect_over_cap);
+        assert!(!facts.effect_unlisted_asset);
+        assert!(!facts.intent_effect_mismatch);
     }
 }
 
@@ -180,4 +188,54 @@ fn the_decision_is_total() {
         verdict,
         Verdict::Allow | Verdict::Review | Verdict::Deny | Verdict::Unknown
     ));
+}
+
+/// **A spend beyond the operator's bound is never allowed.**
+///
+/// The effect layer's whole promise: whatever program ran, whatever the
+/// decoder could or could not read, a guarded account cannot lose more of an
+/// asset than the operator wrote down. Proven here for every combination of
+/// the other 40 fields, not for the cases somebody thought to try.
+#[kani::proof]
+fn an_over_cap_effect_can_never_be_allowed() {
+    let mut facts = any_facts();
+    facts.effect_over_cap = true;
+    assert!(facts.verdict() != Verdict::Allow);
+}
+
+/// **An asset the operator never listed can never leave.**
+///
+/// Deny-by-default applied to value rather than to syntax: forgetting to name
+/// an asset refuses, it does not permit.
+#[kani::proof]
+fn an_unlisted_asset_can_never_leave() {
+    let mut facts = any_facts();
+    facts.effect_unlisted_asset = true;
+    assert!(facts.verdict() != Verdict::Allow);
+}
+
+/// **Effects that could not be observed are never read as "nothing moved".**
+///
+/// The failure mode this exists to prevent: a node that declines to answer
+/// producing an ALLOW because no movement was seen. Missing evidence outranks a
+/// review queue for the same reason missing simulation does.
+#[kani::proof]
+fn missing_effect_evidence_is_never_downgraded_to_review() {
+    let mut facts = any_facts();
+    facts.effect_evidence_missing = true;
+    let verdict = facts.verdict();
+    assert!(verdict == Verdict::Deny || verdict == Verdict::Unknown);
+}
+
+/// **A transaction that does not cost what the caller declared is never
+/// allowed.**
+///
+/// The effect-layer counterpart of the intent binding proved above: declaring
+/// one spend and performing another cannot be talked past, whatever else is
+/// true of the transaction.
+#[kani::proof]
+fn an_effect_intent_mismatch_can_never_be_allowed() {
+    let mut facts = any_facts();
+    facts.intent_effect_mismatch = true;
+    assert!(facts.verdict() != Verdict::Allow);
 }

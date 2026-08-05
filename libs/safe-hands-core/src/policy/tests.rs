@@ -653,6 +653,14 @@ proptest! {
         delegate in any::<bool>(),
         drop_intent in any::<bool>(),
         byte_len in 0usize..2000,
+        // The effect layer, generated alongside everything else so the model
+        // and the engine are compared over it too. A model that agreed only on
+        // the paths it was written for would prove nothing about the rest.
+        effects_known in any::<bool>(),
+        effect_out in 0u128..60_000_000,
+        effect_guarded in any::<bool>(),
+        effect_asset_listed in any::<bool>(),
+        effect_intent in any::<bool>(),
     ) {
         let recipient = if to_attacker { OTHER } else { RECIP };
         let mut facts = usdc_transfer(amount, recipient);
@@ -671,8 +679,28 @@ proptest! {
             facts.intent = None;
         }
 
-        let engine = evaluate(&policy(), &facts).verdict;
-        let model = resolved::resolve(&policy(), &facts).verdict();
+        let unlisted = "So11111111111111111111111111111111111111112";
+        if effects_known {
+            facts.effects = Some(vec![crate::effects::Movement {
+                owner: if effect_guarded { VAULT } else { OTHER }.into(),
+                asset: if effect_asset_listed { USDC } else { unlisted }.into(),
+                out_raw: effect_out,
+                in_raw: 0,
+            }]);
+        }
+        if effect_intent {
+            facts.intent = Some(Intent {
+                action: "effect".into(),
+                mint: Some(if effect_asset_listed { USDC } else { unlisted }.into()),
+                amount_raw: effect_out.to_string(),
+                recipient: String::new(),
+                memo: None,
+            });
+        }
+        let subject = effects_policy(true);
+
+        let engine = evaluate(&subject, &facts).verdict;
+        let model = resolved::resolve(&subject, &facts).verdict();
         prop_assert_eq!(
             engine, model,
             "engine and model disagree on {:?}", facts
@@ -949,4 +977,423 @@ proptest! {
         prop_assert_eq!(a.verdict, b.verdict);
         prop_assert_eq!(a.reason_codes, b.reason_codes);
     }
+}
+
+// ── effects: authorization by what a transaction costs ──────────────────────
+//
+// The rules above reason about instructions the decoder recognizes. These
+// reason about balances, which exist for every program — including the ones
+// nobody has written yet, and the ones that move value through CPI where the
+// instruction bytes show nothing at all.
+
+const JUPITER: &str = "JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4";
+const VAULT: &str = "D4dzFuEyWKyV7zTMCq9TqdMMGfJHTQAAhx7f3wkHdeJ2";
+
+/// A policy that admits one unfamiliar program under explicit spending bounds.
+fn effects_policy_json(admit: bool) -> String {
+    let admitted = if admit {
+        format!("\"admitted_programs\":[\"{JUPITER}\"],")
+    } else {
+        String::new()
+    };
+    let base = demo_policy_json();
+    let effects = format!(
+        "\"effects\":{{\"required\":true,\"guarded\":[\"{VAULT}\"],{admitted}\
+         \"max_outflow_raw\":{{\"{USDC}\":\"25000000\",\"SOL\":\"10000000\"}}}},"
+    );
+    base.replacen('{', &format!("{{{effects}"), 1)
+}
+
+fn effects_policy(admit: bool) -> Policy {
+    Policy::from_json(&effects_policy_json(admit)).expect("effects policy parses")
+}
+
+fn movement(owner: &str, asset: &str, out_raw: u128) -> crate::effects::Movement {
+    crate::effects::Movement {
+        owner: owner.into(),
+        asset: asset.into(),
+        out_raw,
+        in_raw: 0,
+    }
+}
+
+/// A call into a program the decoder cannot read, with an economic intent
+/// rather than a transfer intent.
+fn unknown_program_call(spend: u128) -> TxFacts {
+    TxFacts {
+        byte_len: 400,
+        simulation_ok: true,
+        instructions: vec![IxFact {
+            program: format!("unknown:{JUPITER}"),
+            name: None,
+        }],
+        effects: Some(vec![movement(VAULT, USDC, spend)]),
+        intent: Some(Intent {
+            action: "effect".into(),
+            mint: Some(USDC.into()),
+            amount_raw: spend.to_string(),
+            recipient: String::new(),
+            memo: None,
+        }),
+        ..TxFacts::default()
+    }
+}
+
+/// The headline: a program the decoder has never seen, allowed because the
+/// operator named it and the money it costs is inside the bound they wrote.
+#[test]
+fn an_admitted_program_within_its_bound_is_allowed() {
+    let report = evaluate(&effects_policy(true), &unknown_program_call(20_000_000));
+    assert_eq!(report.verdict, Verdict::Allow, "{:?}", report.reason_codes);
+}
+
+/// Admitting a program is not admitting an amount.
+#[test]
+fn an_admitted_program_over_its_bound_is_denied() {
+    let report = evaluate(&effects_policy(true), &unknown_program_call(26_000_000));
+    assert_eq!(report.verdict, Verdict::Deny);
+    assert!(report
+        .reason_codes
+        .iter()
+        .any(|c| c == "SH-DENY-EFFECT-070"));
+}
+
+/// Naming a program is half the permission; the other half is evidence.
+///
+/// With no evidence the admission does not apply, so the program falls back to
+/// being simply unfamiliar — and this operator denies those. Two objections are
+/// raised and the stricter wins, which is the whole point of deny-overrides.
+#[test]
+fn an_admitted_program_without_evidence_is_never_allowed() {
+    let mut facts = unknown_program_call(1_000);
+    facts.effects = None;
+    let report = evaluate(&effects_policy(true), &facts);
+    assert_eq!(report.verdict, Verdict::Deny, "{:?}", report.reason_codes);
+    assert!(
+        report
+            .reason_codes
+            .iter()
+            .any(|c| c == "SH-UNKNOWN-EFFECT-072"),
+        "the missing evidence is still reported: {:?}",
+        report.reason_codes
+    );
+    assert!(
+        report
+            .reason_codes
+            .iter()
+            .any(|c| c == "SH-DENY-PROGRAM-011"),
+        "and the program is refused on its own terms: {:?}",
+        report.reason_codes
+    );
+}
+
+/// Effects do not admit programs the operator never named. Otherwise any
+/// program that happened to stay under a cap would be permitted, which is a
+/// blank cheque with a spending limit rather than an allowlist.
+#[test]
+fn effects_do_not_admit_a_program_the_operator_never_named() {
+    let report = evaluate(&effects_policy(false), &unknown_program_call(1_000));
+    assert_eq!(report.verdict, Verdict::Deny);
+    assert!(report
+        .reason_codes
+        .iter()
+        .any(|c| c == "SH-DENY-PROGRAM-011"));
+}
+
+/// An asset with no cap may not leave at all. Forgetting to list one must
+/// refuse rather than permit — the difference between deny-by-default and
+/// allow-by-omission.
+#[test]
+fn an_asset_with_no_cap_may_not_leave() {
+    let mut facts = unknown_program_call(1_000);
+    let unlisted = "So11111111111111111111111111111111111111112";
+    facts.effects = Some(vec![movement(VAULT, unlisted, 1)]);
+    facts.intent = Some(Intent {
+        action: "effect".into(),
+        mint: Some(unlisted.into()),
+        amount_raw: "1".into(),
+        recipient: String::new(),
+        memo: None,
+    });
+    let report = evaluate(&effects_policy(true), &facts);
+    assert_eq!(report.verdict, Verdict::Deny);
+    assert!(report
+        .reason_codes
+        .iter()
+        .any(|c| c == "SH-DENY-EFFECT-071"));
+}
+
+/// Only the accounts the operator protects are bounded. A counterparty losing
+/// value in a swap is the point of a swap.
+#[test]
+fn an_unguarded_owner_is_not_bounded() {
+    let mut facts = unknown_program_call(1_000);
+    facts.effects = Some(vec![movement(OTHER, USDC, u128::MAX)]);
+    facts.intent = None;
+    let mut policy = effects_policy(true);
+    policy.missing_intent = Outcome::Review;
+    let report = evaluate(&policy, &facts);
+    assert_ne!(report.verdict, Verdict::Deny, "{:?}", report.reason_codes);
+}
+
+/// Receiving is never a violation. A swap that hands the vault more than it
+/// gives up must not trip a spending bound.
+#[test]
+fn an_inflow_is_never_an_outflow() {
+    let mut facts = unknown_program_call(1_000);
+    facts.effects = Some(vec![
+        movement(VAULT, USDC, 5_000_000),
+        crate::effects::Movement {
+            owner: VAULT.into(),
+            asset: "So11111111111111111111111111111111111111112".into(),
+            out_raw: 0,
+            in_raw: u128::MAX,
+        },
+    ]);
+    facts.intent = Some(Intent {
+        action: "effect".into(),
+        mint: Some(USDC.into()),
+        amount_raw: "5000000".into(),
+        recipient: String::new(),
+        memo: None,
+    });
+    let report = evaluate(&effects_policy(true), &facts);
+    assert_eq!(report.verdict, Verdict::Allow, "{:?}", report.reason_codes);
+}
+
+// ── the effect intent ───────────────────────────────────────────────────────
+
+/// The caller declares what the transaction should cost. Costing more than
+/// that is a mismatch even when the policy cap would still permit it — the two
+/// bounds are independent, and the tighter one wins.
+#[test]
+fn spending_more_than_declared_is_an_intent_mismatch() {
+    let mut facts = unknown_program_call(20_000_000);
+    facts.intent = Some(Intent {
+        action: "effect".into(),
+        mint: Some(USDC.into()),
+        amount_raw: "1000000".into(),
+        recipient: String::new(),
+        memo: None,
+    });
+    let report = evaluate(&effects_policy(true), &facts);
+    assert_eq!(report.verdict, Verdict::Deny);
+    assert!(report
+        .reason_codes
+        .iter()
+        .any(|c| c == "SH-INTENT-EFFECT-AMOUNT-037"));
+}
+
+/// Spending less than declared is fine: the declaration is a ceiling, and a
+/// swap that fills better than quoted must not be refused for it.
+#[test]
+fn spending_less_than_declared_is_allowed() {
+    let mut facts = unknown_program_call(1_000_000);
+    facts.intent = Some(Intent {
+        action: "effect".into(),
+        mint: Some(USDC.into()),
+        amount_raw: "20000000".into(),
+        recipient: String::new(),
+        memo: None,
+    });
+    let report = evaluate(&effects_policy(true), &facts);
+    assert_eq!(report.verdict, Verdict::Allow, "{:?}", report.reason_codes);
+}
+
+/// Declaring one asset and moving another is the effect-layer version of
+/// swapping the recipient — caught, but as a spend that never happened rather
+/// than as a foreign asset, because the intent deliberately says nothing about
+/// assets it did not name.
+#[test]
+fn moving_an_asset_the_caller_never_declared_is_a_mismatch() {
+    let mut facts = unknown_program_call(1_000);
+    facts.effects = Some(vec![movement(VAULT, "SOL", 1_000)]);
+    let report = evaluate(&effects_policy(true), &facts);
+    assert_eq!(report.verdict, Verdict::Deny);
+    assert!(report
+        .reason_codes
+        .iter()
+        .any(|c| c == "SH-INTENT-EFFECT-AMOUNT-037"));
+}
+
+/// The fee is the reason the intent bounds only what it names.
+///
+/// Every transaction costs its payer lamports, so an effect intent that
+/// objected to any unnamed asset would refuse every real transaction. The SOL
+/// leg is bounded by the operator's own cap instead.
+#[test]
+fn the_unavoidable_fee_does_not_break_a_declared_spend() {
+    let mut facts = unknown_program_call(20_000_000);
+    facts.effects = Some(vec![
+        movement(VAULT, USDC, 20_000_000),
+        movement(VAULT, "SOL", 5_000),
+    ]);
+    assert_eq!(
+        evaluate(&effects_policy(true), &facts).verdict,
+        Verdict::Allow
+    );
+
+    // And the operator's SOL cap is what actually bounds it.
+    facts.effects = Some(vec![
+        movement(VAULT, USDC, 20_000_000),
+        movement(VAULT, "SOL", 10_000_001),
+    ]);
+    let report = evaluate(&effects_policy(true), &facts);
+    assert_eq!(report.verdict, Verdict::Deny);
+    assert!(report
+        .reason_codes
+        .iter()
+        .any(|c| c == "SH-DENY-EFFECT-070"));
+}
+
+/// A declared spend that costs the guarded accounts nothing is not a match: it
+/// means the transaction does something else, and the engine cannot say what.
+#[test]
+fn a_declared_spend_that_never_happens_is_a_mismatch() {
+    let mut facts = unknown_program_call(1_000);
+    facts.effects = Some(Vec::new());
+    let report = evaluate(&effects_policy(true), &facts);
+    assert_eq!(report.verdict, Verdict::Deny);
+    assert!(report
+        .reason_codes
+        .iter()
+        .any(|c| c == "SH-INTENT-EFFECT-AMOUNT-037"));
+}
+
+/// An effect intent with no effect evidence is missing evidence, not a
+/// refusal — the same position as any other unavailable simulation.
+///
+/// Isolated with an operator who merely reviews unfamiliar programs, because
+/// one who denies them would (correctly) drown the UNKNOWN in a DENY.
+#[test]
+fn an_effect_intent_without_evidence_is_unknown() {
+    let mut policy = effects_policy(true);
+    policy.unknown_program = Outcome::Review;
+    let mut facts = unknown_program_call(1_000);
+    facts.effects = None;
+    let report = evaluate(&policy, &facts);
+    assert_eq!(
+        report.verdict,
+        Verdict::Unknown,
+        "{:?}",
+        report.reason_codes
+    );
+    assert!(report
+        .reason_codes
+        .iter()
+        .any(|c| c == "SH-UNKNOWN-EFFECT-072"));
+}
+
+// ── the layer stays inert unless asked for ─────────────────────────────────
+
+/// Every policy written before this existed must behave exactly as it did.
+#[test]
+fn a_policy_without_an_effects_section_is_unaffected() {
+    let plain = policy();
+    assert!(plain.effects.is_none());
+    let mut facts = usdc_transfer(1_000, RECIP);
+    facts.effects = Some(vec![movement(VAULT, USDC, u128::MAX)]);
+    assert_eq!(evaluate(&plain, &facts).verdict, Verdict::Allow);
+}
+
+/// A hard refusal cannot be talked out of by an effect that stayed in bounds.
+/// Effects widen what unfamiliar programs may do; they never widen anything
+/// else.
+#[test]
+fn effects_never_soften_a_hard_refusal() {
+    let policy = effects_policy(true);
+    for (name, mutate) in [
+        (
+            "authority change",
+            Box::new(|f: &mut TxFacts| f.authority_change = true) as Box<dyn Fn(&mut TxFacts)>,
+        ),
+        ("signed input", Box::new(|f: &mut TxFacts| f.signed = true)),
+        (
+            "over byte limit",
+            Box::new(|f: &mut TxFacts| f.byte_len = 100_000),
+        ),
+        (
+            "token-2022 instruction",
+            Box::new(|f: &mut TxFacts| {
+                f.instructions.push(IxFact {
+                    program: "token_2022".into(),
+                    name: Some("transfer_checked".into()),
+                })
+            }),
+        ),
+    ] {
+        let mut facts = unknown_program_call(1_000);
+        mutate(&mut facts);
+        assert_eq!(
+            evaluate(&policy, &facts).verdict,
+            Verdict::Deny,
+            "effects softened: {name}"
+        );
+    }
+}
+
+// ── policy validation ───────────────────────────────────────────────────────
+
+#[test]
+fn an_effects_policy_that_protects_nobody_is_rejected() {
+    let json = effects_policy_json(true).replace(&format!("[\"{VAULT}\"]"), "[]");
+    let error = Policy::from_json(&json).expect_err("must be rejected");
+    assert!(error.contains("guarded is empty"), "{error}");
+}
+
+#[test]
+fn admitting_programs_without_enforcing_effects_is_rejected() {
+    let json = effects_policy_json(true).replace("\"required\":true", "\"required\":false");
+    let error = Policy::from_json(&json).expect_err("must be rejected");
+    assert!(error.contains("admitted_programs"), "{error}");
+}
+
+#[test]
+fn an_unreadable_cap_is_rejected_at_load_and_refuses_at_decision() {
+    // Only the effects cap, not the asset cap that shares this number.
+    let json = effects_policy_json(true).replace("\"25000000\",\"SOL\"", "\"twenty five\",\"SOL\"");
+    let error = Policy::from_json(&json).expect_err("must be rejected");
+    assert!(error.contains("not a raw integer"), "{error}");
+
+    // And if one is ever constructed by hand anyway, it is a refusal rather
+    // than an unbounded permission.
+    let mut policy = effects_policy(true);
+    policy
+        .effects
+        .as_mut()
+        .expect("effects")
+        .max_outflow_raw
+        .insert(USDC.into(), "twenty five".into());
+    let report = evaluate(&policy, &unknown_program_call(1));
+    assert_eq!(report.verdict, Verdict::Deny);
+    assert!(report
+        .reason_codes
+        .iter()
+        .any(|c| c == "SH-DENY-EFFECT-071"));
+}
+
+/// **The canonical policy digest is pinned.**
+///
+/// `policy_sha256` is inside every `decision_id`, which is inside every receipt
+/// and every link of the transparency log. If canonicalisation changes, every
+/// decision ever recorded stops re-deriving at once — including the anchored
+/// ones, which cannot be re-issued.
+///
+/// Adding the `effects` section broke exactly this, and it was found only
+/// because the transparency-log tests replay a real receipt — a slow way to
+/// learn it. This asserts it directly: an additive schema change an operator
+/// did not opt into must be invisible to their digest.
+#[test]
+fn the_canonical_policy_digest_is_stable_across_additive_schema_changes() {
+    let policy = policy();
+    assert!(policy.effects.is_none());
+    assert_eq!(
+        policy.sha256(),
+        "7b237b1f66e3e48ffdbe3ef8e5f4fc8add7d6edd13392258ee42f7411a0f6287",
+        "canonicalisation changed — every receipt and every logged decision \
+         computed against this policy has just become unverifiable"
+    );
+
+    // Opting in must change it, or the digest would not describe the policy.
+    assert_ne!(effects_policy(true).sha256(), policy.sha256());
 }

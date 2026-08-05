@@ -1,0 +1,9 @@
+# The effect-layer version of swapping the recipient: the caller declares one
+# spend and the transaction performs a larger one. The policy cap would still
+# permit this — the caller's own declaration is what refuses it.
+name: "level-26 transaction costs more than the caller declared → DENY"
+policy: merchant_effects
+intent: {action: effect, mint: USDC, amount_raw: "1000000", recipient: ""}
+tx: {kind: unknown_only, unknown_program: true}
+simulation: "effects:20000000:5000:25000000"
+expect: {verdict: DENY, reason_codes: ["SH-INTENT-EFFECT-AMOUNT-037"]}

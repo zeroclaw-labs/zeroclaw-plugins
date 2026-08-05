@@ -375,6 +375,21 @@ pub fn rederive(receipt: &Value) -> Result<Rederived, String> {
         .transpose()
         .map_err(|e| format!("receipt intent is malformed: {e}"))?;
     decoded.facts.simulation_ok = simulation_ok;
+    // Observed balance effects, when the decision was made under them.
+    //
+    // Attested rather than reproduced, exactly like `simulation_ok`: the
+    // pre-state they were diffed against is gone by the time anyone verifies.
+    // The distinction that matters is absent versus empty — `null` means the
+    // effects were never observed, `[]` means they were and nothing moved, and
+    // conflating the two would turn "the node would not answer" into "this
+    // costs you nothing".
+    decoded.facts.effects = receipt
+        .get("effects")
+        .or_else(|| receipt.pointer("/decision/effects"))
+        .filter(|value| !value.is_null())
+        .map(|value| serde_json::from_value(value.clone()))
+        .transpose()
+        .map_err(|e| format!("receipt effects are malformed: {e}"))?;
     let report = evaluate(&policy, &decoded.facts);
     let recomputed_verdict = report.verdict.as_str().to_string();
 
