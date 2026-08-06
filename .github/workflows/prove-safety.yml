@@ -1,0 +1,92 @@
+name: prove-safety
+
+# The gate a judge can run themselves: `just prove-safety`, offline, no live
+# network. This workflow runs the same recipes on a clean Ubuntu runner so the
+# claim is checkable without cloning anything.
+#
+# `audit` is deliberately a separate, non-blocking job: it queries the RustSec
+# advisory DB, so a brand-new advisory published upstream would turn this red
+# for reasons unrelated to a code change. It still runs, and it is still
+# visible — it just does not gate the proof.
+
+on:
+  push:
+    branches: [safe-hands]
+  pull_request:
+    branches: [safe-hands]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  prove-safety:
+    name: prove-safety (offline gate)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pinned Rust + wasm32-wasip2
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.96.1
+          targets: wasm32-wasip2
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: prove-safety
+
+      - name: Install just
+        uses: taiki-e/install-action@just
+
+      - name: Host tests (RPC mocked, zero network)
+        run: just test
+
+      - name: Attack arena
+        run: just conformance
+
+      - name: Re-derive a recorded decision from its inputs
+        run: just verify-receipt
+
+      - name: Replay the transparency log from genesis
+        run: just log-verify
+
+      - name: clippy -D warnings (host and wasm32-wasip2)
+        run: just clippy
+
+      - name: Release components for wasm32-wasip2
+        run: just wasm
+
+      - name: Capability check against the compiled .wasm import tables
+        run: just verify-capabilities
+
+      - name: Execute the shipped components in a real wasm runtime
+        run: just component-test
+
+      - name: Summary
+        run: |
+          echo "### prove-safety: ALL GREEN" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "Offline gate passed on a clean runner:" >> "$GITHUB_STEP_SUMMARY"
+          echo "- host tests, attack arena, receipt re-derivation, log replay" >> "$GITHUB_STEP_SUMMARY"
+          echo "- clippy -D warnings on host **and** wasm32-wasip2" >> "$GITHUB_STEP_SUMMARY"
+          echo "- capability check read from the compiled .wasm import tables" >> "$GITHUB_STEP_SUMMARY"
+          echo "- components executed in a real WebAssembly runtime" >> "$GITHUB_STEP_SUMMARY"
+
+  audit:
+    name: supply-chain audit (informational)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.96.1
+      - uses: taiki-e/install-action@just
+      - uses: taiki-e/install-action@cargo-audit
+      - name: cargo audit over every pinned lockfile
+        run: just audit
