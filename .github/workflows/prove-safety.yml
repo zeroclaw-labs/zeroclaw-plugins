@@ -109,3 +109,40 @@ jobs:
       - uses: taiki-e/install-action@cargo-audit
       - name: cargo audit over every pinned lockfile
         run: just audit
+
+  kani:
+    name: machine-checked proofs (kani)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.96.1
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: kani
+
+      - uses: taiki-e/install-action@just
+
+      # The twelve proofs are the strongest claim this project makes, and
+      # nothing was discharging them automatically. Kani is Linux/macOS only,
+      # so contributors on Windows cannot run them at all — which meant
+      # "proven" rested on someone having run it locally, once.
+      - name: Install kani
+        run: |
+          cargo install --locked kani-verifier
+          cargo kani setup
+
+      - name: Discharge the authorization invariants
+        run: just prove
+
+      - name: Summary
+        run: |
+          echo "### Kani: authorization invariants discharged" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "12 harnesses over \`ResolvedFacts\`, every one of its 42 fields" >> "$GITHUB_STEP_SUMMARY"
+          echo "\`kani::any()\` simultaneously — the whole decision space, not a" >> "$GITHUB_STEP_SUMMARY"
+          echo "sample of it. ALLOW-requires-every-check is a theorem here." >> "$GITHUB_STEP_SUMMARY"
