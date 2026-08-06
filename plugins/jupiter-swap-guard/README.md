@@ -7,6 +7,15 @@ Custody tier: **T1 (build-only).** This plugin never holds a key, never signs, a
 never broadcasts. It returns an unsigned `VersionedTransaction` (base64) for a
 human to review and sign out of band.
 
+**Landed on mainnet.** A ZeroClaw agent was asked for a swap; this plugin built the
+unsigned transaction; the bytes were taken from the host's audit trail — not from
+the chat — decoded, checked, signed locally and submitted to mainnet-beta:
+[`2ZpWcRsPBi12dtk…KgrZY2oy`](https://solscan.io/tx/2ZpWcRsPBi12dtkMhAs4v9CRaqiABbs9o9Xm6ows3L6gasSdCzTjkorj4RPN9kVdTnuQvFUhDS6wVrxWKgrZY2oy)
+(slot 437,649,692). In that same run the model's chat message corrupted the payer
+address into a run of repeated characters while the signed bytes were correct and
+already confirmed — which is precisely why this plugin's guarantee is defined over
+the bytes and not over the summary.
+
 ## Why it is different
 
 Every other swap plugin relays the transaction the aggregator hands back. That is
