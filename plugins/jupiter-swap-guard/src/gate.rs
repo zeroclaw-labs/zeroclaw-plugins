@@ -409,6 +409,27 @@ mod tests {
         ));
     }
 
+    // NEGATIVE CONTROL (P5): a co-signer smuggled onto the swap instruction is
+    // refused. Under a blockhash-only lifetime the payer is the sole permitted
+    // signer, so any other account marked `is_signer` is a request for a
+    // signature the human never agreed to give.
+    #[test]
+    fn extra_signer_is_refused() {
+        let policy = policy_with(200_000);
+        let (q, mut s) = fixtures();
+        let victim = s
+            .swap
+            .accounts
+            .iter_mut()
+            .find(|a| a.pubkey != policy.payer)
+            .expect("the swap instruction has at least one non-payer account");
+        victim.is_signer = true;
+        assert!(matches!(
+            evaluate(&policy, &request(), &q, &s, &programs()),
+            Err(Reject::UnexpectedSigner(_))
+        ));
+    }
+
     // NEGATIVE CONTROL (D3): a tampered on-chain quoted-out (lower than the quote
     // the plugin received) is refused — the amounts are read from the actual bytes.
     #[test]

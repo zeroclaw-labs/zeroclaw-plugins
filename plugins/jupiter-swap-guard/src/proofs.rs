@@ -7,7 +7,8 @@
 //! crash-safety — exhaustively over their input domains. The arithmetic
 //! guardrails (`min_out` floor, priority-fee ceil) are `u128`-division-heavy,
 //! which CBMC bit-blasts into an intractable divider circuit regardless of input
-//! bounds; those are covered by `proptest` (thousands of random cases) plus
+//! bounds; those are covered by `proptest` (256 sampled cases per property by
+//! default, `PROPTEST_CASES` to raise) plus
 //! boundary unit tests in `crate::policy`, and String-domain config parsing
 //! (`P8`) by unit tests — claiming a full Kani proof of either would overstate
 //! the guarantee.

@@ -408,7 +408,8 @@ mod tests {
 
     // Property tests standing in for the Kani proofs of the u128-division
     // arithmetic (intractable under CBMC's divider — see src/proofs.rs). These
-    // cover the full u64/u16/u32 domains across thousands of random cases.
+    // sample the full u64/u16/u32 domains — 256 cases per property by default
+    // (`PROPTEST_CASES=10000` to raise). Sampling, not exhaustive coverage.
     proptest::proptest! {
         // P2: the emitted floor never exceeds the quote, for ANY quote/slippage,
         // and never overflows or panics.

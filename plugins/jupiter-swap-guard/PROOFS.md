@@ -13,9 +13,11 @@ kind of thing a careful judge should punish.
 Three tiers are used:
 
 - **Kani** — exhaustive symbolic model-checking over the *entire* input domain
-  (`cargo kani`, run in CI on a fork branch; see the badge in `README.md`).
-- **proptest** — thousands of randomized cases over the full domain, for the
-  `u128`-division arithmetic that CBMC bit-blasts into an intractable divider.
+  (`cargo kani`, run in CI on a fork branch; see the badge at the top of this file).
+- **proptest** — 256 randomized cases per property by default (proptest's own
+  default; raise it with `PROPTEST_CASES=10000 cargo test prop_`), sampled across
+  the full `u64`/`u16`/`u32` domains, for the `u128`-division arithmetic that CBMC
+  bit-blasts into an intractable divider. Sampling, not coverage.
 - **Differential / unit** — byte-for-byte comparison against the official Anza
   crates on a real mainnet route, and targeted positive + negative controls.
 
@@ -24,7 +26,12 @@ Three tiers are used:
 | Property | Harness | Excludes |
 |---|---|---|
 | **P6** compact-u16 write∘read is the identity ∀ u16, and consumes exactly the bytes written | `proofs::compact_u16_roundtrips` | length-field **malleability** — two distinct byte strings decoding to the same message |
-| **P7** the compact-u16 reader never panics on arbitrary input; malformed data errors cleanly | `proofs::compact_u16_read_never_panics` | a fail-**open** crash inside the host on hostile instruction data |
+| **P7** the compact-u16 reader never panics on an arbitrary **3-byte** length field read at offset 0; malformed data errors cleanly | `proofs::compact_u16_read_never_panics` | a fail-**open** crash inside the host on hostile instruction data |
+
+Scope of P7, stated precisely: three symbolic bytes at a literal offset `0`. Three
+bytes is the maximum a compact-u16 can consume, so this is the full *value* domain
+— but the truncated-slice branch (`len < 3`) and non-zero offsets are not part of
+the proved domain.
 
 `cargo kani` → `Complete - 2 successfully verified harnesses, 0 failures, 2 total.`
 
@@ -57,8 +64,8 @@ full `u64`/`u16`/`u32` domains instead, alongside boundary unit tests.
 ## Instruction gate — positive + negative controls (real fixture)
 
 Every guardrail is tested by running the guard over the real Jupiter route (must
-**pass**) and over five tampered variants (each must be **refused** with its
-specific reason) — `src/gate.rs` tests:
+**pass**) and over eleven tampered variants of it (each must be **refused**, and
+with its own specific reason, not merely refused) — `src/gate.rs` tests:
 
 | Property | Excludes | Negative-control test |
 |---|---|---|
@@ -69,7 +76,7 @@ specific reason) — `src/gate.rs` tests:
 | **D3** the swap instruction's OWN on-chain amounts (`in_amount`, `quoted_out_amount`, `slippage_bps`, decoded from the signed bytes) are bound to what was authorized and quoted; on-chain min-out must be ≥ the floor | quote↔instructions TOCTOU (a rich quote + a min-out-0 instruction), spending more than authorized, an undecodable route shape | `tampered_on_chain_min_out_is_refused`, `amount_over_authorized_is_refused`, `unaccountable_route_shape_is_refused` |
 | **D4** decoded priority fee ≤ cap | priority-fee SOL drain | `priority_fee_over_cap_is_refused` |
 | **P4** top-level program allowlist | an unknown drainer program | `non_allowlisted_program_is_refused` |
-| **P1/P5** mint allowlist, payer-only signer | swap into an unlisted mint; co-signer smuggling | `rejects_disallowed_mint`, gate signer check |
+| **P1/P5** mint allowlist, payer-only signer | swap into an unlisted mint; co-signer smuggling | `rejects_disallowed_mint`, `extra_signer_is_refused` |
 
 **D5** (security-relevant accounts must be static, never resolved via a lookup
 table — defeats a malicious RPC crafting table contents) is enforced in
