@@ -62,6 +62,7 @@ contain. Roughly 90 seconds offline, two minutes with the network.
   PASS  no known vulnerable dependency ships                 (19s)
   PASS  it builds clean for wasm32-wasip2                    (1s)
   PASS  the source is warning-free on both targets           (19s)
+  PASS  the policy model is machine-checked (via WSL)        (34s)
 
   All 3 anchors agree. 27 of 27 entries are pinned on chain.
   Those entries can no longer be altered, reordered, or removed without
@@ -85,7 +86,7 @@ falsify it. Nothing here asks you to take our word.
 | No component can move money | [`## Components and custody`](#components-and-custody) — every tier is T0 or T1, no signing key anywhere |
 | The agent cannot approve its own payout | The Squads member holds `Initiate` only; `num_voters()` does not count it toward the threshold |
 | A refusal is not just the model being polite | `just verify-receipt` re-decodes the transaction, re-runs the engine and re-derives the decision id from scratch — and rejects forged receipts |
-| The policy engine is correct, not just tested | 8 Kani proof obligations, [`## Universally: machine-check the engine itself`](#universally-machine-check-the-engine-itself) |
+| The policy engine is correct, not just tested | **12 Kani harnesses, 414 checks, 0 failures** — [`EVIDENCE-proofs.md`](EVIDENCE-proofs.md), run with `just prove` |
 | The decision log cannot quietly lose an entry | [`## Collectively: a log that cannot quietly lose an entry`](#collectively-a-log-that-cannot-quietly-lose-an-entry), anchored to Solana |
 | Money actually moved, under human control | [`EVIDENCE.md`](EVIDENCE.md) — devnet proposal → approval → execution, 0.05 SOL out of the vault |
 | Prompt injection fails closed | [`## Prompt-injection transcript`](#prompt-injection-transcript) and the live run above |

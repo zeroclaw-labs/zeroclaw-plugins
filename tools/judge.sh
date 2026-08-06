@@ -71,10 +71,16 @@ else
   skip "the log matches its anchor published on Solana" "run: just judge --network"
 fi
 
-if command -v cargo-kani >/dev/null 2>&1 || cargo kani --version >/dev/null 2>&1; then
+# Kani has no Windows build, so fall through to WSL when there is one. A judge
+# on Windows should still get the proof, not an apology.
+if cargo kani --version >/dev/null 2>&1; then
   run "the policy model is machine-checked"        kani        just prove
+elif command -v wsl >/dev/null 2>&1 \
+     && wsl -e bash -lc 'cargo kani --version' >/dev/null 2>&1; then
+  run "the policy model is machine-checked (via WSL)" kani \
+      wsl -e bash -lc "cd '$(pwd)' && cargo kani --manifest-path libs/safe-hands-core/Cargo.toml"
 else
-  skip "the policy model is machine-checked" "needs Kani (Linux/macOS): just prove"
+  skip "the policy model is machine-checked" "needs Kani: just prove (see EVIDENCE-proofs.md)"
 fi
 
 echo
