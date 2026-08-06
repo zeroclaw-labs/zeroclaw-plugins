@@ -149,6 +149,24 @@ pub fn run(args_json: &str, transport: Option<&dyn RpcTransport>) -> ExecuteOutp
             ))
         }
     };
+    // Same gap as the transfer builder: under an effects-required policy this
+    // never gathered evidence, so it refused every proposal with UNKNOWN — and
+    // the drafts whose effects matter most were exactly the ones that could
+    // never reach a human in Squads.
+    if policy
+        .effects
+        .as_ref()
+        .is_some_and(|effects| effects.required)
+    {
+        let observed = safe_hands_core::effects::observe(rpc, &decoded).ok();
+        if observed
+            .as_ref()
+            .is_some_and(|o| !o.authority_changed.is_empty())
+        {
+            facts.authority_change = true;
+        }
+        facts.effects = observed.map(|observed| observed.movements());
+    }
     let report = evaluate(&policy, &facts);
 
     if let Some(record) = &args.decision_record {

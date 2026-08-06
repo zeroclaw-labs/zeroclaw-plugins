@@ -274,6 +274,30 @@ pub fn run(args_json: &str, transport: Option<&dyn RpcTransport>) -> ExecuteOutp
     let mut facts = decoded.facts.clone();
     facts.simulation_ok = true; // construction-time semantic self-check only
     facts.intent = Some(intent);
+    // Under an effects-required policy the engine treats absent evidence as
+    // UNKNOWN, which is correct — but this builder never gathered any, so it
+    // refused every draft under such a policy. The transactions whose effects
+    // matter most were therefore the ones that could never reach the human
+    // Squads gate, which inverts the intended safety story.
+    //
+    // Observe them here, from the same RPC, on the same terms as
+    // solana-tx-authorize: evidence that cannot be obtained stays absent, so
+    // the engine still says UNKNOWN rather than reading silence as "nothing
+    // moved".
+    if policy
+        .effects
+        .as_ref()
+        .is_some_and(|effects| effects.required)
+    {
+        let observed = safe_hands_core::effects::observe(rpc, &decoded).ok();
+        if observed
+            .as_ref()
+            .is_some_and(|o| !o.authority_changed.is_empty())
+        {
+            facts.authority_change = true;
+        }
+        facts.effects = observed.map(|observed| observed.movements());
+    }
     let report = evaluate(&policy, &facts);
     if report.verdict != Verdict::Allow {
         return ExecuteOutput::err(format!(

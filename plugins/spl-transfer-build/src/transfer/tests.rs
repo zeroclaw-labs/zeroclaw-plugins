@@ -98,7 +98,10 @@ fn nonce_transport(authority: &str, nonce: &str) -> MockTransport {
 /// `allowed_nonce_accounts`. Either one missing refuses the build.
 fn nonce_policy_json() -> String {
     policy_json()
-        .replace(r#""system":["transfer"]"#, r#""system":["transfer","advance_nonce"]"#)
+        .replace(
+            r#""system":["transfer"]"#,
+            r#""system":["transfer","advance_nonce"]"#,
+        )
         .replace(
             r#""allowed_recipients""#,
             &format!(r#""allowed_nonce_accounts":["{NONCE_ACCOUNT}"],"allowed_recipients""#),
@@ -130,8 +133,10 @@ fn durable_mode_is_refused_until_the_operator_opts_in_twice() {
     assert!(error.contains("NONCE"), "{error}");
 
     // Allowlisting the instruction alone still leaves the nonce unapproved.
-    let instruction_only = policy_json()
-        .replace(r#""system":["transfer"]"#, r#""system":["transfer","advance_nonce"]"#);
+    let instruction_only = policy_json().replace(
+        r#""system":["transfer"]"#,
+        r#""system":["transfer","advance_nonce"]"#,
+    );
     let out = run(
         &sol_args(&nonce_config_with_policy(&instruction_only)),
         Some(&nonce_transport(PAYER, NONCE_VALUE) as &dyn RpcTransport),
@@ -166,7 +171,10 @@ fn durable_mode_pins_validity_to_the_nonce_and_puts_advance_first() {
         Some(NONCE_ACCOUNT),
         "the decoder must name the exact nonce account policy will check"
     );
-    assert_eq!(decoded.facts.instructions[0].name.as_deref(), Some("advance_nonce"));
+    assert_eq!(
+        decoded.facts.instructions[0].name.as_deref(),
+        Some("advance_nonce")
+    );
 
     // Validity is pinned to the nonce value, not to a recent blockhash.
     assert_eq!(decoded.blockhash, NONCE_VALUE);

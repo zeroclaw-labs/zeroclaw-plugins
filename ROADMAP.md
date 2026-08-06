@@ -158,12 +158,18 @@ need a new `ResolvedFacts` field, and the model and engine already disagree on
 one path. Adding a second divergence in the subsystem where the proofs are
 known not to transfer would have made this worse, not better.
 
-**The T1 builders never populate `facts.effects`.** So under any
+**The T1 builders never populated `facts.effects`.** *Fixed.* Under any
 `effects.required` policy, `spl-transfer-build` and `squads-proposal-build`
-return `UNKNOWN` (`SH-UNKNOWN-EFFECT-072`) rather than a proposal. The
-mitigation named above — route what the decoder cannot read to a human through
-Squads — is therefore unavailable exactly when it is needed. That inverts the
-intended safety story and is the more urgent of the two.
+returned `UNKNOWN` (`SH-UNKNOWN-EFFECT-072`) rather than a draft — so the
+mitigation named above, routing what the decoder cannot read to a human through
+Squads, was unavailable exactly when it was needed. The transactions whose
+effects matter most were the ones that could never reach the human gate, which
+inverted the intended safety story.
+
+Both builders now observe effects from the same RPC on the same terms as
+`solana-tx-authorize`, including folding an authority change into
+`facts.authority_change`. Evidence that cannot be obtained still stays absent,
+so the engine says `UNKNOWN` rather than reading silence as "nothing moved".
 
 ## 3. Surfaces we refuse instead of handle
 
