@@ -129,6 +129,31 @@ is a process control and fails when people are busy.
 
 ---
 
+## 2a. Two findings from adversarial review that are still open
+
+An independent review found these. Neither is fixed, and neither should be
+discovered by a reader rather than stated here.
+
+**Effect analysis is blind to authority grants.** `effects.rs` diffs balances.
+An SPL `Approve` CPI'd from an admitted program grants an unlimited delegate
+and moves **zero lamports and zero tokens** — so every `Movement` is zero, the
+spend is inside any cap, and the transaction can reach ALLOW. `FreezeAccount`
+and `SetAuthority(CloseAccount)` are invisible the same way. The vault is then
+drained afterwards, outside this system entirely.
+
+The README said the worst case is the operator's per-transaction cap. It is
+not: the worst case is an unbounded standing delegate. Closing this means
+reading the delegate, `delegated_amount` and `close_authority` fields of the
+token account — which `parse_token_account` currently skips — and treating a
+change in any of them as an effect.
+
+**The T1 builders never populate `facts.effects`.** So under any
+`effects.required` policy, `spl-transfer-build` and `squads-proposal-build`
+return `UNKNOWN` (`SH-UNKNOWN-EFFECT-072`) rather than a proposal. The
+mitigation named above — route what the decoder cannot read to a human through
+Squads — is therefore unavailable exactly when it is needed. That inverts the
+intended safety story and is the more urgent of the two.
+
 ## 3. Surfaces we refuse instead of handle
 
 These fail closed today. Failing closed is correct, but it is not the same as
