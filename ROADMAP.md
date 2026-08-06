@@ -222,9 +222,16 @@ more layers; the current shape is defensible, not ideal.
    where a truncated buffer and a lying length prefix are both in play. This
    runs as a **non-blocking** CI job: symbolic execution through a parser can
    fail to terminate in a way the heap-free policy model cannot, and a
-   speculative proof must not be able to turn the gate red. Raising the bound
-   meaningfully, or restructuring `decode` so the bound stops mattering, is
-   still the work.
+   speculative proof must not be able to turn the gate red.
+
+   **Measured, and worse than hoped:** at `N = 8` it did not terminate inside
+   90 minutes on CI. The bound is now 4 bytes. That number is the useful
+   output of the attempt — the obstacle is the *shape of the code*, not the
+   amount of solver time available. A decoder assembled from bounded,
+   heap-free steps would be provable at a width worth having; this one reads
+   length prefixes out of the same buffer that bounds it, and symbolic
+   execution has to carry every resulting path. So the first move is to
+   restructure `decode` until it can be proven, not to keep raising `N`.
 2. Verified builds, so the artifact needs no trust separate from the source.
 3. Continuous fuzzing with a persistent corpus.
 4. Independent review.
