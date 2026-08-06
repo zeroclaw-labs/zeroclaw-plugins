@@ -90,6 +90,20 @@ and a proof that the signed bytes lie inside its denotation. We do not have
 that, nobody in this space appears to have it, and we would rather name it than
 imply our layering has solved it.
 
+*Half of it is done, and was already done before this was written down.*
+[`INTENT.md`](INTENT.md) separates the three objects — what the operator meant
+(`M`), the policy they wrote (`P`), and the transaction (`T`) — defines the
+denotation `⟦P⟧` as a set of permitted **effect** vectors taken from simulated
+before/after balances rather than the instruction list, and shows that
+
+    evaluate(P, T) = ALLOW  ⟹  effects(T) ∈ ⟦P⟧
+
+is the conjunction of four existing Kani harnesses rather than a new claim.
+So `T ⊨ P` is proven and now says what it means. **`P ⊨ M` remains open**, and
+is the part no amount of testing reaches: `M` exists only in a human's head.
+The current answer to it is a second human reading the Squads proposal, which
+is a process control and fails when people are busy.
+
 ---
 
 ## 3. Surfaces we refuse instead of handle
