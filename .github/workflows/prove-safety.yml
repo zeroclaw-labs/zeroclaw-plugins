@@ -137,7 +137,8 @@ jobs:
           cargo kani setup
 
       - name: Discharge the authorization invariants
-        run: just prove
+        run: |
+          cargo kani --manifest-path libs/safe-hands-core/Cargo.toml             --harness policy::resolved::proofs
 
       - name: Summary
         run: |
@@ -146,3 +147,28 @@ jobs:
           echo "12 harnesses over \`ResolvedFacts\`, every one of its 42 fields" >> "$GITHUB_STEP_SUMMARY"
           echo "\`kani::any()\` simultaneously — the whole decision space, not a" >> "$GITHUB_STEP_SUMMARY"
           echo "sample of it. ALLOW-requires-every-check is a theorem here." >> "$GITHUB_STEP_SUMMARY"
+
+  kani-decode:
+    name: decoder proofs (kani, non-blocking)
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.96.1
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: kani-decode
+      # Bounded-input proofs of the decoder: no panic, and decoding is a
+      # function. Non-blocking because symbolic execution through a parser can
+      # fail to terminate in a way the policy proofs cannot - the model there
+      # is heap-free by construction, this one is not.
+      - name: Install kani
+        run: |
+          cargo install --locked kani-verifier
+          cargo kani setup
+      - name: Prove the decoder over bounded input
+        run: |
+          cargo kani --manifest-path libs/safe-hands-core/Cargo.toml             --harness decode_proofs

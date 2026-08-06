@@ -27,6 +27,8 @@ pub mod codec;
 pub mod commitment;
 pub mod crypto;
 pub mod decode;
+#[cfg(kani)]
+mod decode_proofs;
 pub mod effects;
 pub mod invoice;
 pub mod ix;
