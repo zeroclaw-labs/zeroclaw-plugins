@@ -41,6 +41,36 @@ Full verbatim transcript: [`demo/live/telegram-2026-08-05.md`](demo/live/telegra
 | 0:44 | refused: *"a redirected refund is denied by code, not by my judgment"* |
 | 0:50 | the agent states its own limits, unprompted |
 
+## Two minutes, one command
+
+```sh
+just judge --network
+```
+
+Runs every check behind every claim below and prints which claim each one
+settles — including the one an offline run cannot establish, that the decision
+log matches a head published on Solana by a key this repository does not
+contain. Roughly 90 seconds offline, two minutes with the network.
+
+```text
+  PASS  the logic is tested, not asserted                    (25s)
+  PASS  every attack fixture still fails closed              (4s)
+  PASS  a verdict can be re-derived from its receipt         (1s)
+  PASS  the decision log is internally honest                (0s)
+  PASS  no component imports what it never declared          (7s)
+  PASS  the shipped .wasm refuses in a real runtime          (15s)
+  PASS  no known vulnerable dependency ships                 (19s)
+  PASS  it builds clean for wasm32-wasip2                    (1s)
+  PASS  the source is warning-free on both targets           (19s)
+
+  All 3 anchors agree. 27 of 27 entries are pinned on chain.
+  Those entries can no longer be altered, reordered, or removed without
+  contradicting a value published at slot 478999926 by a key we do not hold.
+```
+
+The point is not that it says PASS. The point is that every row names a command
+you can run to make it say FAIL.
+
 ## Where to look — the claims, and what checks each one
 
 Every row is a claim we make and the thing a stranger can run or read to

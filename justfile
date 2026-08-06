@@ -13,6 +13,14 @@ prove-safety: test conformance verify-receipt log-verify audit clippy wasm verif
     @echo "  prove-safety: ALL GREEN — the guard holds."
     @echo "=================================================="
 
+# The judge's scorecard: run every check, print which claim each one settles.
+#
+# `just judge` is offline. `just judge --network` also checks the log against
+# the head published on Solana devnet, which is the one thing an offline run
+# cannot establish.
+judge *ARGS:
+    bash tools/judge.sh {{ARGS}}
+
 # Host tests for every crate (mocked RPC, zero network).
 test:
     cargo test --locked --manifest-path libs/safe-hands-core/Cargo.toml
