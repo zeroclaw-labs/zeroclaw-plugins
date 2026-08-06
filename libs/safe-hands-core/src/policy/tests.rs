@@ -629,8 +629,21 @@ fn the_model_agrees_with_the_engine_on_every_shaped_case() {
     }
 }
 
+/// Property-test budget.
+///
+/// CI runs a gate, not a campaign: 512 cases keeps `just test` fast enough to
+/// run on every change. A longer soak is a different job, and hard-coding the
+/// count made it impossible to ask for one. `SH_PROPTEST_CASES=200000 cargo
+/// test` runs the same properties for as long as you are willing to wait.
+fn proptest_cases() -> u32 {
+    std::env::var("SH_PROPTEST_CASES")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(512)
+}
+
 proptest! {
-    #![proptest_config(ProptestConfig::with_cases(512))]
+    #![proptest_config(ProptestConfig::with_cases(proptest_cases()))]
 
     /// The same agreement, over inputs nobody chose.
     ///
@@ -885,7 +898,7 @@ fn same_recipient_transfers_are_aggregated_for_cap_and_intent() {
 // backbone of the deny-by-default, fail-closed claim.
 
 proptest! {
-    #![proptest_config(ProptestConfig::with_cases(512))]
+    #![proptest_config(ProptestConfig::with_cases(proptest_cases()))]
 
     /// A single transfer at or under the per-tx cap, to the allowed recipient,
     /// with a matching intent and passing simulation, is always ALLOW.

@@ -66,6 +66,22 @@ jobs:
       - name: Capability check against the compiled .wasm import tables
         run: just verify-capabilities
 
+      - name: Publish component hashes from this clean runner
+        run: |
+          echo "### Artifact provenance — Linux runner" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "rustc: $(rustc --version)" >> "$GITHUB_STEP_SUMMARY"
+          echo "target: wasm32-wasip2" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo '```text' >> "$GITHUB_STEP_SUMMARY"
+          sha256sum dist/local/*/*.wasm | sed 's|dist/local/||' >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "The README publishes the same hashes from a Windows build. Rust is not" >> "$GITHUB_STEP_SUMMARY"
+          echo "bit-for-bit reproducible across platforms by default, so these may differ" >> "$GITHUB_STEP_SUMMARY"
+          echo "while being functionally identical — which is why the capability check" >> "$GITHUB_STEP_SUMMARY"
+          echo "above reads the compiled import tables rather than trusting a hash." >> "$GITHUB_STEP_SUMMARY"
+
       - name: Execute the shipped components in a real wasm runtime
         run: just component-test
 
