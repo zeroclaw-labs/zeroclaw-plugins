@@ -20,7 +20,7 @@ Timings are a cold build. A second run is roughly 90 seconds.
   PASS  every attack fixture still fails closed              (37s)
   PASS  a verdict can be re-derived from its receipt         (1s)
   PASS  the decision log is internally honest                (0s)
-  PASS  no component imports what it never declared          (58s)
+  PASS  no component imports what it never declared          (1:46)
   PASS  the shipped .wasm refuses in a real runtime          (227s)
   PASS  no known vulnerable dependency ships                 (18s)
   PASS  it builds clean for wasm32-wasip2                    (2s)
@@ -31,7 +31,7 @@ Timings are a cold build. A second run is roughly 90 seconds.
 --------------------------------------------------------------
   WHERE THE RUBRIC IS ANSWERED
 --------------------------------------------------------------
-  use case 30%        the 58s run: youtu.be/63E0zhGNnxQ
+  use case 30%        the 58s run: youtu.be/GVTtPDCVeQw
                       verbatim transcript: demo/live/telegram-2026-08-05.md
   safety/custody 25%  every tier T0 or T1, no signing key anywhere
                       README "What Safe Hands still trusts" names what is left

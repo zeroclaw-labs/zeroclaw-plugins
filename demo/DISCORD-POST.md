@@ -12,7 +12,7 @@ the same thread so the channel stays readable.
 A refusal is easy to demo and hard to trust. Anyone can film an agent saying
 *"no"*. Safe Hands is built so you don't have to take ours on faith.
 
-**▶️ 58s, real agent, real Telegram, unedited:** https://youtu.be/63E0zhGNnxQ
+**▶️ 58s, real agent, real Telegram, unedited:** https://youtu.be/GVTtPDCVeQw
 **📦 Repo:** https://github.com/Pratiikpy/zeroclaw-plugins/tree/safe-hands
 
 **The job.** A shop owner messages their own bot: *charge table 4 for 25 USDC*.
@@ -125,7 +125,7 @@ effect we could not measure is not an effect we may assume is zero.
 > re-derivable decision receipts, 12 machine-checked Kani harnesses, and an
 > append-only decision log anchored on Solana by a key the repo does not hold.
 > `just judge --network` verifies all of it in two minutes.
-> Demo: https://youtu.be/63E0zhGNnxQ
+> Demo: https://youtu.be/GVTtPDCVeQw
 > Repo: https://github.com/Pratiikpy/zeroclaw-plugins/tree/safe-hands
 
 ---

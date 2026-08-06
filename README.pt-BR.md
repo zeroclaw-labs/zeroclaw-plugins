@@ -10,7 +10,7 @@ instruções não reconhecidas falham fechadas.
 
 ## Veja funcionando — 58 segundos
 
-**▶️ https://youtu.be/63E0zhGNnxQ**
+**▶️ https://youtu.be/GVTtPDCVeQw**
 
 Captura de tela sem edição do Telegram do operador. Um pedido é cobrado e
 confirmado como **PAGO** a partir de evidência finalizada na chain; uma mensagem

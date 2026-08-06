@@ -90,7 +90,7 @@ echo "--------------------------------------------------------------"
 echo "  WHERE THE RUBRIC IS ANSWERED"
 echo "--------------------------------------------------------------"
 cat <<'MAP'
-  use case 30%        the 58s run: youtu.be/63E0zhGNnxQ
+  use case 30%        the 58s run: youtu.be/GVTtPDCVeQw
                       verbatim transcript: demo/live/telegram-2026-08-05.md
   safety/custody 25%  every tier T0 or T1, no signing key anywhere
                       README "What Safe Hands still trusts" names what is left

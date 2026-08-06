@@ -15,9 +15,9 @@ authority over every lamport that moves.
 > Telegram channel doing a real merchant's job. The four components exist
 > because the job needs them; they are not the submission by themselves.
 
-## Watch it run — 58 seconds
+## Watch it run — 1 min 46 s
 
-**▶️ https://youtu.be/63E0zhGNnxQ**
+**▶️ https://youtu.be/GVTtPDCVeQw**
 
 An unedited screen capture of the live operator Telegram, no reenactment: an
 order is charged and confirmed **PAID** from finalized chain evidence; a customer
