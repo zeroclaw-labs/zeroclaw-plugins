@@ -44,6 +44,13 @@ published on Solana devnet **by a key this repo does not contain**. 27 of 27
 entries pinned across 3 anchors. Truncating or reordering it now contradicts a
 value nobody involved can retract.
 
+**It runs against mainnet, and costs nothing to prove it.** `just mainnet-check`
+reads real USDC mint state, builds a **mainnet-valid unsigned transaction**, gets
+an **ALLOW from a live `simulateTransaction`**, and watches the same builder refuse
+an unlisted recipient with `SH-DENY-RECIPIENT-003`. **0 SOL spent** — a T1 system
+can be proven correct on mainnet without ever funding anything. The executed
+proposal → approval → payout record is on devnet, in `EVIDENCE.md`.
+
 **Custody: T0 and T1 only. No T2 anywhere.** The agent's Squads member holds
 `Initiate` permission alone — `num_voters()` does not even count it toward the
 threshold, so the *program* forbids it approving or executing its own payout.

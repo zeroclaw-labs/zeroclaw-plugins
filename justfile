@@ -21,6 +21,13 @@ prove-safety: test conformance verify-receipt log-verify audit clippy wasm verif
 judge *ARGS:
     bash tools/judge.sh {{ARGS}}
 
+# Run the real pipeline against Solana mainnet, holding no key and spending
+# nothing. Reads, mint decode, ATA derivation, transaction construction and a
+# real simulateTransaction all run against mainnet-beta; only signing is absent,
+# which is the design and the reason this costs 0 SOL.
+mainnet-check rpc="":
+    cargo run --locked --release --manifest-path conformance/Cargo.toml -- --mainnet-check {{ if rpc != "" { "--rpc " + rpc } else { "" } }}
+
 # Host tests for every crate (mocked RPC, zero network).
 test:
     cargo test --locked --manifest-path libs/safe-hands-core/Cargo.toml

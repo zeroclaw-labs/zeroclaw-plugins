@@ -100,7 +100,7 @@ struct Expect {
 
 // --- policy personas --------------------------------------------------------
 
-fn policy_json(name: &str) -> Option<String> {
+pub fn policy_json(name: &str) -> Option<String> {
     match name {
         "merchant" => Some(format!(
             r#"{{"version":"1.0.0","default_action":"deny",
@@ -938,6 +938,7 @@ fn demo() -> Result<(), String> {
 }
 
 mod log;
+mod mainnet;
 mod verify;
 
 /// The transparency-log subcommands, each `--log-*` taking the same
@@ -1005,6 +1006,21 @@ fn main() {
                 "
 VERIFICATION FAILED: {error}"
             );
+            std::process::exit(1);
+        }
+        return;
+    }
+    if std::env::args().any(|a| a == "--mainnet-check") {
+        let args: Vec<String> = std::env::args().collect();
+        let rpc = args
+            .iter()
+            .position(|a| a == "--rpc")
+            .and_then(|i| args.get(i + 1))
+            .cloned()
+            .unwrap_or_default();
+        if let Err(error) = mainnet::run(&rpc) {
+            eprintln!("
+MAINNET CHECK FAILED: {error}");
             std::process::exit(1);
         }
         return;

@@ -675,13 +675,13 @@ pub fn audit_with(args: &Args, transport: &dyn RpcTransport) -> Result<(), Strin
 /// binary is not a component and never will be, so it uses an ordinary HTTP
 /// client. Both go through the same `RpcTransport` trait, so the code above is
 /// testable against `MockTransport` without a network.
-struct HttpTransport {
+pub struct HttpTransport {
     url: String,
     agent: ureq::Agent,
 }
 
 impl HttpTransport {
-    fn new(url: String) -> Self {
+    pub fn new(url: String) -> Self {
         Self {
             url,
             agent: ureq::AgentBuilder::new()

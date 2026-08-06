@@ -89,6 +89,7 @@ falsify it. Nothing here asks you to take our word.
 | The policy engine is correct, not just tested | **12 Kani harnesses, 414 checks, 0 failures** — [`EVIDENCE-proofs.md`](EVIDENCE-proofs.md), run with `just prove` |
 | The decision log cannot quietly lose an entry | [`## Collectively: a log that cannot quietly lose an entry`](#collectively-a-log-that-cannot-quietly-lose-an-entry), anchored to Solana |
 | Money actually moved, under human control | [`EVIDENCE.md`](EVIDENCE.md) — devnet proposal → approval → execution, 0.05 SOL out of the vault |
+| It works against mainnet, not just devnet | `just mainnet-check` — real mint decode, mainnet-valid unsigned tx, ALLOW from a live simulation, and an unlisted recipient refused. **0 SOL.** [`EVIDENCE-mainnet.md`](EVIDENCE-mainnet.md) |
 | Prompt injection fails closed | [`## Prompt-injection transcript`](#prompt-injection-transcript) and the live run above |
 | An operator can run this | [`REPRODUCE.md`](REPRODUCE.md) |
 | The shipped binary is the one described | [`## Artifact provenance`](#artifact-provenance) — sha256 of every component |
