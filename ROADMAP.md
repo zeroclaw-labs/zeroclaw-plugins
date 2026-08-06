@@ -134,18 +134,23 @@ is a process control and fails when people are busy.
 An independent review found these. Neither is fixed, and neither should be
 discovered by a reader rather than stated here.
 
-**Effect analysis is blind to authority grants.** `effects.rs` diffs balances.
-An SPL `Approve` CPI'd from an admitted program grants an unlimited delegate
-and moves **zero lamports and zero tokens** — so every `Movement` is zero, the
-spend is inside any cap, and the transaction can reach ALLOW. `FreezeAccount`
-and `SetAuthority(CloseAccount)` are invisible the same way. The vault is then
-drained afterwards, outside this system entirely.
+**Effect analysis was blind to authority grants.** *Fixed.* `effects.rs` diffs
+balances, so an SPL `Approve` CPI'd from an admitted program granted an
+unlimited delegate while moving **zero lamports and zero tokens** — every
+`Movement` zero, inside any cap, reachable ALLOW, and the account drained
+afterwards outside this system. `FreezeAccount` and
+`SetAuthority(CloseAccount)` were invisible the same way.
 
-The README said the worst case is the operator's per-transaction cap. It is
-not: the worst case is an unbounded standing delegate. Closing this means
-reading the delegate, `delegated_amount` and `close_authority` fields of the
-token account — which `parse_token_account` currently skips — and treating a
-change in any of them as an effect.
+`parse_token_account` read mint, owner, amount and state and skipped precisely
+the fields that mattered: delegate (72..108), `delegated_amount` (121..129) and
+`close_authority` (129..165). `effects::authority_changes` now compares all
+four across the transaction and reports the accounts where they moved, with a
+positive control asserting an ordinary transfer is *not* reported.
+
+The README claimed the worst case was the operator's per-transaction cap. It
+was not — it was an unbounded standing delegate, and the amount at risk was the
+whole account. **Still to do:** wire the reported change into a policy outcome
+so it denies rather than merely being observable.
 
 **The T1 builders never populate `facts.effects`.** So under any
 `effects.required` policy, `spl-transfer-build` and `squads-proposal-build`

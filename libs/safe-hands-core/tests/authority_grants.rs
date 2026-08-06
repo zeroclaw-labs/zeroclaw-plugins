@@ -45,7 +45,10 @@ fn token_account(amount: u64, delegate: Option<[u8; 32]>, delegated: u64, frozen
     })
 }
 
-fn pair(before: Value, after: Value) -> (Vec<(String, Value)>, Vec<(String, Value)>) {
+/// One account's state on each side of the transaction.
+type Snapshot = Vec<(String, Value)>;
+
+fn pair(before: Value, after: Value) -> (Snapshot, Snapshot) {
     (
         vec![(ACCOUNT.to_string(), before)],
         vec![(ACCOUNT.to_string(), after)],
@@ -124,7 +127,7 @@ fn a_delegate_whose_allowance_grows_is_reported() {
 fn accounts_present_on_only_one_side_are_not_reported() {
     // Creation and closure already surface as movements; reporting them here
     // as well would make every ATA creation look like an authority change.
-    let before: Vec<(String, Value)> = vec![];
+    let before: Snapshot = vec![];
     let after = vec![(
         ACCOUNT.to_string(),
         token_account(1_000_000, Some([7u8; 32]), 5, false),
