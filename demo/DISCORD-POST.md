@@ -34,9 +34,11 @@ would make it say FAIL.
 • **One decision** — `just verify-receipt` re-decodes the transaction,
 canonicalises the policy, re-runs the engine and re-derives the decision id from
 scratch. Forged receipts are rejected.
-• **Every decision** — 8 Kani proof obligations machine-check the policy model,
-plus coverage-guided fuzzing, mutation testing, and a differential test of our
-decoder against a reference implementation.
+• **Every decision** — **12 Kani harnesses, 414 checks, 0 failures** machine-check
+the policy model (four of them cover the effects path specifically), plus **2M
+fuzz inputs with 0 crashes**, mutation testing, and a differential test of our
+decoder against a reference implementation. Both transcripts are committed:
+`EVIDENCE-proofs.md`, `EVIDENCE-fuzz.md`.
 • **The decisions you were never shown** — an append-only log whose head is
 published on Solana devnet **by a key this repo does not contain**. 27 of 27
 entries pinned across 3 anchors. Truncating or reordering it now contradicts a
@@ -113,8 +115,8 @@ effect we could not measure is not an effect we may assume is zero.
 > Solana, confirms payment from finalized two-RPC-quorum evidence, and routes
 > refunds through a Squads multisig the agent structurally cannot approve.
 > T0/T1, zero keys held. Every refusal is independently recomputable:
-> re-derivable decision receipts, 8 Kani proof obligations, and an append-only
-> decision log anchored on Solana by a key the repo does not hold.
+> re-derivable decision receipts, 12 machine-checked Kani harnesses, and an
+> append-only decision log anchored on Solana by a key the repo does not hold.
 > `just judge --network` verifies all of it in two minutes.
 > Demo: https://youtu.be/63E0zhGNnxQ
 > Repo: https://github.com/Pratiikpy/zeroclaw-plugins/tree/safe-hands
@@ -125,7 +127,7 @@ effect we could not measure is not an effect we may assume is zero.
 
 - [ ] Open the video in incognito — confirm it plays and is public
 - [ ] Open the repo link in incognito — confirm the branch renders
-- [ ] `just judge --network` passes on a clean clone before posting
+- [x] `just judge --network` passes on a clean clone — `demo/judge-clean-clone.md`, 10/10
 - [ ] Post message 1, then 2 and 3 as replies in the same thread
 - [ ] Earn submission references the Discord post
 - [ ] Rotate the demo LLM key afterwards
