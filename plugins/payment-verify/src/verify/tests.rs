@@ -126,7 +126,11 @@ fn output(out: &ExecuteOutput) -> Value {
 
 #[test]
 fn an_exact_payment_reports_paid_with_both_amounts() {
-    let out = run(&args(json!({})), Some(&rpc(Some(paid_tx(AMOUNT)))), Some(&rpc(Some(paid_tx(AMOUNT)))));
+    let out = run(
+        &args(json!({})),
+        Some(&rpc(Some(paid_tx(AMOUNT)))),
+        Some(&rpc(Some(paid_tx(AMOUNT)))),
+    );
     let value = output(&out);
     assert_eq!(value["status"], "PAID");
     assert_eq!(value["observed_amount_raw"], AMOUNT.to_string());
@@ -139,14 +143,24 @@ fn an_exact_payment_reports_paid_with_both_amounts() {
 
 #[test]
 fn a_reported_payer_is_never_presented_as_an_approved_refund_destination() {
-    let out = run(&args(json!({})), Some(&rpc(Some(paid_tx(AMOUNT)))), Some(&rpc(Some(paid_tx(AMOUNT)))));
+    let out = run(
+        &args(json!({})),
+        Some(&rpc(Some(paid_tx(AMOUNT)))),
+        Some(&rpc(Some(paid_tx(AMOUNT)))),
+    );
     let value = output(&out);
     // The field name itself must not read like an authorization.
     assert!(value.get("refund_to").is_none());
     assert!(value.get("payer_owner_evidence").is_some());
     let authorization = value["refund_authorization"].as_str().unwrap();
-    assert!(authorization.contains("allowed_recipients"), "{authorization}");
-    assert!(value["next_step"].as_str().unwrap().contains("does not authorize"));
+    assert!(
+        authorization.contains("allowed_recipients"),
+        "{authorization}"
+    );
+    assert!(value["next_step"]
+        .as_str()
+        .unwrap()
+        .contains("does not authorize"));
 }
 
 #[test]
@@ -213,7 +227,10 @@ fn a_paid_order_still_reports_the_link_it_was_paid_against() {
 
 #[test]
 fn amount_mismatches_are_reported_with_both_numbers() {
-    for (paid, status) in [(AMOUNT - 1_000_000, "UNDERPAID"), (AMOUNT + 1_000_000, "OVERPAID")] {
+    for (paid, status) in [
+        (AMOUNT - 1_000_000, "UNDERPAID"),
+        (AMOUNT + 1_000_000, "OVERPAID"),
+    ] {
         let out = run(
             &args(json!({})),
             Some(&rpc(Some(paid_tx(paid)))),
@@ -268,7 +285,10 @@ fn a_dead_endpoint_is_unknown_and_says_so_rather_than_claiming_unpaid() {
     let value = output(&out);
     assert_eq!(value["status"], "UNKNOWN");
     assert!(
-        value["next_step"].as_str().unwrap().contains("not proof of non-payment"),
+        value["next_step"]
+            .as_str()
+            .unwrap()
+            .contains("not proof of non-payment"),
         "an operator must not read UNKNOWN as UNPAID"
     );
 }
@@ -279,7 +299,11 @@ fn a_review_verdict_lists_its_signatures_and_forbids_a_refund() {
     let mut tx = paid_tx(AMOUNT);
     tx["result"]["transaction"]["message"]["instructions"][0]["parsed"]["info"]["authority"] =
         json!(key(77).to_string());
-    let out = run(&args(json!({})), Some(&rpc(Some(tx.clone()))), Some(&rpc(Some(tx))));
+    let out = run(
+        &args(json!({})),
+        Some(&rpc(Some(tx.clone()))),
+        Some(&rpc(Some(tx))),
+    );
     let value = output(&out);
     assert_eq!(value["status"], "REVIEW");
     assert_eq!(value["signatures"], json!(["SIG1"]));

@@ -116,7 +116,15 @@ mod component {
                     .map(|url| WakiTransport::new(url.clone()))
             };
             let primary = endpoint("rpc_url");
-            let fallback = endpoint("rpc_url_fallback");
+            // Two endpoints only count as corroboration if they are two
+            // endpoints. A copy-pasted fallback queries one provider twice and
+            // silently turns a 2-of-2 agreement gate into 1-of-1 — while the
+            // receipt still reports that primary and fallback agreed. Drop the
+            // fallback instead, so the result is honestly single-sourced.
+            let fallback = match (config.get("rpc_url"), config.get("rpc_url_fallback")) {
+                (Some(a), Some(b)) if a.trim() == b.trim() => None,
+                _ => endpoint("rpc_url_fallback"),
+            };
 
             let started = std::time::Instant::now();
             let out = verify::run(

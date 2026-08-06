@@ -211,6 +211,21 @@ pub fn run(args_json: &str, transport: Option<&dyn RpcTransport>) -> ExecuteOutp
             "could not load multisig account: stale_transaction_index exceeds transaction_index",
         );
     }
+    // A Controlled multisig has a config_authority that can add members, change
+    // the threshold and rotate the config authority itself — no vote, no
+    // proposal. On such a multisig the Initiate-only check below proves
+    // nothing: whoever holds that authority can grant themselves Vote and
+    // Execute and then approve their own proposal.
+    //
+    // Safe Hands claims the agent can propose and can never approve. That claim
+    // is only true on an Autonomous multisig, so refuse rather than emit a
+    // proposal under a guarantee that does not hold.
+    if info.config_authority != solana_pubkey::Pubkey::default() {
+        return ExecuteOutput::err(
+            "multisig is Controlled: its config_authority can add members and change the              threshold without a vote, so an Initiate-only proposer is not a guarantee that              the agent cannot approve. Use an Autonomous multisig (config_authority unset).",
+        );
+    }
+
     let proposer_member = info.members.iter().find(|member| member.key == proposer);
     match proposer_member {
         Some(member) if member.permissions == 1 => {}
