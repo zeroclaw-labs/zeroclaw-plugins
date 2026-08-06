@@ -1,7 +1,7 @@
 # Safe Hands — one command to prove everything, no live network.
 # `just prove-safety` → unit tests (RPC is mocked; zero live network), the
-# 20-fixture attack arena, clippy on both targets, and clean wasm32-wasip2
-# release builds of all three components. `--locked` throughout for
+# 28-fixture attack arena, clippy on both targets, and clean wasm32-wasip2
+# release builds of all four components. `--locked` throughout for
 # reproducibility, matching upstream CI (tools/ci/validate_components.sh).
 
 default: prove-safety
