@@ -121,6 +121,52 @@ a prompt to run `just verify-capabilities`, which checks the property that
 actually matters — that each component imports only what its manifest declares,
 and therefore cannot persist a byte or reach a host it never asked for.
 
+## The unfamiliar program, worked
+
+The claim that needs an artifact rather than a paragraph: a program the decoder
+has never seen can still be authorized, on measured effect alone.
+
+Two committed receipts, same unknown program, same policy. The only difference
+is what the transaction was measured to do.
+
+`conformance/receipts/effects/24-unknown-program-allowed.json`
+
+```jsonc
+"verdict": "ALLOW",
+"summary": "ALLOW — Instructions: unknown:CZ8YUVdk7znjrUmnb5n7kgySk9yRAsQDYmyCxzfSky9t.?.",
+"evidence": "simulation_ok",
+"effects": [
+  { "owner": "5Z6Ay5NEcbg3xhopc522sBCRXQujkTiuDRnHGfQdcnSf",
+    "asset": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", "out_raw": 20000000 },
+  { "owner": "5Z6Ay5NEcbg3xhopc522sBCRXQujkTiuDRnHGfQdcnSf",
+    "asset": "SOL", "out_raw": 5000 }
+],
+"reason_codes": []
+```
+
+`conformance/receipts/effects/25-unknown-program-denied.json`
+
+```jsonc
+"verdict": "DENY",
+"effects": [ { "asset": "EPjFWdd5…", "out_raw": 25000001 }, … ],
+"reason_codes": ["SH-DENY-EFFECT-070"]
+```
+
+The operator's cap for that mint is `25000000`. The second transaction is over
+it **by one raw unit** — 0.000001 USDC — and is denied. Nothing about the
+instruction is understood in either case. The program id is literally rendered
+as `unknown:CZ8YUVdk…`. Everything about its *effect* is understood, and that is
+what the decision is made of.
+
+Both receipts carry a `decision_id` that commits to the exact bytes, the policy
+and the verdict, so either one can be re-derived from scratch with
+`just verify-receipt <path>` — and a forged one is rejected.
+
+Fixtures 26–28 close the rest of the space: a transaction costing more than the
+caller declared, an unfamiliar program with no evidence at all, and simulation
+succeeding while the effects are unreadable. The last two **deny** — an effect
+that could not be measured is not an effect that may be assumed to be zero.
+
 ## The merchant desk
 
 ```text
