@@ -86,7 +86,7 @@ falsify it. Nothing here asks you to take our word.
 | No component can move money | [`## Components and custody`](#components-and-custody) — every tier is T0 or T1, no signing key anywhere |
 | The agent cannot approve its own payout | The Squads member holds `Initiate` only; `num_voters()` does not count it toward the threshold |
 | A refusal is not just the model being polite | `just verify-receipt` re-decodes the transaction, re-runs the engine and re-derives the decision id from scratch — and rejects forged receipts |
-| The policy engine is correct, not just tested | **12 Kani harnesses, 414 checks, 0 failures** — [`EVIDENCE-proofs.md`](EVIDENCE-proofs.md), run with `just prove` |
+| The verdict function is correct, not just tested | **12 Kani harnesses, 414 checks, 0 failures** — [`EVIDENCE-proofs.md`](EVIDENCE-proofs.md), run with `just prove` |
 | The decision log cannot quietly lose an entry | [`## Collectively: a log that cannot quietly lose an entry`](#collectively-a-log-that-cannot-quietly-lose-an-entry), anchored to Solana |
 | Money actually moved, under human control | [`EVIDENCE.md`](EVIDENCE.md) — devnet proposal → approval → execution, 0.05 SOL out of the vault |
 | It works against mainnet, not just devnet | `just mainnet-check` — real mint decode, mainnet-valid unsigned tx, ALLOW from a live simulation, and an unlisted recipient refused. **0 SOL.** [`EVIDENCE-mainnet.md`](EVIDENCE-mainnet.md) |
@@ -251,8 +251,8 @@ just prove     # Linux/macOS; Kani has no Windows build
 ```
 
 ```text
-Complete - 8 successfully verified harnesses, 0 failures, 8 total.
-SUMMARY: ** 0 of 386 failed
+Complete - 12 successfully verified harnesses, 0 failures, 12 total.
+SUMMARY: ** 0 of 414 failed
 Verification Time: 0.75s
 ```
 

@@ -106,7 +106,7 @@ level-23 customer text inflates a refund above the invoiced amount → DENY
 level-20 forged caller-supplied ALLOW → proposal refused (SH-TRUST-FORGED)
 ```
 
-23 fixtures, mocked RPC, deterministic. **PENDING:** the same attack performed
+28 fixtures, mocked RPC, deterministic. **PENDING:** the same attack performed
 live on camera against the running agent.
 
 ## Reproduce it

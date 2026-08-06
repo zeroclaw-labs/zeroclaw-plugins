@@ -6,7 +6,7 @@
 #   ./verify.sh
 #
 # Mirrors `just prove-safety` for reviewers who don't have `just` installed.
-# Exit 0 means: every host test, the 20-fixture attack arena, and all three
+# Exit 0 means: every host test, the 28-fixture attack arena, and all three
 # wasm32-wasip2 release builds passed — reproducibly, offline, key-free.
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -35,7 +35,7 @@ for manifest in "$CORE" "$AUTHORIZE" "$SPL" "$SQUADS"; do
 done
 
 echo
-bold "2/3  The 20-fixture attack arena (real plugin entry points, mocked transports)"
+bold "2/3  The 28-fixture attack arena (real plugin entry points, mocked transports)"
 cargo run --locked --release --manifest-path "$CONF"
 
 echo

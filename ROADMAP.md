@@ -33,13 +33,36 @@ every one of the 42 fields simultaneously, so they cover the entire decision
 space rather than a sample of it. "ALLOW requires every hard check to pass" is
 a theorem here, not a test result.
 
-**Not proven, only tested:** that `resolve()` produces the right
-`ResolvedFacts` from a given `TxFacts`. This is checked against the real engine
-on 9 shaped cases and 512 generated ones
-(`policy/tests.rs::the_model_agrees_with_the_engine_on_every_shaped_case` and
-the proptest below it). If the model ever drifts from the engine, **every proof
-above becomes worthless** — which is why the agreement is re-checked on every
-run, and why we are saying so here rather than quietly relying on it.
+**Not proven, only tested — and currently divergent.** `resolve()` is supposed
+to produce the same verdict as `evaluate()`. It does not, on one path, and two
+independent reviewers found it before we did.
+
+`evaluate()` forgives an `unknown:` program when effects are required, present,
+and the program is on the operator's admitted list (`policy.rs:435-441`).
+`resolve()` implements no such carve-out (`policy/resolved.rs:307-310`) — it
+sets `has_unknown_program` unconditionally, and `ResolvedFacts` has no field to
+express admission. Run on the repository's own ALLOW fixture, the engine says
+`Allow` and the model says `Deny`.
+
+Two things follow, and both matter:
+
+- **Every divergence found runs model-stricter-than-engine** (59 in a
+  6552-combination sweep, none the other way). So there is no exploit here.
+- **The proofs still do not transfer.** Reading "the model can never ALLOW X"
+  as a statement about the engine requires *engine-ALLOW ⇒ model-ALLOW*, and
+  that implication is false. On the admitted-program path — the one place the
+  engine deliberately permits a program nobody decoded — the twelve proofs say
+  nothing.
+
+The agreement tests cannot see it: both build every input from a helper whose
+instruction list is hard-coded, so **17 of 34 boolean fields are never
+exercised**, and `has_unknown_program` is one of them. Raising
+`SH_PROPTEST_CASES` does not help — the field is unreachable at any count.
+
+The README previously said drift would be caught "immediately". It was not.
+The fix is to implement admission in `resolve()` (or drop the carve-out from
+`evaluate()`), and to make the agreement test vary the instruction list and
+fail when a field stops being exercised.
 
 **Not proven, only fuzzed:** that `decode()` turns adversarial bytes into
 honest `TxFacts`. An attacker who could make the decoder mis-describe a
@@ -164,10 +187,15 @@ What is missing:
   `tests/chaos_boundaries.rs` now covers the RPC and the policy document: a
   simulation slot ahead of the chain, a stale one, eight shapes of malformed
   evidence, an unreachable endpoint, a mint the endpoint will not describe,
-  and fifteen hostile policy documents including a duplicate key whose second
-  value is permissive. One invariant throughout — degrade to refusal, never to
-  permission. All passed unchanged; the behaviour was already right, and is
-  now pinned.
+  and hostile policy documents including a duplicate key whose second value is
+  permissive. One invariant throughout — degrade to refusal, never to
+  permission.
+
+  **The first version of this pinned nothing.** Every policy assertion sat
+  behind `if let Ok(...)` and not one document parsed, so the bodies never ran;
+  the zero-cap check inside was also reasoning backwards. Rewritten to assert
+  rejection directly, with two positive controls so the file cannot pass by
+  refusing everything.
 - **A compromised model, not merely a fooled one.** *Addressed.*
   `tests/compromised_model.rs`. Every other injection test assumes a model that
   has been tricked; this one assumes it is cooperating with the attacker and
@@ -218,8 +246,12 @@ more layers; the current shape is defensible, not ideal.
    component a panic is a trap, and a host reading a trap as anything but
    *refuse* has failed open. The bounds are small (8, 6 and 3 bytes) because
    Kani explores the entire input space, so each byte costs exponentially; they
-   reach past the signature shortvec, the version byte and the message header,
-   where a truncated buffer and a lying length prefix are both in play. This
+   were *claimed* to reach past the signature shortvec and the message header.
+   **They do not.** A legacy message needs ≥37 bytes to deserialize at all, so
+   every input these harnesses explore returns `Err` — exhaustively confirmed
+   for the whole ≤3-byte space. What is actually proven is that the early
+   length guard does not panic. That is worth having and is not what was
+   written. This
    runs as a **non-blocking** CI job: symbolic execution through a parser can
    fail to terminate in a way the heap-free policy model cannot, and a
    speculative proof must not be able to turn the gate red.

@@ -37,7 +37,20 @@ did not find one*.
 
 The last four cover effects-based authorization — the part that admits programs
 the decoder has never seen. That admission is the most dangerous thing this
-project does, so it is the part held to a proof rather than a test.
+project does — and it is the one rule the proof model does **not** implement.
+
+**Correction.** This paragraph previously claimed the admission was "held to a
+proof rather than a test". The opposite is true. `evaluate()` forgives an
+admitted `unknown:` program when effects are required and present
+(`policy.rs:435-441`); `resolve()` has no such carve-out
+(`policy/resolved.rs:307-310`) and cannot express one — `ResolvedFacts` has no
+field for it. On that path the model returns `Deny` where the engine returns
+`Allow`, so the harnesses below say nothing about the shipped engine there.
+The admission is held to a test.
+
+Found by an independent adversarial review, not by us, and not by the agreement
+suite that exists to catch exactly this. See `ROADMAP.md` §1 for why the
+agreement tests are structurally incapable of seeing it, and what the fix is.
 
 ## The honest reading
 

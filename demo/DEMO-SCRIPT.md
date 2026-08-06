@@ -79,7 +79,7 @@ stays valid while the approver takes their time.
 cargo run --locked --release --manifest-path conformance/Cargo.toml
 ```
 
-23 fixtures pass, including the two attacks just demonstrated.
+28 fixtures pass, including the two attacks just demonstrated.
 
 > "Everything on-chain you just saw was live. This part is mocked and
 > deterministic — the same refusal, provable on your machine in a minute."
