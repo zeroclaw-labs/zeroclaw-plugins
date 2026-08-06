@@ -97,6 +97,16 @@ support, and an operator should know which is which.
 - **Fuzzing is minutes, not weeks.** The CI budget is a gate, not a campaign.
   The decode corpus should outlive individual releases and run continuously.
   Windows contributors cannot run it at all — `cargo-fuzz` needs libFuzzer.
+
+  *Partly addressed.* The property-test budget is now `SH_PROPTEST_CASES`
+  rather than a hard-coded 512, and running the suite at 200,000 immediately
+  found that `split_aggregate_over_cap_never_allows` **could not run at scale
+  at all**: it discarded every draw whose amounts missed the cap, exhausted
+  proptest's global-reject budget and aborted. The property had never failed —
+  it had never been exercised more than a few hundred times, despite being the
+  backbone of the split-bypass claim. Fixed by constructing the over-cap
+  aggregate instead of rejecting under-cap draws; the whole suite is now green
+  at 200k. That is the argument for soaking, made by the soak.
 - **Differential testing samples instruction shapes; it should cover them.**
   Every encoding we emit should be diffed against the reference implementation,
   not a representative subset.
