@@ -160,6 +160,16 @@ impl Effects {
 /// program-owned account that merely happens to be 165 bytes long is never
 /// misread as holding tokens.
 fn parse_token_account(data: &[u8]) -> Option<(String, String, u128)> {
+    parse_token_account_full(data).map(|(m, o, a, _)| (m, o, a))
+}
+
+/// As [`parse_token_account`], plus the authority fingerprint.
+///
+/// SPL token account layout: delegate is a `COption<Pubkey>` at 72..108,
+/// delegated_amount a `u64` at 121..129, close_authority a `COption<Pubkey>`
+/// at 129..165. Rendered together with the frozen state, so any change to who
+/// may move or close this account is one string comparison.
+fn parse_token_account_full(data: &[u8]) -> Option<(String, String, u128, String)> {
     if data.len() < TOKEN_ACCOUNT_LEN {
         return None;
     }
@@ -170,7 +180,63 @@ fn parse_token_account(data: &[u8]) -> Option<(String, String, u128)> {
     let mint = bs58::encode(&data[0..32]).into_string();
     let owner = bs58::encode(&data[32..64]).into_string();
     let amount = u64::from_le_bytes(data[64..72].try_into().ok()?);
-    Some((mint, owner, amount as u128))
+    let authority = format!(
+        "d:{} n:{} c:{} s:{state}",
+        bs58::encode(&data[72..108]).into_string(),
+        u64::from_le_bytes(data[121..129].try_into().ok()?),
+        bs58::encode(&data[129..TOKEN_ACCOUNT_LEN]).into_string(),
+    );
+    Some((mint, owner, amount as u128, authority))
+}
+
+/// Authority fingerprints for every token account in an RPC account map.
+fn authority_fingerprints(accounts: &[(String, Value)]) -> BTreeMap<String, String> {
+    let mut out = BTreeMap::new();
+    for (address, account) in accounts {
+        if account.is_null() {
+            continue;
+        }
+        let program = account.get("owner").and_then(Value::as_str).unwrap_or("");
+        if program != crate::crypto::TOKEN_PROGRAM && program != crate::crypto::TOKEN_2022_PROGRAM {
+            continue;
+        }
+        let data = account
+            .get("data")
+            .and_then(Value::as_array)
+            .and_then(|parts| parts.first())
+            .and_then(Value::as_str)
+            .and_then(|encoded| crate::codec::base64_decode(encoded, 1 << 20).ok())
+            .unwrap_or_default();
+        if let Some((_, _, _, authority)) = parse_token_account_full(&data) {
+            out.insert(address.clone(), authority);
+        }
+    }
+    out
+}
+
+/// Accounts whose delegate, delegated amount, close authority or frozen state
+/// changed across the transaction.
+///
+/// This is the hole balance diffing cannot see. An SPL `Approve` grants a
+/// delegate the right to move tokens later and moves nothing now, so every
+/// `Movement` is zero and any per-transaction cap is satisfied — while the
+/// account can be drained afterwards, by someone else, outside this system.
+/// `FreezeAccount` and `SetAuthority(CloseAccount)` are invisible the same way.
+///
+/// The value at risk is not the amount in this transaction; it is the whole
+/// balance. Accounts present on only one side are not reported: creation and
+/// closure already show up as movements.
+pub fn authority_changes(before: &[(String, Value)], after: &[(String, Value)]) -> Vec<String> {
+    let before = authority_fingerprints(before);
+    let after = authority_fingerprints(after);
+    let mut changed: Vec<String> = before
+        .iter()
+        .filter(|(address, was)| after.get(*address).is_some_and(|now| now != *was))
+        .map(|(address, _)| address.clone())
+        .collect();
+    changed.sort();
+    changed.dedup();
+    changed
 }
 
 /// Turn one account's RPC representation into the balances it holds.
