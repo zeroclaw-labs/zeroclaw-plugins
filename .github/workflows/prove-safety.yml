@@ -151,7 +151,7 @@ jobs:
   kani-decode:
     name: decoder proofs (kani, non-blocking)
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 45
     continue-on-error: true
     steps:
       - uses: actions/checkout@v4
