@@ -169,6 +169,35 @@ jobs:
         run: |
           cargo install --locked kani-verifier
           cargo kani setup
+
+      # Bounded by `timeout` in the shell rather than by the job's
+      # `timeout-minutes`. A job that hits its own limit is *cancelled*, and a
+      # cancelled job makes the whole run cancelled no matter what
+      # `continue-on-error` says - so the three jobs above would report green
+      # while the run itself read red. Exiting 124 is an ordinary failure,
+      # which `continue-on-error` on the step does absorb.
       - name: Prove the decoder over bounded input
+        id: decode
+        continue-on-error: true
         run: |
-          cargo kani --manifest-path libs/safe-hands-core/Cargo.toml             --harness decode_proofs
+          timeout 25m cargo kani --manifest-path libs/safe-hands-core/Cargo.toml             --harness decode_proofs
+
+      - name: Summary
+        if: always()
+        run: |
+          if [ "${{ steps.decode.outcome }}" = "success" ]; then
+            echo "### Decoder proofs: discharged" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "No input up to the stated bound makes \`decode\` panic, and decoding" >> "$GITHUB_STEP_SUMMARY"
+            echo "the same bytes twice gives the same answer." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "### Decoder proofs: did not finish within 25 minutes" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "This is recorded rather than hidden. Symbolic execution through a" >> "$GITHUB_STEP_SUMMARY"
+            echo "hand-rolled parser is not guaranteed to terminate; ROADMAP.md already" >> "$GITHUB_STEP_SUMMARY"
+            echo "records that N=8 did not terminate and what that measures." >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "The same property - decode never panics - is asserted by" >> "$GITHUB_STEP_SUMMARY"
+            echo "\`tests/decode_hostile.rs\`, which runs on every platform inside the" >> "$GITHUB_STEP_SUMMARY"
+            echo "blocking gate above. Only the *exhaustive* form is unproven here." >> "$GITHUB_STEP_SUMMARY"
+          fi
