@@ -47,6 +47,17 @@ transaction would defeat all twelve proofs without ever touching them. This is
 the single most valuable place to spend verification effort next, and it is
 currently the weakest link in the chain.
 
+*Partly addressed.* `tests/decode_hostile.rs` adds structure-aware adversarial
+input that runs wherever `cargo test` does — every truncation of a real
+message, single-byte corruption, a shortvec claiming 65,535 elements in front
+of a valid body, every versioned-prefix byte, and arbitrary runs spliced in
+behind a well-formed head. Two invariants: never panic (a panic is a trap in
+the component, and a caller reading a trap as anything but *refuse* has failed
+open) and decode-twice-agrees (`decision_id` binds a verdict to exactly these
+bytes). Green at 200k cases, no findings. This narrows the gap; it does not
+close it. Proving the decoder, or shrinking it until it can be proven, remains
+the top item in §8.
+
 Kani also does not run on Windows, so contributors on that platform cannot
 reproduce the proofs locally. `just prove` is Linux/macOS only.
 
