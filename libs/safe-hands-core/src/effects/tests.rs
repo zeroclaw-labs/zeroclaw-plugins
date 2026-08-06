@@ -158,7 +158,11 @@ fn a_missing_account_reads_as_zero() {
 // ── movements ───────────────────────────────────────────────────────────────
 
 fn effects(before: Vec<Balance>, after: Vec<Balance>) -> Effects {
-    Effects { before, after }
+    Effects {
+        before,
+        after,
+        ..Default::default()
+    }
 }
 
 fn token(address: &str, owner: &str, raw: u128) -> Balance {
@@ -265,6 +269,7 @@ fn a_swap_shows_one_asset_leaving_and_another_arriving() {
                 raw: 5_000_000,
             },
         ],
+        ..Default::default()
     };
     let movements = fx.movements();
     assert_eq!(movements.len(), 2);
@@ -295,7 +300,11 @@ fn closing_a_token_account_shows_the_rent_leaving_its_owner() {
         &token_account(USDC, WALLET, 0, 2_039_280, TOKEN_PROGRAM),
     );
     let after = balances_of(ATA_A, &Value::Null);
-    let fx = Effects { before, after };
+    let fx = Effects {
+        before,
+        after,
+        ..Default::default()
+    };
     let movements = fx.movements();
     let lost = movements
         .iter()
@@ -513,7 +522,7 @@ proptest! {
             .map(|(i, raw)| token(ATA_A, owners[i % 2], *raw as u128))
             .collect();
 
-        let movements = Effects { before, after }.movements();
+        let movements = Effects { before, after, ..Default::default() }.movements();
         let out: u128 = movements.iter().map(|m| m.out_raw).sum();
         let inn: u128 = movements.iter().map(|m| m.in_raw).sum();
         prop_assert_eq!(out, inn);

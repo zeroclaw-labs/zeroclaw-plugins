@@ -110,6 +110,10 @@ pub struct Movement {
 pub struct Effects {
     pub before: Vec<Balance>,
     pub after: Vec<Balance>,
+    /// Token accounts whose delegate, delegated amount, close authority or
+    /// frozen state changed. Balance diffing cannot see these — an `Approve`
+    /// moves nothing now and entitles someone to everything later.
+    pub authority_changed: Vec<String>,
 }
 
 impl Effects {
@@ -334,12 +338,19 @@ pub fn observe(rpc: &dyn RpcTransport, tx: &DecodedTx) -> Result<Effects, String
         ));
     }
 
-    let before = fetch_pre_state(rpc, &addresses)?;
-    let after = fetch_post_state(rpc, tx, &addresses)?;
-    Ok(Effects { before, after })
+    let (before, before_raw) = fetch_pre_state(rpc, &addresses)?;
+    let (after, after_raw) = fetch_post_state(rpc, tx, &addresses)?;
+    let authority_changed = authority_changes(&before_raw, &after_raw);
+    Ok(Effects {
+        before,
+        after,
+        authority_changed,
+    })
 }
 
-fn fetch_pre_state(rpc: &dyn RpcTransport, addresses: &[String]) -> Result<Vec<Balance>, String> {
+type Snapshot = (Vec<Balance>, Vec<(String, Value)>);
+
+fn fetch_pre_state(rpc: &dyn RpcTransport, addresses: &[String]) -> Result<Snapshot, String> {
     let response = rpc.call(
         "getMultipleAccounts",
         json!([addresses, {"encoding": "base64", "commitment": "confirmed"}]),
@@ -355,18 +366,24 @@ fn fetch_pre_state(rpc: &dyn RpcTransport, addresses: &[String]) -> Result<Vec<B
             addresses.len()
         ));
     }
-    Ok(addresses
+    let raw: Vec<(String, Value)> = addresses
+        .iter()
+        .cloned()
+        .zip(accounts.iter().cloned())
+        .collect();
+    let balances = addresses
         .iter()
         .zip(accounts)
         .flat_map(|(address, account)| balances_of(address, account))
-        .collect())
+        .collect();
+    Ok((balances, raw))
 }
 
 fn fetch_post_state(
     rpc: &dyn RpcTransport,
     tx: &DecodedTx,
     addresses: &[String],
-) -> Result<Vec<Balance>, String> {
+) -> Result<Snapshot, String> {
     let transaction =
         crate::codec::unsigned_transaction_base64(&tx.serialized_message, tx.required_signatures)?;
     let response = rpc.call(
@@ -405,11 +422,17 @@ fn fetch_post_state(
             addresses.len()
         ));
     }
-    Ok(addresses
+    let raw: Vec<(String, Value)> = addresses
+        .iter()
+        .cloned()
+        .zip(accounts.iter().cloned())
+        .collect();
+    let balances = addresses
         .iter()
         .zip(accounts)
         .flat_map(|(address, account)| balances_of(address, account))
-        .collect())
+        .collect();
+    Ok((balances, raw))
 }
 
 #[cfg(test)]

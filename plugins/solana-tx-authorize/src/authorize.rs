@@ -201,9 +201,21 @@ pub fn run(args_json: &str, transport: Option<&dyn RpcTransport>) -> ExecuteOutp
         .as_ref()
         .is_some_and(|effects| effects.required)
     {
-        facts.effects = transport
-            .and_then(|rpc| safe_hands_core::effects::observe(rpc, &decoded).ok())
-            .map(|observed| observed.movements());
+        let observed =
+            transport.and_then(|rpc| safe_hands_core::effects::observe(rpc, &decoded).ok());
+        // An authority grant moves nothing. `Approve` leaves a delegate
+        // entitled to the whole balance while every movement is zero, so the
+        // cap is satisfied and the drain happens later, outside this system.
+        // Fold it into the existing authority-change fact, which the engine
+        // already denies — rather than adding a rule the heap-free model would
+        // then have to grow a field for.
+        if observed
+            .as_ref()
+            .is_some_and(|o| !o.authority_changed.is_empty())
+        {
+            facts.authority_change = true;
+        }
+        facts.effects = observed.map(|observed| observed.movements());
     }
 
     // --- 4. Classic SPL mint evidence ------------------------------------

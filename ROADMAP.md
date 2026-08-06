@@ -149,8 +149,16 @@ positive control asserting an ordinary transfer is *not* reported.
 
 The README claimed the worst case was the operator's per-transaction cap. It
 was not — it was an unbounded standing delegate, and the amount at risk was the
-whole account. **Still to do:** wire the reported change into a policy outcome
-so it denies rather than merely being observable.
+whole account.
+
+**Now enforced, not merely observed.** `observe()` carries the finding on
+`Effects::authority_changed`, and `solana-tx-authorize` folds a non-empty
+result into `facts.authority_change` — a fact the engine already denies
+(`policy.rs:485`) and the model already denies (`resolved.rs:163`). Routing it
+through an existing rule rather than a new one was deliberate: a new rule would
+need a new `ResolvedFacts` field, and the model and engine already disagree on
+one path. Adding a second divergence in the subsystem where the proofs are
+known not to transfer would have made this worse, not better.
 
 **The T1 builders never populate `facts.effects`.** So under any
 `effects.required` policy, `spl-transfer-build` and `squads-proposal-build`
