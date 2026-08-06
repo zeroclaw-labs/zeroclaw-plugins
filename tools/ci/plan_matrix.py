@@ -13,6 +13,7 @@ from pathlib import Path, PurePosixPath
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from cargo_path_deps import CargoPathDependencyError, plugin_dependency_map
 from registry_contract import PLUGIN_NAME_RE
 
 DEFAULT_SHARD_SIZE = 8
@@ -201,9 +202,20 @@ def git_changed_paths(repository: Path, base: str) -> list[str]:
         raise PlanError("changed paths must be valid UTF-8") from error
 
 
-def requires_full_sweep(changed_paths: list[str]) -> bool:
+def _normalized_changed_path(raw_path: str) -> str:
+    return PurePosixPath(raw_path).as_posix().removeprefix("./")
+
+
+def _path_is_within(path: str, root: str) -> bool:
+    return path == root or path.startswith(f"{root}/")
+
+
+def requires_full_sweep(
+    changed_paths: list[str], dependency_plugins: dict[str, set[str]] | None = None
+) -> bool:
+    dependency_roots = tuple((dependency_plugins or {}).keys())
     for raw_path in changed_paths:
-        path = PurePosixPath(raw_path).as_posix().removeprefix("./")
+        path = _normalized_changed_path(raw_path)
         if path in FULL_SWEEP_FILES or path.startswith(FULL_SWEEP_PREFIXES):
             return True
         if path in DOC_ONLY_FILES or path.startswith(DOC_ONLY_PREFIXES):
@@ -215,24 +227,34 @@ def requires_full_sweep(changed_paths: list[str]) -> bool:
             and PLUGIN_NAME_RE.fullmatch(parts[1])
         ):
             continue
-        # Unknown root-level or future build configuration is safety-relevant
-        # until it is deliberately classified as documentation-only.
+        if any(_path_is_within(path, root) for root in dependency_roots):
+            continue
+        # Unknown root-level, unreferenced local packages, or future build
+        # configuration are safety-relevant until deliberately classified.
         return True
     return False
 
 
-def changed_plugins(changed_paths: list[str], available: list[str]) -> list[str]:
+def changed_plugins(
+    changed_paths: list[str],
+    available: list[str],
+    dependency_plugins: dict[str, set[str]] | None = None,
+) -> list[str]:
     available_set = set(available)
+    dependency_plugins = dependency_plugins or {}
     selected = set()
     for raw_path in changed_paths:
-        parts = PurePosixPath(raw_path).parts
-        if len(parts) < 2 or parts[0] != "plugins":
-            continue
-        plugin = parts[1]
-        if not PLUGIN_NAME_RE.fullmatch(plugin):
-            raise PlanError(f"changed path has invalid plugin name: {raw_path!r}")
-        if plugin in available_set:
-            selected.add(plugin)
+        path = _normalized_changed_path(raw_path)
+        parts = PurePosixPath(path).parts
+        if len(parts) >= 2 and parts[0] == "plugins":
+            plugin = parts[1]
+            if not PLUGIN_NAME_RE.fullmatch(plugin):
+                raise PlanError(f"changed path has invalid plugin name: {raw_path!r}")
+            if plugin in available_set:
+                selected.add(plugin)
+        for dependency_root, dependents in dependency_plugins.items():
+            if _path_is_within(path, dependency_root):
+                selected.update(dependents & available_set)
     return sorted(selected)
 
 
@@ -268,15 +290,19 @@ def make_plan(
     max_shards: int = DEFAULT_MAX_SHARDS,
 ) -> dict[str, object]:
     available = repository_plugins(repository)
+    try:
+        dependency_plugins = plugin_dependency_map(repository, available)
+    except CargoPathDependencyError as error:
+        raise PlanError(f"cannot discover plugin Cargo path dependencies: {error}") from error
     paths = []
     if event == "pull_request":
         paths = git_changed_paths(repository, base)
-        if requires_full_sweep(paths):
+        if requires_full_sweep(paths, dependency_plugins):
             mode = "full"
             selected = available
         else:
             mode = "changed"
-            selected = changed_plugins(paths, available)
+            selected = changed_plugins(paths, available, dependency_plugins)
     else:
         # Reusable workflows retain the caller's event name. A publish call
         # originates from push/dispatch and therefore intentionally lands here.
@@ -285,7 +311,7 @@ def make_plan(
         if event == "push" and base and base != "0" * 40:
             paths = git_changed_paths(repository, base)
 
-    strict = set(changed_plugins(paths, available))
+    strict = set(changed_plugins(paths, available, dependency_plugins))
     release_all = any(
         PurePosixPath(path).as_posix().removeprefix("./").startswith("wit/v0/")
         for path in paths

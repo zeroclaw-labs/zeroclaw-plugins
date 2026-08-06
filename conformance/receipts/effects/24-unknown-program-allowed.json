@@ -1,0 +1,37 @@
+{
+  "decision": {
+    "decision_id": "sha256:5724fb197808fdf9694ec1b14b885e5c964c4271c4c3d9ac97f665291fb6fcc9",
+    "effects": [
+      {
+        "asset": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+        "in_raw": 0,
+        "out_raw": 20000000,
+        "owner": "5Z6Ay5NEcbg3xhopc522sBCRXQujkTiuDRnHGfQdcnSf"
+      },
+      {
+        "asset": "SOL",
+        "in_raw": 0,
+        "out_raw": 5000,
+        "owner": "5Z6Ay5NEcbg3xhopc522sBCRXQujkTiuDRnHGfQdcnSf"
+      }
+    ],
+    "evidence": "simulation_ok",
+    "matched_rules": [],
+    "message_sha256": "sha256:4a5ab27a0a8dfd35cc416ad8dd1992c4615604c48b1f76b85f6610257e8b077c",
+    "next_action": "SIGN_OR_SQUADS_PROPOSE",
+    "policy_sha256": "sha256:2df2aa801c0282097a2f38654a21f2ca0cd78521b61f1298c1cf2514f41e9691",
+    "reason_codes": [],
+    "summary": "ALLOW — Instructions: unknown:CZ8YUVdk7znjrUmnb5n7kgySk9yRAsQDYmyCxzfSky9t.?.",
+    "verdict": "ALLOW"
+  },
+  "fixture": "level-24 unfamiliar program, spend inside the operator's bound → ALLOW",
+  "intent": {
+    "action": "effect",
+    "amount_raw": "20000000",
+    "mint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+    "recipient": ""
+  },
+  "policy_json": "{\"version\":\"1.0.0\",\"default_action\":\"deny\",\n            \"assets\":{\"SOL\":{\"decimals\":9,\"max_per_tx_raw\":\"2000000000\"},\"EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v\":{\"decimals\":6,\"max_per_tx_raw\":\"25000000\"}},\n            \"allowed_recipients\":[\"9hSR6S7WPtxmTojgo6GG3k4yDPecgJY292j7xrsUGWBu\"],\n            \"allowed_instructions\":{\"system\":[\"transfer\"],\"spl_token\":[\"transfer_checked\"],\"associated_token\":[\"create_idempotent\"],\"memo\":[\"memo\"]},\n            \"unknown_program\":\"deny\",\"unknown_instruction\":\"deny\",\"missing_intent\":\"review\",\"durable_nonce\":\"deny\",\n            \"effects\":{\"required\":true,\"guarded\":[\"5Z6Ay5NEcbg3xhopc522sBCRXQujkTiuDRnHGfQdcnSf\"],\n              \"admitted_programs\":[\"CZ8YUVdk7znjrUmnb5n7kgySk9yRAsQDYmyCxzfSky9t\"],\n              \"max_outflow_raw\":{\"EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v\":\"25000000\",\"SOL\":\"10000000\"}},\n            \"token_2022\":{\"permanent_delegate\":\"deny\",\"transfer_hook\":\"review\",\"transfer_fee\":\"review\",\"default_frozen\":\"deny\"},\n            \"simulation\":{\"required\":true,\"max_slot_age\":32}}",
+  "simulation_ok": true,
+  "transaction_base64": "AQABA0OnLnFEAXYt9mtowm373yaCquyfJHTspGE+QkoPuv08SSH+FJY9px+p+84FElE6bwRdItru9oRdZYtwGwUFgKmrq6urq6urq6urq6urq6urq6urq6urq6urq6urq6urqwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHAQIBAQMBAgM="
+}

@@ -1,0 +1,5 @@
+name: level-16 garbage bytes → DENY
+policy: merchant
+intent: {action: transfer, amount_raw: "1000", recipient: RECIP}
+tx: {kind: none}
+expect: {verdict: DENY, reason_codes: [SH-DENY-DECODE-062]}

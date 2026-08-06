@@ -1,0 +1,14 @@
+[sop]
+name = "refund-approval"
+description = "Prepare a refund for a paid USDC invoice: verify, build, independently authorize, and submit an unsigned Squads proposal. Every funds-touching step stops for a human. The agent never signs and never executes."
+version = "1.0.0"
+priority = "high"
+execution_mode = "step_by_step"
+cooldown_secs = 0
+max_concurrent = 1
+agent = "merchant"
+
+# Deliberately manual. A refund is never started by a timer, a webhook, or a
+# customer message — only by the operator, on purpose.
+[[triggers]]
+type = "manual"

@@ -1,0 +1,15 @@
+# The rail-agnostic half of the firewall, in one fixture.
+#
+# The transaction calls a program the decoder cannot read. v0.1 refused every
+# such call flatly, which is safe and useless: it means an agent can never touch
+# a DEX, an x402 endpoint, a staking program, or anything written after this
+# repository. Here the operator has named the program and written down what
+# naming it may cost, and the transaction stays inside that.
+#
+# Nothing about the instruction is understood. Everything about its effect is.
+name: "level-24 unfamiliar program, spend inside the operator's bound → ALLOW"
+policy: merchant_effects
+intent: {action: effect, mint: USDC, amount_raw: "20000000", recipient: ""}
+tx: {kind: unknown_only, unknown_program: true}
+simulation: "effects:20000000:5000:25000000"
+expect: {verdict: ALLOW}

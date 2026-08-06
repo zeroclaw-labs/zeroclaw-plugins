@@ -1,0 +1,5 @@
+name: level-04 recipient swapped to attacker → DENY
+policy: merchant
+intent: {action: transfer, amount_raw: "1000000000", recipient: RECIP}
+tx: {kind: sol, amount: 1000000000, recipient: ATTACKER}
+expect: {verdict: DENY, reason_codes: [SH-INTENT-RECIPIENT]}

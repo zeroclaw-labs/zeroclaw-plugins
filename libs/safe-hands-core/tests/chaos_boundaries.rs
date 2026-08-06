@@ -1,0 +1,270 @@
+//! Chaos at the trust boundaries that are not the prompt.
+//!
+//! The ROADMAP admits that the prompt boundary is tested hardest because it is
+//! the cheapest one to simulate, and that this is a poor reason. Safe Hands
+//! trusts three things it does not control, and only one of them is a chat
+//! message:
+//!
+//!   1. **The RPC endpoint.** It supplies mint decimals, simulation results
+//!      and the current slot. A wrong answer here is not noise — decimals
+//!      decide what "25" means, and simulation is a hard gate.
+//!   2. **The operator policy document.** Caps and allowlists arrive as JSON
+//!      from host config. Malformed or hostile content must not become a
+//!      permissive policy.
+//!   3. **The transaction bytes.** Covered separately in `decode_hostile.rs`.
+//!
+//! The invariant everywhere below is the same one the project is built on:
+//! **degrade to refusal, never to permission.** An endpoint that lies, stalls,
+//! contradicts itself or disappears must never produce a verdict more
+//! permissive than the one an honest endpoint would have produced.
+
+use safe_hands_core::decode::decode;
+use safe_hands_core::ix;
+use safe_hands_core::policy::Policy;
+use safe_hands_core::rpc::{
+    simulate_strict, verify_classic_transfer_mints, DownTransport, MockTransport, SimulationOutcome,
+};
+use serde_json::json;
+use solana_hash::Hash;
+use solana_message::Message;
+use solana_pubkey::Pubkey;
+
+fn sol_transfer_tx() -> safe_hands_core::decode::DecodedTx {
+    let payer = Pubkey::new_from_array([1; 32]);
+    let recipient = Pubkey::new_from_array([2; 32]);
+    let mut message = Message::new(&[ix::system_transfer(&payer, &recipient, 1)], Some(&payer));
+    message.recent_blockhash = Hash::new_from_array([3; 32]);
+    decode(&bincode::serialize(&message).expect("message")).expect("decode")
+}
+
+// ---------------------------------------------------------------------------
+// 1. The RPC lies, stalls, or contradicts itself
+// ---------------------------------------------------------------------------
+
+/// An endpoint that answers a different slot every time it is asked.
+///
+/// Simulation freshness is decided by comparing the simulation slot against
+/// the current slot. An endpoint that moves the goalposts between the two
+/// calls must not be able to manufacture an `Ok`.
+#[test]
+fn a_simulation_slot_ahead_of_the_chain_is_never_ok() {
+    let tx = sol_transfer_tx();
+    // Simulation claims to have run at slot 900; the chain is only at 100.
+    // A future slot is not freshness, it is a broken or hostile endpoint.
+    let rpc = MockTransport::new()
+        .with(
+            "simulateTransaction",
+            json!({"result":{"context":{"slot":900},"value":{"err":null}}}),
+        )
+        .with("getSlot", json!({"result": 100}));
+
+    let outcome = simulate_strict(&rpc, &tx, 10);
+    assert!(
+        !matches!(outcome, SimulationOutcome::Ok { .. }),
+        "a simulation slot ahead of the chain must not be accepted: {outcome:?}"
+    );
+}
+
+/// Simulation succeeded a long time ago. Stale evidence is not evidence.
+#[test]
+fn a_stale_simulation_is_never_ok() {
+    let tx = sol_transfer_tx();
+    let rpc = MockTransport::new()
+        .with(
+            "simulateTransaction",
+            json!({"result":{"context":{"slot":100},"value":{"err":null}}}),
+        )
+        .with("getSlot", json!({"result": 10_000}));
+
+    assert!(matches!(
+        simulate_strict(&rpc, &tx, 10),
+        SimulationOutcome::Stale { .. }
+    ));
+}
+
+/// Every shape of broken simulation evidence, none of which may read as `Ok`.
+///
+/// A missing field, a null result, a string where a number belongs, an empty
+/// object: each is a different way for an endpoint to be wrong, and the
+/// permissive failure mode for all of them is identical.
+#[test]
+fn malformed_simulation_evidence_never_reads_as_success() {
+    let tx = sol_transfer_tx();
+    let hostile = [
+        json!({"result": null}),
+        json!({}),
+        json!({"result": {"value": {"err": null}}}),
+        json!({"result": {"context": {}, "value": {"err": null}}}),
+        json!({"result": {"context": {"slot": "not-a-number"}, "value": {"err": null}}}),
+        json!({"result": {"context": {"slot": 100}}}),
+        json!({"error": {"code": -32000, "message": "node behind"}}),
+        json!({"result": {"context": {"slot": 100}, "value": {"err": "InstructionError"}}}),
+    ];
+
+    for (i, response) in hostile.iter().enumerate() {
+        let rpc = MockTransport::new()
+            .with("simulateTransaction", response.clone())
+            .with("getSlot", json!({"result": 105}));
+        let outcome = simulate_strict(&rpc, &tx, 10);
+        assert!(
+            !matches!(outcome, SimulationOutcome::Ok { .. }),
+            "hostile simulation response #{i} was accepted as Ok: {response}"
+        );
+    }
+}
+
+/// The endpoint is simply gone. Unreachable must not mean unchecked.
+#[test]
+fn an_unreachable_endpoint_is_never_ok() {
+    let tx = sol_transfer_tx();
+    assert!(!matches!(
+        simulate_strict(&DownTransport, &tx, 10),
+        SimulationOutcome::Ok { .. }
+    ));
+}
+
+/// A transfer whose mint the endpoint refuses to describe cannot be verified,
+/// and an unverifiable mint must not pass. Decimals decide what the amount
+/// means; guessing them would make every cap meaningless.
+#[test]
+fn a_mint_the_endpoint_will_not_describe_is_not_verified() {
+    let payer = Pubkey::new_from_array([1; 32]);
+    let mint = Pubkey::new_from_array([9; 32]);
+    let token_program = ix::spl_token_program();
+    let source = Pubkey::new_from_array([7; 32]);
+    let destination = Pubkey::new_from_array([8; 32]);
+    let mut message = Message::new(
+        &[ix::transfer_checked(
+            &token_program,
+            &source,
+            &mint,
+            &destination,
+            &payer,
+            1_000,
+            6,
+        )],
+        Some(&payer),
+    );
+    message.recent_blockhash = Hash::new_from_array([3; 32]);
+    let tx = decode(&bincode::serialize(&message).expect("message")).expect("decode");
+
+    assert!(
+        verify_classic_transfer_mints(&DownTransport, &tx).is_err(),
+        "an unreachable endpoint must not silently verify a mint"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 2. The policy document is malformed or hostile
+// ---------------------------------------------------------------------------
+
+/// Nothing a hostile policy document can say may produce a *usable* policy.
+///
+/// An independent reviewer caught the first version of this test asserting
+/// nothing at all: every document below fails schema validation, so an
+/// `if let Ok(policy)` body never executed and the test reduced to "from_json
+/// does not panic". Both the structure and the reasoning were wrong — it also
+/// searched for `max_per_tx_raw: 0` as though a zero cap were permissive, when
+/// a zero cap is the strictest value there is.
+///
+/// So the contract is stated directly instead: a hostile document must be
+/// *rejected*. That is falsifiable, and it fails if anyone ever loosens the
+/// schema.
+#[test]
+fn hostile_policy_documents_are_rejected() {
+    let hostile = [
+        "",
+        "null",
+        "[]",
+        "\"a string\"",
+        "{",
+        "not json at all",
+        r#"{"max_per_tx_raw": -1}"#,
+        r#"{"max_per_tx_raw": 1e400}"#,
+        r#"{"max_per_tx_raw": "999999999999999999999999999999"}"#,
+        r#"{"version": "1.0.0", "default_action": "allow"}"#,
+    ];
+
+    for doc in hostile {
+        assert!(
+            Policy::from_json(doc).is_err(),
+            "a hostile or incomplete policy document was accepted: {doc}"
+        );
+    }
+}
+
+/// The same, for documents that are structurally abusive rather than merely
+/// wrong. Kept separate because the failure mode here is a hang or a stack
+/// overflow, not a bad verdict.
+#[test]
+fn structurally_abusive_policy_documents_terminate_and_are_rejected() {
+    let deep = "[".repeat(2_000);
+    let wide = format!(
+        r#"{{"allowed_recipients": [{}]}}"#,
+        "\"x\",".repeat(5_000).trim_end_matches(',')
+    );
+    for doc in [deep.as_str(), wide.as_str()] {
+        assert!(
+            Policy::from_json(doc).is_err(),
+            "a structurally abusive document was accepted"
+        );
+    }
+}
+
+/// A duplicate key whose second value is more permissive must not be the one
+/// that survives — and in fact the document must not parse at all, because it
+/// is missing every required field. Pinned separately because "last wins" is a
+/// classic way to smuggle a value past a human reviewer who read the first one.
+#[test]
+fn a_duplicate_permissive_key_does_not_produce_a_policy() {
+    assert!(Policy::from_json(r#"{"max_per_tx_raw": 1, "max_per_tx_raw": 999999999999}"#).is_err());
+}
+
+/// Positive control for this whole file.
+///
+/// Every other assertion here is a refusal. Without this, a change that broke
+/// policy parsing entirely — or `MockTransport` — would make the file pass by
+/// refusing everything, which is the exact failure mode a reviewer flagged in
+/// the RPC block below.
+#[test]
+fn the_shipped_merchant_policy_still_parses() {
+    let good = r#"{
+      "version": "1.0.0",
+      "default_action": "deny",
+      "assets": { "SOL": { "decimals": 9, "max_per_tx_raw": "2000000000" } },
+      "allowed_recipients": ["9hSR6S7WPtxmTojgo6GG3k4yDPecgJY292j7xrsUGWBu"],
+      "allowed_instructions": { "system": ["transfer"] },
+      "unknown_program": "deny",
+      "unknown_instruction": "deny",
+      "missing_intent": "review",
+      "durable_nonce": "review",
+      "token_2022": {
+        "permanent_delegate": "deny", "transfer_hook": "deny",
+        "transfer_fee": "deny", "default_frozen": "deny"
+      },
+      "simulation": { "required": true, "max_slot_age": 32 }
+    }"#;
+    assert!(
+        Policy::from_json(good).is_ok(),
+        "the shipped policy shape must parse, or every refusal above is vacuous"
+    );
+}
+
+/// Positive control for the RPC block: an honest endpoint must reach `Ok`.
+///
+/// Without this, a wrong method name would make all five refusal tests above
+/// pass for the wrong reason.
+#[test]
+fn an_honest_endpoint_reaches_ok() {
+    let tx = sol_transfer_tx();
+    let rpc = MockTransport::new()
+        .with(
+            "simulateTransaction",
+            json!({"result":{"context":{"slot":100},"value":{"err":null}}}),
+        )
+        .with("getSlot", json!({"result": 105}));
+    assert!(
+        matches!(simulate_strict(&rpc, &tx, 32), SimulationOutcome::Ok { .. }),
+        "an honest endpoint must produce Ok, or the refusals above prove nothing"
+    );
+}

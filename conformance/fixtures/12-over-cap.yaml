@@ -1,0 +1,5 @@
+name: level-12 over per-tx cap → DENY
+policy: merchant
+intent: {action: transfer, amount_raw: "500000000000", recipient: RECIP}
+tx: {kind: sol, amount: 500000000000, recipient: RECIP}
+expect: {verdict: DENY, reason_codes: [SH-DENY-CAP-001]}

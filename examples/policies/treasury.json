@@ -1,0 +1,26 @@
+{
+  "version": "1.0.0",
+  "default_action": "deny",
+  "assets": {
+    "SOL": { "decimals": 9, "max_per_tx_raw": "100000000" },
+    "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v": { "decimals": 6, "max_per_tx_raw": "5000000" }
+  },
+  "allowed_recipients": [],
+  "allowed_instructions": {
+    "system": ["transfer"],
+    "spl_token": ["transfer_checked"],
+    "memo": ["memo"]
+  },
+  "unknown_program": "deny",
+  "unknown_instruction": "deny",
+  "missing_intent": "deny",
+  "durable_nonce": "deny",
+  "token_2022": {
+    "permanent_delegate": "deny",
+    "transfer_hook": "deny",
+    "transfer_fee": "deny",
+    "default_frozen": "deny"
+  },
+  "simulation": { "required": true, "max_slot_age": 16 },
+  "comment": "Persona: DAO/team treasury. Tiny caps, no standing recipients, intent mandatory, and nonces forbidden. Everything meaningful routes to the multisig."
+}

@@ -94,6 +94,63 @@ plugin_is_strict() {
     <<<"$STRICT_PLUGINS_JSON" >/dev/null
 }
 
+snapshot_validation_inputs() {
+  local dependency_path snapshot_root destination
+  mkdir -p \
+    "$canonical_root/plugins" "$canonical_root/wit" \
+    "$build_root/plugins" "$build_root/wit" \
+    || return 1
+  cp -R -- "$checkout_plugin_dir" "$canonical_plugin_dir" \
+    && cp -R -- "$REPOSITORY_ROOT/wit/v0" "$canonical_root/wit/v0" \
+    && cp -R -- "$checkout_plugin_dir" "$plugin_dir" \
+    && cp -R -- "$REPOSITORY_ROOT/wit/v0" "$build_root/wit/v0" \
+    || return 1
+
+  for dependency_path in "${dependency_paths[@]}"; do
+    for snapshot_root in "$canonical_root" "$build_root"; do
+      destination="$snapshot_root/$dependency_path"
+      # A dependency nested inside the plugin or another dependency was already
+      # preserved by the parent tree copy.
+      if [[ -e $destination ]]; then
+        continue
+      fi
+      mkdir -p -- "$(dirname "$destination")" \
+        && cp -R -- "$REPOSITORY_ROOT/$dependency_path" "$destination" \
+        || return 1
+    done
+  done
+}
+
+validate_snapshot_trees() {
+  local dependency_path
+  python3 "$SCRIPT_DIR/manifest_field.py" \
+    --validate-package-tree "$canonical_plugin_dir" \
+    >/dev/null 2>>"$metadata_log" || return 1
+  for dependency_path in "${dependency_paths[@]}"; do
+    python3 "$SCRIPT_DIR/manifest_field.py" \
+      --validate-package-tree "$canonical_root/$dependency_path" \
+      >/dev/null 2>>"$metadata_log" || return 1
+  done
+}
+
+discover_plugin_dependencies() {
+  python3 "$SCRIPT_DIR/cargo_path_deps.py" \
+    --repository "$REPOSITORY_ROOT" --plugin "$plugin" \
+    >"$dependency_paths_file" 2>>"$metadata_log" || return 1
+  mapfile -t dependency_paths <"$dependency_paths_file"
+}
+
+checkout_inputs_are_clean() {
+  local dependency_path status_output
+  local clean_inputs=("$checkout_plugin_dir" "$REPOSITORY_ROOT/wit/v0")
+  for dependency_path in "${dependency_paths[@]}"; do
+    clean_inputs+=("$REPOSITORY_ROOT/$dependency_path")
+  done
+  status_output=$(git status --porcelain=v1 --untracked-files=all --ignored=matching \
+    -- "${clean_inputs[@]}" 2>>"$metadata_log") || return 1
+  [[ -z $status_output ]]
+}
+
 for plugin in "$@"; do
   if ! python3 "$SCRIPT_DIR/manifest_field.py" \
     --validate-plugin-name "$plugin" >/dev/null 2>&1; then
@@ -108,10 +165,12 @@ for plugin in "$@"; do
   build_root="$plugin_snapshot_root/build"
   canonical_plugin_dir="$canonical_root/plugins/$plugin"
   plugin_dir="$build_root/plugins/$plugin"
+  dependency_paths_file="$plugin_snapshot_root/dependency-paths.txt"
+  dependency_paths=()
   manifest="$canonical_plugin_dir/manifest.toml"
   plugin_log_dir="$LOG_ROOT/$plugin"
   metadata_log="$plugin_log_dir/manifest.log"
-  mkdir -p "$plugin_log_dir"
+  mkdir -p "$plugin_log_dir" "$plugin_snapshot_root"
   : >"$metadata_log"
 
   name=""
@@ -146,26 +205,19 @@ for plugin in "$@"; do
   elif [[ ! -d $checkout_plugin_dir ]]; then
     echo "error: plugin directory not found: plugins/$plugin" | tee -a "$metadata_log" >&2
     manifest_valid=0
-  elif [[ -n $(
-    git status --porcelain=v1 --untracked-files=all --ignored=matching \
-      -- "$checkout_plugin_dir" "$REPOSITORY_ROOT/wit/v0"
-  ) ]]; then
-    echo "error: checkout is not clean before validating $plugin" \
+  elif ! discover_plugin_dependencies; then
+    echo "error: invalid local Cargo path dependency closure for $plugin" \
       | tee -a "$metadata_log" >&2
     manifest_valid=0
-  elif ! mkdir -p \
-    "$canonical_root/plugins" "$canonical_root/wit" \
-    "$build_root/plugins" "$build_root/wit" \
-    || ! cp -R "$checkout_plugin_dir" "$canonical_root/plugins/" \
-    || ! cp -R "$REPOSITORY_ROOT/wit/v0" "$canonical_root/wit/" \
-    || ! cp -R "$checkout_plugin_dir" "$build_root/plugins/" \
-    || ! cp -R "$REPOSITORY_ROOT/wit/v0" "$build_root/wit/"; then
+  elif ! checkout_inputs_are_clean; then
+    echo "error: checkout inputs are not clean before validating $plugin" \
+      | tee -a "$metadata_log" >&2
+    manifest_valid=0
+  elif ! snapshot_validation_inputs; then
     echo "error: could not snapshot committed inputs for $plugin" \
       | tee -a "$metadata_log" >&2
     manifest_valid=0
-  elif ! python3 "$SCRIPT_DIR/manifest_field.py" \
-    --validate-package-tree "$canonical_plugin_dir" \
-    >/dev/null 2>>"$metadata_log"; then
+  elif ! validate_snapshot_trees; then
     manifest_valid=0
   elif [[ ! -f $manifest ]]; then
     echo "error: manifest not found: plugins/$plugin/manifest.toml" | tee -a "$metadata_log" >&2
@@ -262,7 +314,7 @@ for plugin in "$@"; do
 
     if ! diff -qr "$canonical_root" "$build_root" \
       >"$plugin_log_dir/source-mutation.log" 2>&1; then
-      echo "error: plugin commands mutated their source snapshot" \
+      echo "error: plugin commands mutated their validation input snapshot" \
         >>"$plugin_log_dir/build-wasm.log"
       build_rc=125
     fi

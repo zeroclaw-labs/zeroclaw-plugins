@@ -1,0 +1,5 @@
+name: level-01 valid SOL transfer → ALLOW
+policy: merchant
+intent: {action: transfer, amount_raw: "1000000000", recipient: RECIP}
+tx: {kind: sol, amount: 1000000000, recipient: RECIP}
+expect: {verdict: ALLOW}

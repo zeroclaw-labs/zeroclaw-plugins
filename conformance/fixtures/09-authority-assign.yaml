@@ -1,0 +1,5 @@
+name: level-09 System Assign ownership handover → DENY
+policy: merchant
+intent: {action: transfer, amount_raw: "1000000000", recipient: RECIP}
+tx: {kind: sol, amount: 1000000000, recipient: RECIP, authority_op: assign}
+expect: {verdict: DENY, reason_codes: [SH-DENY-AUTH-022]}

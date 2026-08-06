@@ -1,0 +1,10 @@
+name = "squads-proposal-build"
+version = "0.1.0"
+description = "Independently require ALLOW for a vault-native draft, preserve inner instructions unchanged, and build a canonical full unsigned Squads v4 proposal. T1 — holds no keys."
+author = "Safe Hands"
+wasm_path = "squads_proposal_build.wasm"
+capabilities = ["tool"]
+# config_read injects rpc_url, squads_create_key, squads_vault_index, proposer,
+# and policy_json. The proposer member must have permissions exactly Initiate=1,
+# Approve=0, Execute=0. http_client is used for multisig state and evaluation.
+permissions = ["config_read", "http_client"]

@@ -1,0 +1,11 @@
+name = "solana-tx-authorize"
+version = "0.1.0"
+description = "Authorize v0.1 native SOL and classic SPL TransferChecked drafts; Token-2022, plain Transfer, and unresolved ALTs fail closed. T0 — holds no keys."
+author = "Safe Hands"
+wasm_path = "solana_tx_authorize.wasm"
+capabilities = ["tool"]
+# config_read: the host injects this plugin's own config section (rpc_url,
+# policy_json) into execute args as `__config`. http_client: outbound JSON-RPC
+# for simulation. Nothing else is requested; the plugin holds no keys, reads no
+# files, and keeps no state.
+permissions = ["config_read", "http_client"]

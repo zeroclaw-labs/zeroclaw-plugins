@@ -1,0 +1,5 @@
+name: level-03 amount bumped after intent → DENY
+policy: merchant
+intent: {action: transfer, amount_raw: "1000000000", recipient: RECIP}
+tx: {kind: sol, amount: 500000000000, recipient: RECIP}
+expect: {verdict: DENY, reason_codes: [SH-INTENT-AMOUNT]}

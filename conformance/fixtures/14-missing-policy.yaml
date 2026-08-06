@@ -1,0 +1,4 @@
+name: level-14 no policy configured → DENY (fail closed)
+policy: empty
+tx: {kind: sol, amount: 1000, recipient: RECIP}
+expect: {verdict: DENY, reason_codes: [SH-DENY-CONFIG-060]}

@@ -1,0 +1,11 @@
+name = "spl-transfer-build"
+version = "0.1.0"
+description = "Build canonical full unsigned native SOL or classic SPL TransferChecked transactions. T1 — never signs and holds no keys."
+author = "Safe Hands"
+wasm_path = "spl_transfer_build.wasm"
+capabilities = ["tool"]
+# config_read injects rpc_url, fee_payer, and policy_json. For proposal flows,
+# fee_payer must be the derived Squads vault so the draft is vault-native before
+# authorization and the vault is its sole required signer. http_client is used
+# for blockhash and classic mint/account validation.
+permissions = ["config_read", "http_client"]

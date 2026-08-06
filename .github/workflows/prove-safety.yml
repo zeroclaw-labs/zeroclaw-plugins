@@ -1,0 +1,203 @@
+name: prove-safety
+
+# The gate a judge can run themselves: `just prove-safety`, offline, no live
+# network. This workflow runs the same recipes on a clean Ubuntu runner so the
+# claim is checkable without cloning anything.
+#
+# `audit` is deliberately a separate, non-blocking job: it queries the RustSec
+# advisory DB, so a brand-new advisory published upstream would turn this red
+# for reasons unrelated to a code change. It still runs, and it is still
+# visible — it just does not gate the proof.
+
+on:
+  push:
+    branches: [safe-hands]
+  pull_request:
+    branches: [safe-hands]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  prove-safety:
+    name: prove-safety (offline gate)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pinned Rust + wasm32-wasip2
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.96.1
+          targets: wasm32-wasip2
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: prove-safety
+
+      - name: Install just
+        uses: taiki-e/install-action@just
+
+      - name: Install wasm-tools (needed by the capability check)
+        uses: taiki-e/install-action@wasm-tools
+
+      - name: Host tests (RPC mocked, zero network)
+        run: just test
+
+      - name: Attack arena
+        run: just conformance
+
+      - name: Re-derive a recorded decision from its inputs
+        run: just verify-receipt
+
+      - name: Replay the transparency log from genesis
+        run: just log-verify
+
+      - name: clippy -D warnings (host and wasm32-wasip2)
+        run: just clippy
+
+      - name: Release components for wasm32-wasip2
+        run: just wasm
+
+      - name: Capability check against the compiled .wasm import tables
+        run: just verify-capabilities
+
+      - name: Publish component hashes from this clean runner
+        run: |
+          echo "### Artifact provenance — Linux runner" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "rustc: $(rustc --version)" >> "$GITHUB_STEP_SUMMARY"
+          echo "target: wasm32-wasip2" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo '```text' >> "$GITHUB_STEP_SUMMARY"
+          sha256sum dist/local/*/*.wasm | sed 's|dist/local/||' >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "The README publishes the same hashes from a Windows build. Rust is not" >> "$GITHUB_STEP_SUMMARY"
+          echo "bit-for-bit reproducible across platforms by default, so these may differ" >> "$GITHUB_STEP_SUMMARY"
+          echo "while being functionally identical — which is why the capability check" >> "$GITHUB_STEP_SUMMARY"
+          echo "above reads the compiled import tables rather than trusting a hash." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Execute the shipped components in a real wasm runtime
+        run: just component-test
+
+      - name: Summary
+        run: |
+          echo "### prove-safety: ALL GREEN" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "Offline gate passed on a clean runner:" >> "$GITHUB_STEP_SUMMARY"
+          echo "- host tests, attack arena, receipt re-derivation, log replay" >> "$GITHUB_STEP_SUMMARY"
+          echo "- clippy -D warnings on host **and** wasm32-wasip2" >> "$GITHUB_STEP_SUMMARY"
+          echo "- capability check read from the compiled .wasm import tables" >> "$GITHUB_STEP_SUMMARY"
+          echo "- components executed in a real WebAssembly runtime" >> "$GITHUB_STEP_SUMMARY"
+
+  audit:
+    name: supply-chain audit (informational)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.96.1
+      - uses: taiki-e/install-action@just
+      - uses: taiki-e/install-action@cargo-audit
+      - name: cargo audit over every pinned lockfile
+        run: just audit
+
+  kani:
+    name: machine-checked proofs (kani)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.96.1
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: kani
+
+      - uses: taiki-e/install-action@just
+
+      # The twelve proofs are the strongest claim this project makes, and
+      # nothing was discharging them automatically. Kani is Linux/macOS only,
+      # so contributors on Windows cannot run them at all — which meant
+      # "proven" rested on someone having run it locally, once.
+      - name: Install kani
+        run: |
+          cargo install --locked kani-verifier
+          cargo kani setup
+
+      - name: Discharge the authorization invariants
+        run: |
+          cargo kani --manifest-path libs/safe-hands-core/Cargo.toml             --harness policy::resolved::proofs
+
+      - name: Summary
+        run: |
+          echo "### Kani: authorization invariants discharged" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "12 harnesses over \`ResolvedFacts\`, every one of its 42 fields" >> "$GITHUB_STEP_SUMMARY"
+          echo "\`kani::any()\` simultaneously — the whole decision space, not a" >> "$GITHUB_STEP_SUMMARY"
+          echo "sample of it. ALLOW-requires-every-check is a theorem here." >> "$GITHUB_STEP_SUMMARY"
+
+  kani-decode:
+    name: decoder proofs (kani, non-blocking)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.96.1
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: kani-decode
+      # Bounded-input proofs of the decoder: no panic, and decoding is a
+      # function. Non-blocking because symbolic execution through a parser can
+      # fail to terminate in a way the policy proofs cannot - the model there
+      # is heap-free by construction, this one is not.
+      - name: Install kani
+        run: |
+          cargo install --locked kani-verifier
+          cargo kani setup
+
+      # Bounded by `timeout` in the shell rather than by the job's
+      # `timeout-minutes`. A job that hits its own limit is *cancelled*, and a
+      # cancelled job makes the whole run cancelled no matter what
+      # `continue-on-error` says - so the three jobs above would report green
+      # while the run itself read red. Exiting 124 is an ordinary failure,
+      # which `continue-on-error` on the step does absorb.
+      - name: Prove the decoder over bounded input
+        id: decode
+        continue-on-error: true
+        run: |
+          timeout 25m cargo kani --manifest-path libs/safe-hands-core/Cargo.toml             --harness decode_proofs
+
+      - name: Summary
+        if: always()
+        run: |
+          if [ "${{ steps.decode.outcome }}" = "success" ]; then
+            echo "### Decoder proofs: discharged" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "No input up to the stated bound makes \`decode\` panic, and decoding" >> "$GITHUB_STEP_SUMMARY"
+            echo "the same bytes twice gives the same answer." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "### Decoder proofs: did not finish within 25 minutes" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "This is recorded rather than hidden. Symbolic execution through a" >> "$GITHUB_STEP_SUMMARY"
+            echo "hand-rolled parser is not guaranteed to terminate; ROADMAP.md already" >> "$GITHUB_STEP_SUMMARY"
+            echo "records that N=8 did not terminate and what that measures." >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "The same property - decode never panics - is asserted by" >> "$GITHUB_STEP_SUMMARY"
+            echo "\`tests/decode_hostile.rs\`, which runs on every platform inside the" >> "$GITHUB_STEP_SUMMARY"
+            echo "blocking gate above. Only the *exhaustive* form is unproven here." >> "$GITHUB_STEP_SUMMARY"
+          fi

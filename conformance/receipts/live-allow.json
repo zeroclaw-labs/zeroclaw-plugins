@@ -1,0 +1,22 @@
+{
+ "transaction_base64": "AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABAAYJszrOnXkTQnjn+usGnsIZJURxCYbQnn2yP0sgqe5Jfw+C5fYuA5OdX4wcwQj7oZQHZCqpco1xdiW+y/yIwOAVSKlqC1eNsdXZNJJAgdvJKp4TFPs/Gms2MXMdU2To1bvEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFSlNamSkhBk0k6HFg2jh8fDW13bySu4HkH6hAQQVEjQbd9uHXZaGT2cvhRs7reawctIXtX1s3kTqM9YV+/wCpO0Qss5EhV/E6kz0BNCgtAytf/s0Botvxt3kGCN8ALqeMlyWPTiSJ8bs9ECkUjg2DC1oTmdr/EIQEjnvY2+n4Wb96x55V67J115Xj4zQivNigbPK+cPGlLxuQTCJI68U/ngzwIWHPguLIEkyh8E2AOJQTY8cm0PL/oFViR0JbZ9kDBwYAAQgGAwUBAQUEAgYBAAoMQEIPAAAAAAAGBAAJUkVDRUlQVC0x",
+ "policy_json": "{\"version\":\"1.0.0\",\"default_action\":\"deny\",\"assets\":{\"SOL\":{\"decimals\":9,\"max_per_tx_raw\":\"200000000\"},\"4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU\":{\"decimals\":6,\"max_per_tx_raw\":\"25000000\"}},\"allowed_recipients\":[\"DtTTXQWyzFQ11LsQZR2du6FB4bFJqQUmSCU3VvyQqC3G\"],\"allowed_nonce_accounts\":[\"41bWd8Nqz6oLBKUdVwWPDP27NgFsvXM7V2sCoYRCo5Th\"],\"allowed_instructions\":{\"system\":[\"transfer\",\"advance_nonce\"],\"spl_token\":[\"transfer_checked\"],\"associated_token\":[\"create_idempotent\"],\"memo\":[\"memo\"]},\"unknown_program\":\"deny\",\"unknown_instruction\":\"deny\",\"missing_intent\":\"review\",\"durable_nonce\":\"review\",\"token_2022\":{\"permanent_delegate\":\"deny\",\"transfer_hook\":\"deny\",\"transfer_fee\":\"deny\",\"default_frozen\":\"deny\"},\"simulation\":{\"required\":true,\"max_slot_age\":32}}",
+ "decision": {
+  "decision_id": "sha256:552bd3d21ac0bdc7a608be9a4c071e4d5d5723430e41773fc4a2e96ac142bb1f",
+  "matched_rules": [],
+  "message_sha256": "sha256:7da2f55ea126369e8a102a60433a9074e95a1fe2fe4f75c5763967169e26f06d",
+  "next_action": "SIGN_OR_SQUADS_PROPOSE",
+  "policy_sha256": "sha256:74100bbf53dce397dd962b4cbc8e39cc01e98bea6aa693622a6f55c83ada8f17",
+  "reason_codes": [],
+  "summary": "ALLOW \u2014 sends 1000000 raw 4zMM\u2026 to 9oyP\u2026yjXd. Instructions: associated_token.create_idempotent, spl_token.transfer_checked, memo.memo.",
+  "verdict": "ALLOW"
+ },
+ "intent": {
+  "action": "spl_transfer",
+  "amount_raw": "1000000",
+  "memo": "RECEIPT-1",
+  "mint": "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU",
+  "recipient": "DtTTXQWyzFQ11LsQZR2du6FB4bFJqQUmSCU3VvyQqC3G"
+ },
+ "simulation_ok": true
+}

@@ -1,0 +1,5 @@
+name: level-11 durable nonce (delayed execution pattern) → REVIEW
+policy: merchant
+intent: {action: transfer, amount_raw: "1000000000", recipient: RECIP}
+tx: {kind: sol, amount: 1000000000, recipient: RECIP, durable_nonce: true}
+expect: {verdict: REVIEW, reason_codes: [SH-REVIEW-NONCE-009]}

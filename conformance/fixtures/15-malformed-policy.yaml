@@ -1,0 +1,4 @@
+name: level-15 malformed policy document → DENY (fail closed)
+policy: malformed
+tx: {kind: sol, amount: 1000, recipient: RECIP}
+expect: {verdict: DENY, reason_codes: [SH-DENY-CONFIG-061]}

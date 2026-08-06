@@ -1,0 +1,6 @@
+name: level-18 RPC unreachable → UNKNOWN (fail closed)
+policy: merchant
+intent: {action: transfer, amount_raw: "1000000000", recipient: RECIP}
+tx: {kind: sol, amount: 1000000000, recipient: RECIP}
+simulation: down
+expect: {verdict: UNKNOWN, reason_codes: [SH-UNKNOWN-RPC-050]}

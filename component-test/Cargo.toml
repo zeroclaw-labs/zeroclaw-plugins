@@ -1,0 +1,19 @@
+[package]
+name = "component-test"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Execute the shipped wasm32-wasip2 components in a real WebAssembly runtime and assert their verdicts. Tests the artifact an operator installs, not the source it was built from."
+publish = false
+
+[dependencies]
+wasmtime = "47.0.2"
+wasmtime-wasi = "47.0.2"
+wasmtime-wasi-http = "47.0.2"
+anyhow = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Standalone crate: it links a full WebAssembly runtime, which nothing else
+# here needs. Kept out of the plugin workspaces so their builds stay minimal.
+[workspace]
