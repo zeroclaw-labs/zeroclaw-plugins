@@ -153,8 +153,16 @@ What is missing:
   and fifteen hostile policy documents including a duplicate key whose second
   value is permissive. One invariant throughout — degrade to refusal, never to
   permission. All passed unchanged; the behaviour was already right, and is
-  now pinned. **A model that has been compromised rather than merely fooled
-  remains untested.**
+  now pinned.
+- **A compromised model, not merely a fooled one.** *Addressed.*
+  `tests/compromised_model.rs`. Every other injection test assumes a model that
+  has been tricked; this one assumes it is cooperating with the attacker and
+  therefore produces no contradiction to notice — a transfer, an intent that
+  describes it exactly, a passing simulation, all consistent. What it cannot
+  supply is the operator policy, which arrives from host config. Seven cases
+  plus a control that must be ALLOW, so the suite cannot pass by refusing
+  everything. If any of them fails, intent matching has been promoted from a
+  second check into a substitute for the first.
 - **Attacking the human.** The approval step is the weakest link in the whole
   design and the least tested. Nobody has tried to construct a proposal that
   a tired operator approves at 11pm. We would expect that to succeed.
@@ -189,6 +197,20 @@ more layers; the current shape is defensible, not ideal.
 
 1. Prove `decode()`, or shrink it until it can be proven. It is the weakest
    link and everything above it inherits its correctness.
+
+   *Started.* `src/decode_proofs.rs` proves the property that matters most —
+   **no input up to N bytes makes the decoder panic** — plus decoding-is-a-
+   function, as theorems rather than fuzzing results. In a `wasm32-wasip2`
+   component a panic is a trap, and a host reading a trap as anything but
+   *refuse* has failed open. The bounds are small (8, 6 and 3 bytes) because
+   Kani explores the entire input space, so each byte costs exponentially; they
+   reach past the signature shortvec, the version byte and the message header,
+   where a truncated buffer and a lying length prefix are both in play. This
+   runs as a **non-blocking** CI job: symbolic execution through a parser can
+   fail to terminate in a way the heap-free policy model cannot, and a
+   speculative proof must not be able to turn the gate red. Raising the bound
+   meaningfully, or restructuring `decode` so the bound stops mattering, is
+   still the work.
 2. Verified builds, so the artifact needs no trust separate from the source.
 3. Continuous fuzzing with a persistent corpus.
 4. Independent review.
