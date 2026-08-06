@@ -71,6 +71,10 @@ contain. Roughly 90 seconds offline, two minutes with the network.
 The point is not that it says PASS. The point is that every row names a command
 you can run to make it say FAIL.
 
+That run is not from this working tree: [`demo/judge-clean-clone.md`](demo/judge-clean-clone.md)
+is a cold `git clone --depth 1` of this branch on a machine with nothing cached,
+verified start to finish including the on-chain anchor. 10 passed, 0 failed.
+
 ## Where to look — the claims, and what checks each one
 
 Every row is a claim we make and the thing a stranger can run or read to
