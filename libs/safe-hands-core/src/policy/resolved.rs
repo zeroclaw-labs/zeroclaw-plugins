@@ -305,7 +305,25 @@ pub fn resolve(policy: &Policy, facts: &TxFacts) -> ResolvedFacts {
             }
         }
         if ix.program.starts_with("unknown:") {
-            r.has_unknown_program = true;
+            // Mirror `evaluate()` exactly: an unfamiliar program is forgiven
+            // only when the operator named it AND effect analysis produced
+            // evidence. Naming without evidence is a blank cheque; evidence
+            // without naming would admit any program that stayed under a cap.
+            //
+            // This carve-out was missing here, so the model denied what the
+            // engine allowed and the proofs said nothing about this path. An
+            // independent review found it; the agreement tests could not,
+            // because neither ever varies the instruction list.
+            let admitted = policy.effects.as_ref().is_some_and(|effects| {
+                effects.required
+                    && facts.effects.is_some()
+                    && effects
+                        .admitted_programs
+                        .contains(ix.program.trim_start_matches("unknown:"))
+            });
+            if !admitted {
+                r.has_unknown_program = true;
+            }
             continue;
         }
         match (policy.allowed_instructions.get(&ix.program), &ix.name) {

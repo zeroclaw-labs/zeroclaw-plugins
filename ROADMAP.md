@@ -33,36 +33,34 @@ every one of the 42 fields simultaneously, so they cover the entire decision
 space rather than a sample of it. "ALLOW requires every hard check to pass" is
 a theorem here, not a test result.
 
-**Not proven, only tested — and currently divergent.** `resolve()` is supposed
-to produce the same verdict as `evaluate()`. It does not, on one path, and two
-independent reviewers found it before we did.
+**Not proven, only tested — and it *was* divergent.** *Fixed.*
 
-`evaluate()` forgives an `unknown:` program when effects are required, present,
-and the program is on the operator's admitted list (`policy.rs:435-441`).
-`resolve()` implements no such carve-out (`policy/resolved.rs:307-310`) — it
-sets `has_unknown_program` unconditionally, and `ResolvedFacts` has no field to
-express admission. Run on the repository's own ALLOW fixture, the engine says
-`Allow` and the model says `Deny`.
+`resolve()` is the heap-free restatement of `evaluate()` that the twelve proofs
+run against. On one path it did not restate it. `evaluate()` forgives an
+`unknown:` program when effects are required, present, and the operator has
+admitted the program (`policy.rs:435-441`); `resolve()` denied unconditionally.
+On the repository's own ALLOW fixture the engine said `Allow` and the model
+said `Deny`.
 
-Two things follow, and both matter:
+Every divergence observed ran model-*stricter*, so nothing was exploitable —
+but the transfer argument is one-directional. Reading "the model never allows X"
+as a claim about the engine needs *engine-ALLOW ⇒ model-ALLOW*, and that was
+false. On the admitted-program path — the one place the engine deliberately
+permits a program nobody decoded — the proofs said nothing at all.
 
-- **Every divergence found runs model-stricter-than-engine** (59 in a
-  6552-combination sweep, none the other way). So there is no exploit here.
-- **The proofs still do not transfer.** Reading "the model can never ALLOW X"
-  as a statement about the engine requires *engine-ALLOW ⇒ model-ALLOW*, and
-  that implication is false. On the admitted-program path — the one place the
-  engine deliberately permits a program nobody decoded — the twelve proofs say
-  nothing.
+The carve-out is now mirrored in the model, and
+`tests/model_agreement.rs` pins it: the exact divergent case, every reachable
+corner of the three conditions the admission depends on, an unlisted
+instruction on a known program, and a positive control that an unnamed program
+is refused by both. Reverting the model change makes those tests fail with the
+engine/model verdicts printed, which is the property that was missing.
 
-The agreement tests cannot see it: both build every input from a helper whose
-instruction list is hard-coded, so **17 of 34 boolean fields are never
-exercised**, and `has_unknown_program` is one of them. Raising
-`SH_PROPTEST_CASES` does not help — the field is unreachable at any count.
-
-The README previously said drift would be caught "immediately". It was not.
-The fix is to implement admission in `resolve()` (or drop the carve-out from
-`evaluate()`), and to make the agreement test vary the instruction list and
-fail when a field stops being exercised.
+**Why the existing agreement tests could not see it:** both build every input
+from one helper whose instruction list is hard-coded, so 17 of 34 boolean
+fields — including `has_unknown_program` — were never exercised at any
+`SH_PROPTEST_CASES` value. Varying the instruction list is what the new file
+does. Making the in-crate proptest do the same, and failing the build when a
+field stops being exercised, is still worth doing.
 
 **Not proven, only fuzzed:** that `decode()` turns adversarial bytes into
 honest `TxFacts`. An attacker who could make the decoder mis-describe a
