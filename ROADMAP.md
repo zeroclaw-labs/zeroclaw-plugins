@@ -58,8 +58,12 @@ bytes). Green at 200k cases, no findings. This narrows the gap; it does not
 close it. Proving the decoder, or shrinking it until it can be proven, remains
 the top item in §8.
 
-Kani also does not run on Windows, so contributors on that platform cannot
-reproduce the proofs locally. `just prove` is Linux/macOS only.
+Kani does not run on Windows, so contributors on that platform cannot
+reproduce the proofs locally — `just prove` is Linux/macOS only. *Addressed
+where it matters:* the proofs now run in CI on every push
+(`prove-safety.yml`, job `machine-checked proofs (kani)`), so "proven" is a
+result anyone can check in the Actions tab rather than a claim resting on
+someone having run it locally, once.
 
 ---
 
@@ -141,10 +145,16 @@ them as a red team would be dishonest.
 What is missing:
 
 - **Humans paid to break it**, with the transcripts published either way.
-- **Chaos at each trust boundary, not just the prompt.** A lying RPC. A
-  corrupted policy file. A model that has been compromised rather than merely
-  fooled. We test the prompt boundary hardest because it is the one we can
-  simulate cheaply — which is a poor reason.
+  Still outstanding, and the most valuable thing we do not have.
+- **Chaos at each trust boundary, not just the prompt.** *Addressed.*
+  `tests/chaos_boundaries.rs` now covers the RPC and the policy document: a
+  simulation slot ahead of the chain, a stale one, eight shapes of malformed
+  evidence, an unreachable endpoint, a mint the endpoint will not describe,
+  and fifteen hostile policy documents including a duplicate key whose second
+  value is permissive. One invariant throughout — degrade to refusal, never to
+  permission. All passed unchanged; the behaviour was already right, and is
+  now pinned. **A model that has been compromised rather than merely fooled
+  remains untested.**
 - **Attacking the human.** The approval step is the weakest link in the whole
   design and the least tested. Nobody has tried to construct a proposal that
   a tired operator approves at 11pm. We would expect that to succeed.
