@@ -915,8 +915,21 @@ proptest! {
     fn split_aggregate_over_cap_never_allows(
         amounts in prop::collection::vec(1u128..=25_000_000u128, 1..8)
     ) {
+        // Construct the over-cap aggregate rather than rejecting draws that
+        // miss it. `prop_assume!(sum > cap)` discards every single-transfer
+        // draw and most small ones, so proptest hit its global reject budget
+        // and aborted the moment this ran at more than a few hundred cases —
+        // which meant this property, the backbone of the split-bypass claim,
+        // could never be soaked. Topping the draw up keeps every transfer at
+        // or under the per-tx cap, so the aggregate rule is still the only one
+        // that can fire.
+        let mut amounts = amounts;
+        let drawn: u128 = amounts.iter().sum();
+        if drawn <= 25_000_000u128 {
+            amounts.push(25_000_000u128 - drawn + 1);
+        }
         let sum: u128 = amounts.iter().sum();
-        prop_assume!(sum > 25_000_000u128);
+        prop_assert!(sum > 25_000_000u128);
         let mut f = usdc_transfer(amounts[0], RECIP);
         f.transfers = amounts
             .iter()
