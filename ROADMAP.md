@@ -299,13 +299,26 @@ more layers; the current shape is defensible, not ideal.
    speculative proof must not be able to turn the gate red.
 
    **Measured, and worse than hoped:** at `N = 8` it did not terminate inside
-   90 minutes on CI. The bound is now 4 bytes. That number is the useful
-   output of the attempt — the obstacle is the *shape of the code*, not the
-   amount of solver time available. A decoder assembled from bounded,
-   heap-free steps would be provable at a width worth having; this one reads
-   length prefixes out of the same buffer that bounds it, and symbolic
-   execution has to carry every resulting path. So the first move is to
-   restructure `decode` until it can be proven, not to keep raising `N`.
+   90 minutes on CI. The bound was lowered to 4 bytes.
+
+   **Worse still, and measured later:** `N = 4` does not terminate either.
+   Two independent CI observations — one job cancelled after burning ~30
+   minutes of solver time, and one bounded run that exited 124 at the
+   25-minute mark, neither emitting a single `VERIFICATION:- SUCCESSFUL`
+   line. So the honest statement is not "the bound is now 4"; it is that
+   **no bound we have tried discharges these harnesses on CI**, and the job
+   reports that in its own summary rather than going quietly green. The
+   property is still covered — `tests/decode_hostile.rs` asserts
+   decode-never-panics on every platform inside the blocking gate — but it
+   is covered by tests, not by a theorem.
+
+   That is the useful output of the attempt: the obstacle is the *shape of
+   the code*, not the amount of solver time available. A decoder assembled
+   from bounded, heap-free steps would be provable at a width worth having;
+   this one reads length prefixes out of the same buffer that bounds it, and
+   symbolic execution has to carry every resulting path. So the first move
+   is to restructure `decode` until it can be proven, not to keep raising
+   `N` — and, until then, to stop implying any `N` works.
 2. Verified builds, so the artifact needs no trust separate from the source.
 3. Continuous fuzzing with a persistent corpus.
 4. Independent review.
