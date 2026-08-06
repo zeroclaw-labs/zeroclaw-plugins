@@ -92,6 +92,7 @@ falsify it. Nothing here asks you to take our word.
 | Prompt injection fails closed | [`## Prompt-injection transcript`](#prompt-injection-transcript) and the live run above |
 | An operator can run this | [`REPRODUCE.md`](REPRODUCE.md) |
 | The shipped binary is the one described | [`## Artifact provenance`](#artifact-provenance) — sha256 of every component |
+| The decoder survives hostile bytes | **2M fuzz inputs, 0 crashes** — [`EVIDENCE-fuzz.md`](EVIDENCE-fuzz.md), run with `just fuzz` |
 
 ## Artifact provenance
 
