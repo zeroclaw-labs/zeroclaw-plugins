@@ -1,7 +1,7 @@
 //! Host tests for strict Squads proposal construction.
 
 use super::*;
-use safe_hands_core::codec::{base64_encode, shortvec_decode};
+use safe_hands_core::codec::{base64_decode, base64_encode, shortvec_decode};
 use safe_hands_core::crypto::{parse_pubkey, TOKEN_PROGRAM};
 use safe_hands_core::ix;
 use safe_hands_core::rpc::{DownTransport, MockTransport};
@@ -70,7 +70,11 @@ fn multisig_account_b64_with_state(
 ) -> String {
     let mut data = MULTISIG_DISCRIMINATOR.to_vec();
     data.extend_from_slice(&parse_pubkey(create_key).unwrap().to_bytes());
-    data.extend_from_slice(&[8u8; 32]); // config_authority
+    // Autonomous multisig: config_authority unset. A Controlled multisig has a
+    // key that can add members and change the threshold without a vote, which
+    // would make the Initiate-only proposer check meaningless — the builder
+    // refuses those outright, and `a_controlled_multisig_is_refused` covers it.
+    data.extend_from_slice(&[0u8; 32]); // config_authority (Autonomous)
     data.extend_from_slice(&1u16.to_le_bytes()); // threshold
     data.extend_from_slice(&0u32.to_le_bytes()); // time_lock
     data.extend_from_slice(&transaction_index.to_le_bytes());
@@ -513,4 +517,42 @@ fn transaction_index_overflow_and_rpc_down_refuse() {
     assert!(!out.success);
     assert!(out.error.unwrap().contains("overflow"));
     assert!(!run(&args, Some(&DownTransport as &dyn RpcTransport)).success);
+}
+
+#[test]
+fn a_controlled_multisig_is_refused() {
+    // The same account the happy path uses, with only config_authority set.
+    // Building the bytes by hand here would test the parser, not the rule —
+    // an earlier draft did exactly that and refused for a malformed-account
+    // reason instead of the one under test.
+    //
+    // A Controlled multisig's config_authority can call multisig_add_member
+    // and multisig_change_threshold with no vote, so an Initiate-only proposer
+    // proves nothing about what the agent can approve.
+    let mut data = base64_decode(&multisig_account_b64(CREATE_KEY, PROPOSER, 1, 41), 4096).unwrap();
+    // discriminator(8) + create_key(32) => config_authority occupies 40..72
+    data[40..72].copy_from_slice(&[8u8; 32]);
+
+    let rpc = transport_with(
+        json!({"result":{"context":{"slot":100},"value":{"err":null}}}),
+        json!({"result":100}),
+        account_value(squads::SQUADS_PROGRAM, base64_encode(&data)),
+        41,
+    );
+    let args = args_with(
+        &vault_transfer_b64(1_000_000_000),
+        1_000_000_000,
+        &config(2_000_000_000),
+    );
+    let out = run(&args, Some(&rpc as &dyn RpcTransport));
+
+    assert!(
+        !out.success,
+        "a Controlled multisig must be refused, not proposed against"
+    );
+    let rendered = format!("{:?}", out.error);
+    assert!(
+        rendered.contains("Controlled"),
+        "the refusal must name the reason: {rendered}"
+    );
 }
