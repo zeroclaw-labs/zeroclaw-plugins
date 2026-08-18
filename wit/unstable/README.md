@@ -2,7 +2,9 @@
 
 Status: **Experimental** — This version is currently experimental and can be freely modified until the Component Model ABI ships; no `wit/v0/.frozen` marker is present.
 
-Gated behind the `plugins-wit-v0` feature (see `@unstable` annotations).
+Core interfaces are gated behind `plugins-wit-v0`; transport imports use
+their own `plugins-wit-v0-websocket` and `plugins-wit-v0-sockets` gates
+(see `@unstable` annotations).
 
 **Stability fence**: `wit/v0/.frozen` does not yet exist. It is created in a
 dedicated PR when `zeroclaw-plugins` ships the first 0.1.0 stable release with
