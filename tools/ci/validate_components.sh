@@ -148,7 +148,7 @@ for plugin in "$@"; do
     manifest_valid=0
   elif [[ -n $(
     git status --porcelain=v1 --untracked-files=all --ignored=matching \
-      -- "$checkout_plugin_dir" "$REPOSITORY_ROOT/wit/v0"
+      -- "$checkout_plugin_dir" "$REPOSITORY_ROOT/wit"
   ) ]]; then
     echo "error: checkout is not clean before validating $plugin" \
       | tee -a "$metadata_log" >&2
@@ -158,8 +158,10 @@ for plugin in "$@"; do
     "$build_root/plugins" "$build_root/wit" \
     || ! cp -R "$checkout_plugin_dir" "$canonical_root/plugins/" \
     || ! cp -R "$REPOSITORY_ROOT/wit/v0" "$canonical_root/wit/" \
+    || ! cp -R "$REPOSITORY_ROOT/wit/unstable" "$canonical_root/wit/" \
     || ! cp -R "$checkout_plugin_dir" "$build_root/plugins/" \
-    || ! cp -R "$REPOSITORY_ROOT/wit/v0" "$build_root/wit/"; then
+    || ! cp -R "$REPOSITORY_ROOT/wit/v0" "$build_root/wit/" \
+    || ! cp -R "$REPOSITORY_ROOT/wit/unstable" "$build_root/wit/"; then
     echo "error: could not snapshot committed inputs for $plugin" \
       | tee -a "$metadata_log" >&2
     manifest_valid=0
