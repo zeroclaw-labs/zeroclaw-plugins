@@ -68,7 +68,7 @@ mod component {
         /// Persisted `get_updates_buf` cursor.
         static CURSOR: RefCell<String> = const { RefCell::new(String::new()) };
         /// Drained one message per `poll_message`.
-        static BUFFER: RefCell<VecDeque<Inbound>> = RefCell::new(VecDeque::new());
+        static BUFFER: RefCell<VecDeque<Inbound>> = const { RefCell::new(VecDeque::new()) };
         /// Per-sender `context_token` cache, harvested on poll and read on send.
         static CONTEXT_TOKENS: RefCell<HashMap<String, String>> = RefCell::new(HashMap::new());
         /// Monotonic counter feeding per-request `client_id` / `X-WECHAT-UIN`.
@@ -256,7 +256,7 @@ mod component {
             match post_ilink(&url, &token, &build_getconfig_body(CHANNEL_VERSION)) {
                 Ok((status, val)) => {
                     status < 400
-                        && response_error_code(&val).map_or(true, |code| !is_session_expired(code))
+                        && response_error_code(&val).is_none_or(|code| !is_session_expired(code))
                 }
                 Err(_) => false,
             }

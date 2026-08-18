@@ -46,7 +46,7 @@ mod component {
     thread_local! {
         static CONFIG: RefCell<TelegramConfig> = RefCell::new(TelegramConfig::default());
         static OFFSET: Cell<i64> = const { Cell::new(0) };
-        static BUFFER: RefCell<VecDeque<Inbound>> = RefCell::new(VecDeque::new());
+        static BUFFER: RefCell<VecDeque<Inbound>> = const { RefCell::new(VecDeque::new()) };
         static SELF_HANDLE: RefCell<Option<String>> = const { RefCell::new(None) };
     }
 

@@ -49,7 +49,7 @@ mod component {
         // Poll cursor: the platform id of the last delivered message, sent as
         // `?since_id=` on the next receive request.
         static CURSOR: RefCell<Option<String>> = const { RefCell::new(None) };
-        static BUFFER: RefCell<VecDeque<Inbound>> = RefCell::new(VecDeque::new());
+        static BUFFER: RefCell<VecDeque<Inbound>> = const { RefCell::new(VecDeque::new()) };
         // Belt-and-suspenders with `since_id`: never re-deliver a message id we
         // have already handed out, even if the server ignores the cursor.
         static DEDUP: RefCell<DedupSet> = RefCell::new(DedupSet::default());

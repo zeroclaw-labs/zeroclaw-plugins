@@ -48,7 +48,7 @@ mod component {
     thread_local! {
         static CONFIG: RefCell<TwitterConfig> = RefCell::new(TwitterConfig::default());
         static SINCE_ID: RefCell<Option<String>> = const { RefCell::new(None) };
-        static BUFFER: RefCell<VecDeque<Inbound>> = RefCell::new(VecDeque::new());
+        static BUFFER: RefCell<VecDeque<Inbound>> = const { RefCell::new(VecDeque::new()) };
         static SELF_ID: RefCell<Option<String>> = const { RefCell::new(None) };
         static SELF_HANDLE: RefCell<Option<String>> = const { RefCell::new(None) };
     }

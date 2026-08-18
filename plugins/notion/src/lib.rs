@@ -54,7 +54,7 @@ mod component {
         // Detected once from the database schema: "status" or "select". `None`
         // until probed; the filters/payloads differ between the two types.
         static STATUS_TYPE: RefCell<Option<String>> = const { RefCell::new(None) };
-        static BUFFER: RefCell<VecDeque<Inbound>> = RefCell::new(VecDeque::new());
+        static BUFFER: RefCell<VecDeque<Inbound>> = const { RefCell::new(VecDeque::new()) };
     }
 
     fn now_millis() -> u64 {
