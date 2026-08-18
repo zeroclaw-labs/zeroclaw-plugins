@@ -35,9 +35,9 @@ mod component {
     use serde_json::Value;
 
     use crate::notion::{
-        Inbound, NOTION_VERSION, NotionConfig, build_complete_payload, build_query_body,
-        build_recover_payload, build_status_update_payload, database_url, detect_status_type,
-        page_url, parse_pending, query_url,
+        build_complete_payload, build_query_body, build_recover_payload,
+        build_status_update_payload, database_url, detect_status_type, page_url, parse_pending,
+        query_url, Inbound, NotionConfig, NOTION_VERSION,
     };
 
     use exports::zeroclaw::plugin::channel::{
@@ -249,7 +249,8 @@ mod component {
                 // in `send`. If the claim write fails, leave the row for a later
                 // poll rather than deliver a task we cannot mark in-flight.
                 let purl = page_url(&cfg.api_base_url, &inb.id);
-                let claim = build_status_update_payload(&cfg.status_property, &status_type, "running");
+                let claim =
+                    build_status_update_payload(&cfg.status_property, &status_type, "running");
                 match patch_json(&purl, &cfg.api_key, &claim) {
                     Ok((s, _)) if s < 400 => {}
                     _ => continue,

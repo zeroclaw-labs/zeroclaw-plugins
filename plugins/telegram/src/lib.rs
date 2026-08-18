@@ -29,8 +29,8 @@ mod component {
     use serde_json::Value;
 
     use crate::telegram::{
-        Inbound, TelegramConfig, build_send_payload, chunk_text, extract_updates, is_user_allowed,
-        next_offset, parse_update, split_recipient,
+        build_send_payload, chunk_text, extract_updates, is_user_allowed, next_offset,
+        parse_update, split_recipient, Inbound, TelegramConfig,
     };
 
     use exports::zeroclaw::plugin::channel::{
@@ -139,8 +139,12 @@ mod component {
             let (chat_id, thread) = split_recipient(&message.recipient);
             let url = endpoint(&cfg, "sendMessage");
             for chunk in chunk_text(&message.content, MAX_MESSAGE_CHARS) {
-                let body =
-                    build_send_payload(&chat_id, &chunk, thread.as_deref(), cfg.parse_mode.as_deref());
+                let body = build_send_payload(
+                    &chat_id,
+                    &chunk,
+                    thread.as_deref(),
+                    cfg.parse_mode.as_deref(),
+                );
                 let resp = post_json(&url, &body)?;
                 if resp.get("ok").and_then(Value::as_bool) != Some(true) {
                     // A rejected parse_mode (bad HTML/Markdown) is the common

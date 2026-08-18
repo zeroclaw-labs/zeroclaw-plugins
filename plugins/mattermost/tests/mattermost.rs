@@ -2,11 +2,11 @@
 //! wasm component runs, exercised with plain `cargo test` (no token, no network,
 //! no wasm).
 
-use serde_json::json;
 use mattermost::mattermost::{
-    MattermostConfig, build_send_body, extract_posts, parse_post, parse_self_user_id,
-    parse_self_username, post_create_at, posts_poll_url, posts_url, split_recipient,
+    build_send_body, extract_posts, parse_post, parse_self_user_id, parse_self_username,
+    post_create_at, posts_poll_url, posts_url, split_recipient, MattermostConfig,
 };
+use serde_json::json;
 
 fn post(id: &str, user: &str, message: &str, create_at: i64, root_id: &str) -> serde_json::Value {
     json!({
@@ -22,8 +22,12 @@ fn post(id: &str, user: &str, message: &str, create_at: i64, root_id: &str) -> s
 #[test]
 fn parses_a_basic_post_into_a_threaded_reply_target() {
     // thread_replies=true → a top-level post threads on its own id.
-    let inb = parse_post(&post("p1", "user1", "hello world", 1_700_000_000_000, ""), "bot1", true)
-        .expect("post maps");
+    let inb = parse_post(
+        &post("p1", "user1", "hello world", 1_700_000_000_000, ""),
+        "bot1",
+        true,
+    )
+    .expect("post maps");
     assert_eq!(inb.id, "mattermost_p1");
     assert_eq!(inb.sender, "user1");
     assert_eq!(inb.content, "hello world");
@@ -35,8 +39,12 @@ fn parses_a_basic_post_into_a_threaded_reply_target() {
 
 #[test]
 fn top_level_post_without_thread_replies_targets_the_channel() {
-    let inb = parse_post(&post("p1", "user1", "hi", 1_700_000_000_000, ""), "bot1", false)
-        .expect("maps");
+    let inb = parse_post(
+        &post("p1", "user1", "hi", 1_700_000_000_000, ""),
+        "bot1",
+        false,
+    )
+    .expect("maps");
     assert_eq!(inb.reply_target, "chan1");
     assert_eq!(inb.thread_ts, None);
 }
@@ -44,8 +52,12 @@ fn top_level_post_without_thread_replies_targets_the_channel() {
 #[test]
 fn reply_in_an_existing_thread_stays_in_the_thread() {
     // Even with thread_replies=false, a post with a root_id keeps threading.
-    let inb = parse_post(&post("p2", "user1", "reply", 1_700_000_000_000, "root9"), "bot1", false)
-        .expect("maps");
+    let inb = parse_post(
+        &post("p2", "user1", "reply", 1_700_000_000_000, "root9"),
+        "bot1",
+        false,
+    )
+    .expect("maps");
     assert_eq!(inb.reply_target, "chan1:root9");
     assert_eq!(inb.thread_ts.as_deref(), Some("root9"));
 }
@@ -53,15 +65,30 @@ fn reply_in_an_existing_thread_stays_in_the_thread() {
 #[test]
 fn skips_our_own_posts() {
     // user_id == self_user_id → dropped (self-loop guard).
-    assert!(parse_post(&post("p1", "bot1", "my own message", 1_700_000_000_000, ""), "bot1", true).is_none());
+    assert!(parse_post(
+        &post("p1", "bot1", "my own message", 1_700_000_000_000, ""),
+        "bot1",
+        true
+    )
+    .is_none());
     // A blank self id disables the guard (identity not yet resolved).
-    assert!(parse_post(&post("p1", "bot1", "still delivered", 1_700_000_000_000, ""), "", true).is_some());
+    assert!(parse_post(
+        &post("p1", "bot1", "still delivered", 1_700_000_000_000, ""),
+        "",
+        true
+    )
+    .is_some());
 }
 
 #[test]
 fn skips_empty_body_posts() {
     // Joins / system posts / attachment-only posts have no text to deliver.
-    assert!(parse_post(&post("p1", "user1", "", 1_700_000_000_000, ""), "bot1", true).is_none());
+    assert!(parse_post(
+        &post("p1", "user1", "", 1_700_000_000_000, ""),
+        "bot1",
+        true
+    )
+    .is_none());
 }
 
 #[test]
@@ -99,7 +126,9 @@ fn send_body_omits_root_id_at_top_level_and_includes_it_in_threads() {
     assert!(top.get("root_id").is_none());
 
     // An empty root is treated as "no thread".
-    assert!(build_send_body("chan1", "hi", Some("")).get("root_id").is_none());
+    assert!(build_send_body("chan1", "hi", Some(""))
+        .get("root_id")
+        .is_none());
 
     let threaded = build_send_body("chan1", "reply", Some("root9"));
     assert_eq!(threaded["root_id"], json!("root9"));
@@ -141,7 +170,9 @@ fn config_parses_and_defaults() {
     // channel_id skips blanks and the "*" auto-discovery wildcard.
     let disc = MattermostConfig::from_json(r#"{"channel_ids":["*","  ","chanX"]}"#);
     assert_eq!(disc.channel_id().as_deref(), Some("chanX"));
-    assert!(MattermostConfig::from_json(r#"{"channel_ids":["*"]}"#).channel_id().is_none());
+    assert!(MattermostConfig::from_json(r#"{"channel_ids":["*"]}"#)
+        .channel_id()
+        .is_none());
 
     // thread_replies=false is honored.
     assert!(!MattermostConfig::from_json(r#"{"thread_replies":false}"#).thread_replies());

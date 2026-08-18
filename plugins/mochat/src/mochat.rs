@@ -16,7 +16,7 @@
 use std::collections::HashSet;
 
 use serde::Deserialize;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
 /// The plugin's config section (`[channels.mochat.<alias>]` for a mirror, or
 /// `[[plugins.entries.mochat]].config` as a novel plugin). Field names are the
@@ -158,11 +158,7 @@ pub fn parse_message(msg: &Value) -> Option<Inbound> {
 
     let content = msg
         .get("content")
-        .and_then(|c| {
-            c.get("text")
-                .and_then(Value::as_str)
-                .or_else(|| c.as_str())
-        })
+        .and_then(|c| c.get("text").and_then(Value::as_str).or_else(|| c.as_str()))
         .unwrap_or("")
         .trim()
         .to_string();

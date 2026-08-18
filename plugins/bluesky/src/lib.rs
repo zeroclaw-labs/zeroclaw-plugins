@@ -32,10 +32,10 @@ mod component {
     use serde_json::Value;
 
     use crate::bluesky::{
-        BlueskyConfig, Inbound, Session, build_create_session, build_send_body, build_update_seen,
-        extract_notifications, latest_indexed_at, millis_to_rfc3339, notification_indexed_at,
-        parse_notification, parse_session, truncate_post, xrpc_url, NSID_CREATE_RECORD,
-        NSID_CREATE_SESSION, NSID_LIST_NOTIFICATIONS, NSID_UPDATE_SEEN,
+        build_create_session, build_send_body, build_update_seen, extract_notifications,
+        latest_indexed_at, millis_to_rfc3339, notification_indexed_at, parse_notification,
+        parse_session, truncate_post, xrpc_url, BlueskyConfig, Inbound, Session,
+        NSID_CREATE_RECORD, NSID_CREATE_SESSION, NSID_LIST_NOTIFICATIONS, NSID_UPDATE_SEEN,
     };
 
     use exports::zeroclaw::plugin::channel::{
@@ -241,7 +241,8 @@ mod component {
             for notif in &notifs {
                 // Client-side cursor: only deliver notifications newer than the
                 // last one seen (guards against `updateSeen` propagation lag).
-                if !prev_cursor.is_empty() && notification_indexed_at(notif) <= prev_cursor.as_str() {
+                if !prev_cursor.is_empty() && notification_indexed_at(notif) <= prev_cursor.as_str()
+                {
                     continue;
                 }
                 if let Some(inb) = parse_notification(notif, &session.did) {

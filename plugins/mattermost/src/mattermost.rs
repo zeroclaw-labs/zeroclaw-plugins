@@ -8,7 +8,7 @@
 //! `cargo test`.
 
 use serde::Deserialize;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
 /// The plugin's config section (`[channels.mattermost.<alias>]` for a mirror, or
 /// `[[plugins.entries.mattermost]].config` as a novel plugin). Field names match

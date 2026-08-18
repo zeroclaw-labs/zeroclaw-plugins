@@ -9,7 +9,7 @@
 //! `cargo test`.
 
 use serde::Deserialize;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
 /// Default iLink Bot API origin.
 pub const DEFAULT_API_BASE_URL: &str = "https://ilinkai.weixin.qq.com";
@@ -133,7 +133,11 @@ pub fn base_info(channel_version: &str) -> Value {
 /// Build the `/ilink/bot/getupdates` request body. `longpoll_timeout_ms` is a
 /// best-effort hint asking the server for a short (or immediate, when `0`) hold
 /// so a blocking poll never stalls an interleaved `send`.
-pub fn build_getupdates_body(cursor: &str, longpoll_timeout_ms: u64, channel_version: &str) -> Value {
+pub fn build_getupdates_body(
+    cursor: &str,
+    longpoll_timeout_ms: u64,
+    channel_version: &str,
+) -> Value {
     json!({
         "get_updates_buf": cursor,
         "longpolling_timeout_ms": longpoll_timeout_ms,
@@ -250,8 +254,7 @@ pub fn extract_text_from_items(items: &[Value]) -> String {
                 {
                     let ref_prefix = match item.get("ref_msg") {
                         Some(ref_msg) => {
-                            let title =
-                                ref_msg.get("title").and_then(Value::as_str).unwrap_or("");
+                            let title = ref_msg.get("title").and_then(Value::as_str).unwrap_or("");
                             if title.is_empty() {
                                 String::new()
                             } else {
@@ -296,7 +299,10 @@ pub fn parse_message(msg: &Value, channel_alias: Option<&str>) -> Option<Inbound
         return None;
     }
 
-    let create_time_ms = msg.get("create_time_ms").and_then(Value::as_u64).unwrap_or(0);
+    let create_time_ms = msg
+        .get("create_time_ms")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
     let id = msg
         .get("message_id")
         .and_then(|v| {
@@ -396,8 +402,7 @@ fn strip_heading(s: &str) -> Option<String> {
 /// Standard-alphabet Base64 encoder (with `=` padding), dependency-free. Used to
 /// format the `X-WECHAT-UIN` client header the way the native channel does.
 pub fn base64_encode(input: &[u8]) -> String {
-    const ALPHABET: &[u8; 64] =
-        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity(input.len().div_ceil(3) * 4);
     for chunk in input.chunks(3) {
         let b0 = chunk[0] as u32;

@@ -40,7 +40,7 @@ mod component {
     use crate::wechat::{
         build_getconfig_body, build_getupdates_body, build_send_body, context_token_of,
         extract_msgs, is_session_expired, next_cursor, parse_message, response_error_code,
-        sender_id, to_plain_text, wechat_uin, CHANNEL_VERSION, Inbound, WeChatConfig,
+        sender_id, to_plain_text, wechat_uin, Inbound, WeChatConfig, CHANNEL_VERSION,
     };
 
     use exports::zeroclaw::plugin::channel::{

@@ -31,8 +31,8 @@ mod component {
     use serde_json::Value;
 
     use crate::mochat::{
-        DedupSet, Inbound, MochatConfig, build_send_body, extract_messages, health_url, is_send_ok,
-        message_id, parse_message, receive_url, send_error, send_url,
+        build_send_body, extract_messages, health_url, is_send_ok, message_id, parse_message,
+        receive_url, send_error, send_url, DedupSet, Inbound, MochatConfig,
     };
 
     use exports::zeroclaw::plugin::channel::{

@@ -31,9 +31,9 @@ mod component {
     use serde_json::Value;
 
     use crate::twitter::{
-        Inbound, TWEET_MAX_CHARS, TwitterConfig, advance_cursor, build_mentions_url, build_self_url,
-        build_tweet_body, build_tweets_url, chunk_tweet, created_tweet_id, is_user_allowed,
-        parse_mentions, parse_self_handle, parse_self_id, reply_id_from_recipient,
+        advance_cursor, build_mentions_url, build_self_url, build_tweet_body, build_tweets_url,
+        chunk_tweet, created_tweet_id, is_user_allowed, parse_mentions, parse_self_handle,
+        parse_self_id, reply_id_from_recipient, Inbound, TwitterConfig, TWEET_MAX_CHARS,
     };
 
     use exports::zeroclaw::plugin::channel::{

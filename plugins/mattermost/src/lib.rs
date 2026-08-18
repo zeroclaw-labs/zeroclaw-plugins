@@ -32,9 +32,9 @@ mod component {
     use serde_json::Value;
 
     use crate::mattermost::{
-        Inbound, MattermostConfig, build_send_body, extract_posts, me_url, parse_post,
-        parse_self_user_id, parse_self_username, post_create_at, posts_poll_url, posts_url,
-        split_recipient,
+        build_send_body, extract_posts, me_url, parse_post, parse_self_user_id,
+        parse_self_username, post_create_at, posts_poll_url, posts_url, split_recipient, Inbound,
+        MattermostConfig,
     };
 
     use exports::zeroclaw::plugin::channel::{
@@ -188,7 +188,9 @@ mod component {
             if posts.is_empty() {
                 return None;
             }
-            let self_id = SELF_USER_ID.with(|u| u.borrow().clone()).unwrap_or_default();
+            let self_id = SELF_USER_ID
+                .with(|u| u.borrow().clone())
+                .unwrap_or_default();
             let thread_replies = cfg.thread_replies();
             let mut max_create = since;
             for post in &posts {

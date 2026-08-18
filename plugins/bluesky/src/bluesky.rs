@@ -10,7 +10,7 @@
 //! `cargo test`.
 
 use serde::Deserialize;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
 /// The plugin's config section (`[channels.bluesky.<alias>]` for a mirror, or
 /// `[[plugins.entries.bluesky]].config` as a novel plugin). Field names match
@@ -164,7 +164,12 @@ pub fn latest_indexed_at(notifs: &[Value]) -> Option<String> {
 
 /// Encode a notification's parent + root strong refs into the `reply_target`
 /// compound the shim round-trips into `send`: `parent_uri|parent_cid|root_uri|root_cid`.
-pub fn encode_reply_target(parent_uri: &str, parent_cid: &str, root_uri: &str, root_cid: &str) -> String {
+pub fn encode_reply_target(
+    parent_uri: &str,
+    parent_cid: &str,
+    root_uri: &str,
+    root_cid: &str,
+) -> String {
     format!("{parent_uri}|{parent_cid}|{root_uri}|{root_cid}")
 }
 
@@ -190,8 +195,16 @@ pub fn decode_reply_target(reply_target: &str) -> Option<ReplyRefs> {
             parent_uri: (*puri).to_string(),
             parent_cid: (*pcid).to_string(),
             // Fall back to the parent when a root ref is blank.
-            root_uri: if ruri.is_empty() { (*puri).to_string() } else { (*ruri).to_string() },
-            root_cid: if rcid.is_empty() { (*pcid).to_string() } else { (*rcid).to_string() },
+            root_uri: if ruri.is_empty() {
+                (*puri).to_string()
+            } else {
+                (*ruri).to_string()
+            },
+            root_cid: if rcid.is_empty() {
+                (*pcid).to_string()
+            } else {
+                (*rcid).to_string()
+            },
         }),
         _ => None,
     }
@@ -364,9 +377,18 @@ pub fn iso8601_to_millis(s: &str) -> u64 {
         None => (time, None),
     };
     let mut tparts = hms.split(':');
-    let hh = tparts.next().and_then(|v| v.parse::<i64>().ok()).unwrap_or(0);
-    let mm = tparts.next().and_then(|v| v.parse::<i64>().ok()).unwrap_or(0);
-    let ss = tparts.next().and_then(|v| v.parse::<i64>().ok()).unwrap_or(0);
+    let hh = tparts
+        .next()
+        .and_then(|v| v.parse::<i64>().ok())
+        .unwrap_or(0);
+    let mm = tparts
+        .next()
+        .and_then(|v| v.parse::<i64>().ok())
+        .unwrap_or(0);
+    let ss = tparts
+        .next()
+        .and_then(|v| v.parse::<i64>().ok())
+        .unwrap_or(0);
 
     let ms = frac
         .map(|f| {
