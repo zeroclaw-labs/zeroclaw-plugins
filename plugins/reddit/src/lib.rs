@@ -53,7 +53,7 @@ mod component {
         static CONFIG: RefCell<RedditConfig> = RefCell::new(RedditConfig::default());
         // Cached OAuth2 access token; cleared and refreshed on a 401.
         static TOKEN: RefCell<Option<String>> = const { RefCell::new(None) };
-        static BUFFER: RefCell<VecDeque<Inbound>> = RefCell::new(VecDeque::new());
+        static BUFFER: RefCell<VecDeque<Inbound>> = const { RefCell::new(VecDeque::new()) };
         static SELF_HANDLE: RefCell<Option<String>> = const { RefCell::new(None) };
     }
 

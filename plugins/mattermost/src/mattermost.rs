@@ -126,7 +126,7 @@ pub fn extract_posts(response: &Value) -> Vec<Value> {
         return Vec::new();
     };
     let mut list: Vec<Value> = posts.values().cloned().collect();
-    list.sort_by_key(|p| post_create_at(p));
+    list.sort_by_key(post_create_at);
     list
 }
 

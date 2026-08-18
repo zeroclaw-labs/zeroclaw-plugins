@@ -57,7 +57,7 @@ mod component {
         // before it is treated as already-seen (belt-and-suspenders with the
         // server-side `isRead` flag / `updateSeen`).
         static CURSOR: RefCell<String> = const { RefCell::new(String::new()) };
-        static BUFFER: RefCell<VecDeque<Inbound>> = RefCell::new(VecDeque::new());
+        static BUFFER: RefCell<VecDeque<Inbound>> = const { RefCell::new(VecDeque::new()) };
         static SELF_HANDLE: RefCell<Option<String>> = const { RefCell::new(None) };
     }
 
