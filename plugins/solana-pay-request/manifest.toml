@@ -1,0 +1,11 @@
+name = "solana-pay-request"
+version = "0.1.0"
+description = "Build a Solana Pay transfer-request URL for a SOL/SPL payment. Zero-custody: no keys, no network egress — the agent proposes, the human's wallet disposes."
+author = "Ertan Yeni"
+wasm_path = "solana_pay_request.wasm"
+capabilities = ["tool"]
+# Deny-by-default at the extreme: NO permissions. This tool holds no key, makes
+# no network call, and reads no config. It is pure, validated string construction.
+# The worst a prompt-injection can achieve is a malformed request the human sees
+# and declines in their wallet — it can never move funds.
+permissions = []
