@@ -1,0 +1,9 @@
+name = "governance-watch"
+version = "0.1.0"
+description = "Read-only Solana Realms proposal monitoring with bounded, prompt-injection-aware output."
+author = "Jadeon Studio"
+wasm_path = "governance_watch.wasm"
+capabilities = ["tool"]
+# http_client: one read-only Solana JSON-RPC getProgramAccounts request.
+# config_read: optional HTTPS rpc_url from this plugin's jailed config section.
+permissions = ["http_client", "config_read"]
