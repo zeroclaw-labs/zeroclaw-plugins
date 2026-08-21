@@ -1,0 +1,11 @@
+name = "token-risk-check"
+version = "0.1.0"
+description = "Red/amber/green risk assessment for any Solana SPL / Token-2022 mint: authorities, extensions, holder concentration"
+author = "Rowland Akinduro"
+wasm_path = "token_risk_check.wasm"
+capabilities = ["tool"]
+# http_client: JSON-RPC reads against the operator-configured Solana RPC.
+# config_read: the host injects this plugin's own config section (rpc_url)
+# into execute args as `__config`. Without it the plugin falls back to the
+# public mainnet RPC (rate-limited; documented in README).
+permissions = ["http_client", "config_read"]
