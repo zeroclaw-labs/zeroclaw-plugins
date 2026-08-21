@@ -1,0 +1,7 @@
+name = "solana-pay-confirm"
+version = "0.1.0"
+description = "Confirm that a Solana Pay request was actually paid, verified from raw transaction bytes and reconciled against the recipient's balance delta"
+author = "ZeroClaw Solana contributors"
+wasm_path = "solana_pay_confirm.wasm"
+capabilities = ["tool"]
+permissions = ["http_client", "config_read"]
