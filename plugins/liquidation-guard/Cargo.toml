@@ -1,0 +1,35 @@
+[package]
+name = "liquidation-guard"
+version = "0.2.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "ZeroClaw WIT plugin: Kamino Lend health guard with unsigned repay and deposit rescue transactions."
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+wit-bindgen = "0.46"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+bs58 = "0.5"
+sha2 = { version = "0.10", default-features = false }
+curve25519-dalek = { version = "4", default-features = false, features = ["alloc"] }
+
+[target.'cfg(target_family = "wasm")'.dependencies]
+waki = { version = "0.5.1", features = ["json"] }
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true
+codegen-units = 1
+# Integer money arithmetic (native amounts, lamport sums, instruction-data
+# lengths) must never wrap silently in a release component: a panic in wasm is
+# a trapped, reported failure; a wrapped amount is a wrong transaction.
+# This does NOT cover the f64->u64 amount scaling, because `as` saturates
+# rather than overflowing -- `guard::ui_to_native` gates that explicitly.
+overflow-checks = true
+
+[workspace]

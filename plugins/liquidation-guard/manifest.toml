@@ -1,0 +1,9 @@
+name = "liquidation-guard"
+version = "0.2.0"
+description = "Kamino Lend health guard: tiered liquidation warnings, liquidation-price forecast, ranked remedies, unsigned repay and deposit transactions"
+author = "Ansh-699"
+wasm_path = "liquidation_guard.wasm"
+capabilities = ["tool"]
+# config_read: host injects this plugin's config section into execute args as `__config`.
+# http_client: host wires outbound wasi:http into the component's store.
+permissions = ["config_read", "http_client"]
