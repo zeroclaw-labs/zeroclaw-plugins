@@ -1,0 +1,23 @@
+[package]
+name = "token-risk-check"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "ZeroClaw WIT plugin: Solana token risk check — mint/freeze authority, holder concentration, LP status, Token-2022 extensions. Read-only (T0)."
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+wit-bindgen = "0.46"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+solana-core = { path = "../solana-core" }
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true
+codegen-units = 1
+
