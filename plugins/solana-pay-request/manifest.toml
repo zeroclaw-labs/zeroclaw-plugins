@@ -1,0 +1,7 @@
+name = "solana-pay-request"
+version = "0.1.0"
+description = "Create a validated Solana Pay invoice URI without holding keys or signing transactions"
+author = "Angel Silva"
+wasm_path = "solana_pay_request.wasm"
+capabilities = ["tool"]
+permissions = []
