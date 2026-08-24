@@ -1,0 +1,9 @@
+name = "program-authority"
+version = "0.1.0"
+description = "Read-only Solana program loader, ProgramData, and upgrade-authority inspector"
+author = "Mateo"
+wasm_path = "program_authority.wasm"
+capabilities = ["tool"]
+# http_client: at most two bounded getAccountInfo calls to the configured RPC.
+# config_read: reads only rpc_url and commitment.
+permissions = ["http_client", "config_read"]
