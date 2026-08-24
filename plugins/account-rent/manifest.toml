@@ -1,0 +1,9 @@
+name = "account-rent"
+version = "0.1.0"
+description = "Read-only Solana account size, balance, owner, and rent-exemption inspector"
+author = "Mateo"
+wasm_path = "account_rent.wasm"
+capabilities = ["tool"]
+# http_client: one getAccountInfo and one getMinimumBalanceForRentExemption call.
+# config_read: reads only rpc_url and commitment.
+permissions = ["http_client", "config_read"]
