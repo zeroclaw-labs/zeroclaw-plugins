@@ -1,0 +1,9 @@
+name = "inflation-reward"
+version = "0.1.0"
+description = "Inspect the latest available inflation reward for a public Solana account."
+author = "Mateo Rojas"
+wasm_path = "inflation_reward.wasm"
+capabilities = ["tool"]
+# http_client: one read-only getInflationReward request.
+# config_read: reads only rpc_url and commitment.
+permissions = ["http_client", "config_read"]
