@@ -1,0 +1,9 @@
+name = "slot-leaders"
+version = "0.1.0"
+description = "List the next ten scheduled leaders starting from a public Solana slot."
+author = "Mateo Rojas"
+wasm_path = "slot_leaders.wasm"
+capabilities = ["tool"]
+# http_client: one read-only getSlotLeaders request.
+# config_read: reads only rpc_url and commitment.
+permissions = ["http_client", "config_read"]
