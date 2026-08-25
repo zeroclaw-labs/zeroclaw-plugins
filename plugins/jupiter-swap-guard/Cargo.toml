@@ -1,0 +1,54 @@
+[package]
+name = "jupiter-swap-guard"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "ZeroClaw WIT tool plugin: build an UNSIGNED Jupiter swap, provably policy-checked. Rebuilds the transaction from /swap-instructions and binds the fund destination to the payer; never relays the aggregator's bytes, never signs."
+publish = false
+
+# cdylib for the wasm component; rlib so the pure policy/encode core is testable
+# on the host with a plain `cargo test`.
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+wit-bindgen = "0.46"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+bs58 = "0.5"
+base64 = "0.22"
+# Pure, wasip2-clean crypto for canonical PDA/ATA derivation (D1). default-features
+# off keeps both off the browser/getrandom path — verified no js-sys in the wasm tree.
+sha2 = { version = "0.10", default-features = false }
+curve25519-dalek = { version = "4", default-features = false, features = ["alloc"] }
+
+# waki: the blocking wasi:http client. Wasm-only so host `cargo test` never
+# compiles it; the pure pipeline is tested through the SwapApi/Rpc traits.
+[target.'cfg(target_family = "wasm")'.dependencies]
+waki = { version = "0.5.1", features = ["json"] }
+
+# Host-only oracle: the differential encoder test compiles the same message with
+# the official decomposed Anza crates and byte-compares. These never enter the
+# wasm build (dev-dependencies are host + test only).
+[dev-dependencies]
+solana-message = { version = "2", features = ["bincode"] }
+solana-pubkey = "2"
+solana-instruction = "2"
+solana-hash = "2"
+# Property tests for the u128-division arithmetic guardrails, which CBMC cannot
+# verify tractably (see src/proofs.rs). Host + test only.
+proptest = "1"
+
+# `kani` is a cfg set only by the Kani verifier; register it so normal builds
+# don't warn on the #[cfg(kani)] proof harnesses.
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(kani)'] }
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true
+codegen-units = 1
+
+# Standalone crate: built for wasm32-wasip2, not part of the host workspace.
+[workspace]
