@@ -5,3 +5,5 @@ __pycache__/
 *.pyc
 target/
 *.wasm
+demo/out/
+target-shared/

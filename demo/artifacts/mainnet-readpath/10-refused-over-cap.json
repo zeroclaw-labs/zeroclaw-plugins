@@ -1,0 +1,19 @@
+{
+  "args": {
+    "__config": {
+      "allow_recipients": "2PQcNtSophRAG7ZsHaDT87Zx8MNkCu3GPKsmrR2qthty",
+      "caps": "SOL:0.01:9,EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v:25:6",
+      "rpc_url": "https://api.mainnet-beta.solana.com"
+    },
+    "amount": "5",
+    "memo": "zeroclaw mainnet simulation only",
+    "recipient": "2PQcNtSophRAG7ZsHaDT87Zx8MNkCu3GPKsmrR2qthty",
+    "reference": "FPPZ8UK5r9BiNQ7N9DhGumcQkQJE9JXXvkCRvFG4d5X5",
+    "sender": "9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM"
+  },
+  "component_output": {
+    "error": "transfer refused: amount 5 exceeds the operator's per-transfer cap of 0.01 for SOL; no transaction was built",
+    "ok": false,
+    "rpc_calls": 0
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "args": {
+    "__config": {
+      "nonce_account": "9yXPTQZhqq1yvG22NE8Vz4HobeXUJ1dwirgByV5EJt1",
+      "rpc_url": "https://api.mainnet-beta.solana.com"
+    },
+    "account": "9yXPTQZhqq1yvG22NE8Vz4HobeXUJ1dwirgByV5EJt1"
+  },
+  "component_output": {
+    "ok": true,
+    "result": {
+      "ready": false,
+      "summary": "MISSING: nonce account 9yXPTQZhqq1yvG22NE8Vz4HobeXUJ1dwirgByV5EJt1 does not exist. Create it once with: solana-keygen new -o nonce.json && solana create-nonce-account nonce.json 0.0015 (rent 1447680 lamports), then set nonce_account in this plugin's config."
+    },
+    "rpc_calls": 1
+  }
+}

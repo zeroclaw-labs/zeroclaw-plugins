@@ -1,0 +1,1 @@
+stack	plugin	source_head	registry	strict	name	version	provides	capabilities	permissions	test_rc	tests_passed	tests_failed	tests_ignored	clippy_rc	wasm_clippy_rc	build_rc	artifact	artifact_bytes	log_dir

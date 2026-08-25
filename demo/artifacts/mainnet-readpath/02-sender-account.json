@@ -1,0 +1,34 @@
+{
+  "request": {
+    "id": 1,
+    "jsonrpc": "2.0",
+    "method": "getAccountInfo",
+    "params": [
+      "9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM",
+      {
+        "encoding": "base64"
+      }
+    ]
+  },
+  "response": {
+    "id": 1,
+    "jsonrpc": "2.0",
+    "result": {
+      "context": {
+        "apiVersion": "4.1.0",
+        "slot": 436186910
+      },
+      "value": {
+        "data": [
+          "",
+          "base64"
+        ],
+        "executable": false,
+        "lamports": 10249012047571677,
+        "owner": "11111111111111111111111111111111",
+        "rentEpoch": 18446744073709551615,
+        "space": 0
+      }
+    }
+  }
+}

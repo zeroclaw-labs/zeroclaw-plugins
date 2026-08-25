@@ -1,0 +1,26 @@
+name = "payment-watch"
+version = "0.1.0"
+description = "Check whether an expected Solana payment arrived, by its Solana Pay reference key. Read-only: two bounded RPC calls, reports payer, amount, mint and confirmation in one line. Holds no keys, moves nothing."
+author = "zkasuran"
+wasm_path = "payment_watch.wasm"
+capabilities = ["tool"]
+# http_client: JSON-RPC calls to the operator-configured Solana RPC endpoint
+# (TLS host-side). config_read: rpc_url is read from this plugin's own config
+# section; the tool never accepts an RPC URL as a call argument.
+permissions = ["http_client", "config_read"]
+
+# config_read and config_schema are a biconditional: issue #147 makes the host
+# reject a manifest carrying either without the other, and it validates the
+# operator's values against the schema below before the guest ever runs. Values
+# arrive as typed JSON. The closed object plus an explicit properties map is what
+# makes the config_read grant enumerable.
+[config_schema]
+"$schema" = "https://json-schema.org/draft/2020-12/schema"
+type = "object"
+additionalProperties = false
+required = ["rpc_url"]
+
+[config_schema.properties.rpc_url]
+type = "string"
+description = "HTTPS Solana JSON-RPC endpoint every read goes through. Operator-set, never a call argument."
+minLength = 1
