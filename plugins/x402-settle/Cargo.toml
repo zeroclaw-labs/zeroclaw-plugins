@@ -1,0 +1,27 @@
+[package]
+name = "x402-settle"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "ZeroClaw WIT tool plugin: settle HTTP 402 Payment Required challenges in SPL tokens via the x402 protocol (exact/SVM scheme). T2 with a brutal leash — scoped session key, per-request and per-day caps, mint + payee allowlists, all enforced in-plugin before a single lamport can move."
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+solana-wasi-core = { path = "vendor/solana-wasi-core" }
+wit-bindgen = "0.46"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[target.'cfg(target_family = "wasm")'.dependencies]
+waki = { version = "0.5.1", features = ["json"] }
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true
+codegen-units = 1
+
+[workspace]
