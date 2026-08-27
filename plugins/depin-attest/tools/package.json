@@ -1,0 +1,13 @@
+{
+  "name": "depin-attest-tools",
+  "version": "1.0.0",
+  "description": "TS oracle scripts for depin-attest — cross-check SAS instruction + PDA against sas-lib",
+  "type": "module",
+  "scripts": {
+    "verify:pda": "node verify-attest-pda.mjs",
+    "verify:ix": "node verify-attest-ix.mjs"
+  },
+  "devDependencies": {
+    "sas-lib": "^1.0.10"
+  }
+}
