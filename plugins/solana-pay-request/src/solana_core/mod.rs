@@ -13,7 +13,9 @@
 //! version dependency. Vendoring is also what the registry asks for in its own
 //! words, "self-contained WIT components".
 //!
-//! `sanitize.rs` is verbatim. `pubkey.rs` is reduced to the base58 codec; the
+//! `sanitize.rs` carries the upstream logic unchanged; its module doc differs by one
+//! paragraph, rewritten here to drop a comparative claim about other plugins that a
+//! reader of this repo cannot verify. `pubkey.rs` is reduced to the base58 codec; the
 //! omissions and the reason for them are documented in that file.
 
 pub mod pubkey;
