@@ -1,0 +1,32 @@
+[package]
+name = "solana-pay-request"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "ZeroClaw tool plugin: build a Solana Pay transfer-request URL and QR-ready payload for a SOL or SPL-token payment. Zero secrets, zero network: pure input validation and URL construction, with control/bidi/zero-width stripping and percent-encoding so a hostile memo or label can never inject a different recipient."
+publish = false
+
+# cdylib for the wasm component; rlib so the pure core is testable on the host
+# with a plain `cargo test`.
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# bs58 is the only dependency the vendored Solana primitives need. The upstream
+# crate they come from also carries curve25519-dalek, ed25519-dalek and sha2 for
+# on-curve tests and PDA derivation; this plugin derives no addresses, so
+# src/solana_core/pubkey.rs is reduced to the base58 codec and those three drop
+# out. See src/solana_core/mod.rs for provenance.
+bs58 = "0.5"
+wit-bindgen = "0.46"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true
+codegen-units = 1
+
+# Standalone crate: built for wasm32-wasip2, not part of the host workspace.
+[workspace]
