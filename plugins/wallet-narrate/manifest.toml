@@ -1,0 +1,12 @@
+name = "wallet-narrate"
+version = "0.1.0"
+description = "Narrate a Solana wallet's recent on-chain activity as short human-readable sentences. Read-only (T0)."
+author = "Prerevenue Fable"
+wasm_path = "wallet_narrate.wasm"
+capabilities = ["tool"]
+# http_client: outbound JSON-RPC calls to the configured Solana RPC endpoint
+# (TLS is performed host-side).
+# config_read: read rpc_url / max_transactions / include_failed from this
+# plugin's own config section. Without it the plugin still works with the
+# public mainnet RPC and defaults.
+permissions = ["http_client", "config_read"]
