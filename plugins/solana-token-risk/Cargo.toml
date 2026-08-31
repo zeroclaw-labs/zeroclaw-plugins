@@ -1,0 +1,33 @@
+[package]
+name = "solana-token-risk"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "ZeroClaw WIT tool plugin: bounded, read-only Solana token mint risk summaries"
+publish = false
+
+# `cdylib` is the WASI component. `rlib` makes the pure parsing and
+# risk-summary core available to host tests without compiling the WASI client.
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+base64 = "0.22"
+bs58 = "0.5"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+wit-bindgen = "0.46"
+
+# The component uses only host-mediated `wasi:http`, never a wallet or signing
+# SDK. Keeping it target-specific preserves fast, hermetic host tests.
+[target.'cfg(target_family = "wasm")'.dependencies]
+waki = { version = "0.5.1", features = ["json"] }
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true
+codegen-units = 1
+
+# Standalone component crate; it is not part of the ZeroClaw host workspace.
+[workspace]
