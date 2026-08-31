@@ -1,0 +1,7 @@
+name = "solana-safety-inspector"
+version = "0.1.0"
+description = "Inspect the safety of a Solana token address on-chain before interacting with it."
+author = "ZeroClaw Developer"
+wasm_path = "solana_safety_inspector.wasm"
+capabilities = ["tool"]
+permissions = ["config_read", "http_client"]
