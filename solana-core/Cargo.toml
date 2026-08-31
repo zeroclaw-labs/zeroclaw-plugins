@@ -1,0 +1,27 @@
+[package]
+name = "solana-core"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Wasm32-wasip2-friendly Solana substrate: JSON-RPC trait, base58, memo/tx encode, durable nonce"
+publish = false
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+bs58 = "0.5"
+base64 = "0.22"
+sha2 = "0.10"
+thiserror = "2"
+
+[dev-dependencies]
+serde_json = "1"
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true
+codegen-units = 1
+overflow-checks = true
+
+[workspace]

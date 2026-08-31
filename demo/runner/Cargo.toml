@@ -1,0 +1,19 @@
+[package]
+name = "depin-demo-runner"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "depin-demo"
+path = "src/main.rs"
+
+[dependencies]
+depin-attest = { path = "../../plugins/depin-attest" }
+depin-uptime-watch = { path = "../../plugins/depin-uptime-watch" }
+serde_json = "1"
+ureq = { version = "2", features = ["json"] }
+base64 = "0.22"
+ed25519-dalek = { version = "2", features = ["rand_core"] }
+
+[workspace]

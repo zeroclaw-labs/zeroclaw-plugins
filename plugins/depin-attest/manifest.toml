@@ -1,0 +1,7 @@
+name = "depin-attest"
+version = "0.1.0"
+description = "Build an unsigned durable-nonce Solana memo attestation from a device sensor reading (T1)"
+author = "darkty0x"
+wasm_path = "depin_attest.wasm"
+capabilities = ["tool"]
+permissions = ["http_client", "config_read"]
