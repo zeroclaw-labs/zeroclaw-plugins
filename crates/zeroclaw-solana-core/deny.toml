@@ -1,0 +1,68 @@
+# cargo-deny configuration. Run with `cargo deny check`.
+#
+# Every entry below was derived from real `cargo deny check` output against
+# this workspace's actual Cargo.lock, not copied from a template blind --
+# see the comments on each ignored advisory / allowed license for why.
+
+[graph]
+all-features = false
+no-default-features = false
+
+[advisories]
+ignore = [
+    # All three are reachable *exclusively* through the dev-only
+    # differential-testing dependencies (spl-token-2022, solana-program,
+    # solana-short-vec -- see zeroclaw-solana-core/Cargo.toml) used to verify
+    # our hand-rolled Borsh/TLV/shortvec parsers against canonical ground
+    # truth. None of them are reachable from the shipped rlib or either
+    # wasm32-wasip2 plugin binary (verified: `cargo tree -p
+    # zeroclaw-solana-core -e normal` shows none of these).
+    { id = "RUSTSEC-2025-0141", reason = "unmaintained bincode 1.3.3, pulled in only by solana-program (dev-dependency via spl-token-2022); not in the shipped build" },
+    { id = "RUSTSEC-2025-0161", reason = "unmaintained libsecp256k1 0.6.0, pulled in only by solana-program (dev-dependency via spl-token-2022); not in the shipped build" },
+    # RUSTSEC-2026-0097 (unsound rand 0.7.3, same dev-only chain) is caught
+    # by `cargo audit` but cargo-deny 0.20.2 doesn't flag it in this tree at
+    # all ("no crate matched advisory criteria") -- the two tools apply
+    # different classification rules for "unsound"-severity notices. No
+    # ignore entry needed here since cargo-deny never raises it, but
+    # `cargo audit` (run separately in CI) still surfaces it for visibility.
+]
+
+[licenses]
+confidence-threshold = 0.8
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "Unicode-3.0",
+    "Unlicense",
+]
+
+[licenses.private]
+ignore = false
+
+[bans]
+multiple-versions = "warn"
+# Left at the default ("allow") rather than "deny": cargo-deny 0.20.2 has a
+# self-acknowledged bug (`bug[unresolved-workspace-dependency]` in its own
+# output) resolving `{ workspace = true }` path dependencies, which makes it
+# misidentify our internal `zeroclaw-solana-core` path dependency (used by
+# both plugin crates) as an unpinned wildcard. It isn't one -- the version is
+# pinned via `version.workspace = true` -- this is a tool limitation with a
+# newer Cargo feature, not a real risk to gate on.
+wildcards = "allow"
+skip-tree = [
+    # `waki` (our wasi:http transport) pins `wit-bindgen ^0.34` for its own
+    # internal binding generation, while the plugin shims use `wit-bindgen
+    # 0.36` directly for their WIT world. These are two independent
+    # proc-macro invocations at build time -- harmless duplication (larger
+    # dependency graph / compile time only, verified no effect on the
+    # shipped .wasm size or correctness), not worth forcing a version
+    # unification that could destabilize a working build.
+    { crate = "wit-bindgen@0.34" },
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
