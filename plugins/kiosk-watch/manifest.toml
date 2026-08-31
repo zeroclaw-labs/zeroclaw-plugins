@@ -1,0 +1,11 @@
+name = "kiosk-watch"
+version = "0.1.0"
+description = "Verify a Solana Pay USDC payment on-chain (recipient + mint + amount + reference + finality) before the kiosk actuates, and check the attestation heartbeat. T0: no secrets. Recipient, mint, and RPC endpoint are operator config, never the model."
+author = "Sushant"
+wasm_path = "kiosk_watch.wasm"
+capabilities = ["tool"]
+# http_client: read-only JSON-RPC GET/POST to the operator-configured Solana RPC
+#              endpoint (getSignaturesForAddress, getTransaction). No signing.
+# config_read: the host injects this plugin's config section (rpc_url, merchant
+#              address, mint, finality) as `__config`.
+permissions = ["http_client", "config_read"]
