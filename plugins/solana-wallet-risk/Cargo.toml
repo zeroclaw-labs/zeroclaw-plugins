@@ -1,0 +1,27 @@
+[package]
+name = "solana-wallet-risk"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "ZeroClaw tool plugin: scan a Solana wallet's SPL and Token-2022 holdings live over wasi:http and report which positions can be frozen, rugged, or taxed — portfolio-level risk aggregation."
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+wit-bindgen = "0.46"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# wasi:http client — wasm-only, so `cargo test` on the host never pulls it.
+[target.'cfg(target_family = "wasm")'.dependencies]
+waki = { version = "0.5.1", features = ["json"] }
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true
+codegen-units = 1
+
+[workspace]

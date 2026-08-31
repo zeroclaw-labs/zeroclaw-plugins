@@ -1,0 +1,12 @@
+name = "solana-tx-builder"
+version = "0.1.0"
+description = "Solana instruction & address construction for the ZeroClaw agent: PDAs, ATAs, SystemProgram/SPL transfers — plus a live 'prepare_transfer' op that reads a recent blockhash and checks the recipient exists on chain (wasi:http) so the built transfer is broadcast-ready and typo-safe. The agent builds, a wallet signs; nothing here ever signs or sends."
+author = "furkanefecancaglar"
+wasm_path = "solana_tx_builder.wasm"
+capabilities = ["tool"]
+# http_client: read-only getLatestBlockhash + getAccountInfo for the live
+#   prepare_transfer op. The pure construction ops need no network; the grant is only
+#   exercised when the caller asks to prepare a broadcast-ready transfer.
+# config_read: read the RPC url from config (falls back to public mainnet; caller may
+#   also pass `rpc_url` per call).
+permissions = ["http_client", "config_read"]

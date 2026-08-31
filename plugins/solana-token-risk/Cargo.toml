@@ -1,0 +1,41 @@
+# solana-token-risk: a ZeroClaw tool plugin that reads a Solana mint live over
+# wasi:http (host-gated `http_client`) and returns deterministic rug/honeypot
+# risk EVIDENCE. The scoring core is pure Rust (an rlib) so it host-tests with a
+# plain `cargo test` against canned RPC responses; only the ~15-line fetch layer
+# is wasm-only (waki), exactly as the ZeroClaw tool-plugin guide prescribes.
+[package]
+name = "solana-token-risk"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "ZeroClaw tool plugin: live Solana token rug/honeypot risk evidence over wasi:http — mint & freeze authority, Token-2022 dangerous extensions, holder concentration. Deterministic, read-only, no keys."
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+wit-bindgen = "0.46"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# base58 + curve check: classify a holder's owner as an off-curve program/LP
+# account vs an on-curve keypair wallet (both compile clean to wasm32-wasip2).
+bs58 = "0.5"
+curve25519-dalek = "4"
+# metadata PDA derivation (sha256) + base64 account data decode.
+sha2 = "0.10"
+base64 = "0.22"
+
+# wasi:http client — compiled ONLY into the wasm component, never on the host,
+# so `cargo test` (host) never pulls it. Recommended by the tool-plugin guide.
+[target.'cfg(target_family = "wasm")'.dependencies]
+waki = { version = "0.5.1", features = ["json"] }
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true
+codegen-units = 1
+
+# Standalone crate: built for wasm32-wasip2, not part of a host workspace.
+[workspace]

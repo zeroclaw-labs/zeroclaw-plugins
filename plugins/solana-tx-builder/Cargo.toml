@@ -1,0 +1,38 @@
+[package]
+name = "solana-tx-builder"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "ZeroClaw WIT plugin: local, pure-compute Solana instruction & address construction — PDAs, ATAs, SystemProgram/SPL transfers. Zero network surface; the agent builds, a wallet signs."
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+wit-bindgen = "0.46"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# pure-compute crypto — all confirmed to compile to wasm32-wasip2
+curve25519-dalek = "4"
+sha2 = "0.10"
+bs58 = "0.5"
+hex = "0.4"
+
+# wasi:http client — compiled ONLY into the wasm component, never on the host, so
+# `cargo test` (host) never pulls it. Recommended by the tool-plugin guide. Used only by
+# the live `prepare_transfer` op (recent blockhash + recipient existence check).
+[target.'cfg(target_family = "wasm")'.dependencies]
+waki = { version = "0.5.1", features = ["json"] }
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true
+codegen-units = 1
+
+[workspace]
+
+[dev-dependencies]
+bs58 = "0.5"
+curve25519-dalek = "4"
