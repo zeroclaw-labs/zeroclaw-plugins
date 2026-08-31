@@ -1,0 +1,53 @@
+name = "stake-monitor"
+version = "0.2.0"
+description = "Status, validator delinquency, and epoch rewards for the operator's own stake accounts, shaped for chat"
+author = "ZiBibro"
+wasm_path = "stake_monitor.wasm"
+capabilities = ["tool"]
+# http_client: outbound HTTPS to the operator's own Solana RPC endpoint only.
+# config_read and config_schema are a biconditional: the host rejects the
+# manifest if either appears without the other. The host validates the
+# operator's values against the schema below, materializes them as typed JSON,
+# and injects that object into execute args as `__config`. Both the allowlist
+# and the endpoint are required, so a withheld grant fails closed instead of
+# starting a reader with no account it is permitted to read.
+permissions = ["http_client", "config_read"]
+
+[config_schema]
+"$schema" = "https://json-schema.org/draft/2020-12/schema"
+type = "object"
+required = ["stake_accounts", "rpc_url"]
+additionalProperties = false
+
+# Each entry is `label:pubkey`, or a bare pubkey which is then labelled
+# `stake1`, `stake2`, and so on by position. Before 0.2.0 this was one
+# comma-separated string; it is a JSON array now, and the host rejects the old
+# encoding rather than silently reading it as a single malformed entry.
+[config_schema.properties.stake_accounts]
+type = "array"
+description = "Allowlist of stake accounts this plugin may report on. Entries are `label:pubkey` or a bare pubkey. The model can only name an account from this list."
+minItems = 1
+
+[config_schema.properties.stake_accounts.items]
+type = "string"
+minLength = 1
+
+[config_schema.properties.rpc_url]
+type = "string"
+description = "Operator's own Solana JSON-RPC endpoint. HTTPS only. Required: every reading this plugin makes goes through it."
+minLength = 1
+
+# Upper bound matches the slot distance at which getVoteAccounts already reports
+# a validator as delinquent, so a warning cannot be configured to fire later
+# than the chain's own verdict.
+[config_schema.properties.vote_lag_warn_slots]
+type = "integer"
+description = "Slots behind the chain tip at which the validator is flagged as lagging. Defaults to 32."
+minimum = 1
+maximum = 128
+
+[config_schema.properties.timeout_secs]
+type = "integer"
+description = "Per-request timeout for outbound HTTP. Defaults to 10."
+minimum = 1
+maximum = 60

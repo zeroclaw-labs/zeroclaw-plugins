@@ -1,0 +1,77 @@
+name = "lending-health"
+version = "0.2.0"
+description = "DeFi lending position health for operator wallets: LTV vs liquidation across Kamino and MarginFi, shaped for chat"
+author = "ZiBibro"
+wasm_path = "lending_health.wasm"
+capabilities = ["tool"]
+# http_client: outbound HTTPS to the Kamino public API and to the operator's
+# own Solana RPC endpoint. No other hosts are contacted.
+# config_read and config_schema are a biconditional: the host rejects the
+# manifest if either appears without the other. The host validates the
+# operator's values against the schema below, materializes them as typed JSON,
+# and injects that object into execute args as `__config`. The plugin refuses
+# to run without a configured wallet allowlist, which is why `wallets` is
+# required rather than defaulted: a withheld grant must fail closed instead of
+# starting a wallet reader with no wallet it is allowed to read.
+permissions = ["http_client", "config_read"]
+
+[config_schema]
+"$schema" = "https://json-schema.org/draft/2020-12/schema"
+type = "object"
+required = ["wallets"]
+additionalProperties = false
+
+# Each entry is `label:pubkey`, or a bare pubkey which is then labelled
+# `wallet1`, `wallet2`, and so on by position. Before 0.2.0 this was one
+# comma-separated string; it is a JSON array now, and the host rejects the old
+# encoding rather than silently reading it as a single malformed entry.
+[config_schema.properties.wallets]
+type = "array"
+description = "Allowlist of wallets this plugin may report on. Entries are `label:pubkey` or a bare pubkey. The model can only name a wallet from this list."
+minItems = 1
+
+[config_schema.properties.wallets.items]
+type = "string"
+minLength = 1
+
+[config_schema.properties.rpc_url]
+type = "string"
+description = "Operator's own Solana RPC endpoint. HTTPS only. Required when the marginfi protocol is enabled, since MarginFi is read over RPC rather than over a public API."
+minLength = 1
+
+[config_schema.properties.kamino_api_base]
+type = "string"
+description = "Base URL of the Kamino API. HTTPS only. Defaults to https://api.kamino.finance."
+minLength = 1
+
+# Also a JSON array as of 0.2.0, for the same reason as `wallets`.
+[config_schema.properties.protocols]
+type = "array"
+description = "Which lending protocols to read. Supported: kamino, marginfi. Defaults to both."
+minItems = 1
+
+[config_schema.properties.protocols.items]
+type = "string"
+minLength = 1
+
+# Thresholds are on the liquidation-buffer basis: the share of the gap between
+# current LTV and liquidation LTV that is still unused. The warning must sit at
+# the wider buffer so it fires before the critical line, and the guest rejects
+# an inverted pair that the schema alone cannot catch.
+[config_schema.properties.warn_liquidation_buffer]
+type = "number"
+description = "Liquidation buffer at or below which a position is flagged WARN. Defaults to 0.15."
+minimum = 0.0
+maximum = 1.0
+
+[config_schema.properties.critical_liquidation_buffer]
+type = "number"
+description = "Liquidation buffer at or below which a position is flagged CRITICAL. Defaults to 0.05."
+minimum = 0.0
+maximum = 1.0
+
+[config_schema.properties.timeout_secs]
+type = "integer"
+description = "Per-request timeout for outbound HTTP. Defaults to 10."
+minimum = 1
+maximum = 60

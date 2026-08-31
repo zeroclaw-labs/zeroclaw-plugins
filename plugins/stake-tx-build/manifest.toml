@@ -1,0 +1,86 @@
+name = "stake-tx-build"
+version = "0.2.0"
+description = "Builds an unsigned delegate or deactivate stake transaction for operator approval; the plugin holds no keys and cannot sign or submit"
+author = "ZiBibro"
+wasm_path = "stake_tx_build.wasm"
+capabilities = ["tool"]
+# http_client: outbound HTTPS to the operator's own Solana RPC endpoint only,
+# used for the cluster genesis hash, for a fresh blockhash (or the durable
+# nonce account state), and for the live standing of the account the action
+# touches.
+# config_read and config_schema are a biconditional: the host rejects the
+# manifest if either appears without the other. The host validates the
+# operator's values against the schema below, materializes them as typed JSON,
+# and injects that object into execute args as `__config`. No private key ever
+# appears in config, and the three keys the builder cannot work without are
+# required so a withheld grant fails closed.
+permissions = ["http_client", "config_read"]
+
+[config_schema]
+"$schema" = "https://json-schema.org/draft/2020-12/schema"
+type = "object"
+required = ["stake_accounts", "authority", "rpc_url"]
+additionalProperties = false
+
+# Each entry is `label:pubkey`, or a bare pubkey which is then labelled
+# `stake1`, `stake2`, and so on by position. Before 0.2.0 this was one
+# comma-separated string; it is a JSON array now, and the host rejects the old
+# encoding rather than silently reading it as a single malformed entry.
+[config_schema.properties.stake_accounts]
+type = "array"
+description = "Allowlist of stake accounts a transaction may be built for. Entries are `label:pubkey` or a bare pubkey. The model can only name an account from this list."
+minItems = 1
+
+[config_schema.properties.stake_accounts.items]
+type = "string"
+minLength = 1
+
+# A pubkey, never a private key. The plugin holds no keys and cannot sign, so
+# this names the account the operator will sign with elsewhere.
+[config_schema.properties.authority]
+type = "string"
+description = "Fee payer and stake authority pubkey. A public key only; this plugin never holds or receives a private key."
+minLength = 32
+maxLength = 44
+
+[config_schema.properties.rpc_url]
+type = "string"
+description = "Operator's own Solana JSON-RPC endpoint. HTTPS only. Its genesis hash is checked against the pinned cluster before anything is built."
+minLength = 1
+
+[config_schema.properties.cluster]
+type = "string"
+description = "Cluster the endpoint must match, checked by genesis hash. Defaults to mainnet-beta, the strictest reading of an operator who did not say."
+enum = ["mainnet-beta", "devnet", "testnet"]
+
+# Also a JSON array as of 0.2.0. An empty list and an omitted key mean the same
+# thing to the guest, and the meaning is the safe one: no delegate target is
+# allowed, so only deactivate can be built.
+[config_schema.properties.allowed_vote_accounts]
+type = "array"
+description = "Vote accounts a delegate may target. Omitted means none is allowed and only deactivate can be built."
+
+[config_schema.properties.allowed_vote_accounts.items]
+type = "string"
+minLength = 32
+maxLength = 44
+
+# The nonce pair is set together or not at all; the guest rejects a half-set
+# pair, which JSON Schema cannot state between two sibling properties.
+[config_schema.properties.nonce_account]
+type = "string"
+description = "Durable nonce account pubkey. Must be set together with nonce_authority."
+minLength = 32
+maxLength = 44
+
+[config_schema.properties.nonce_authority]
+type = "string"
+description = "Authority of the durable nonce account. Must be set together with nonce_account."
+minLength = 32
+maxLength = 44
+
+[config_schema.properties.timeout_secs]
+type = "integer"
+description = "Per-request timeout for outbound HTTP. Defaults to 10."
+minimum = 1
+maximum = 60
