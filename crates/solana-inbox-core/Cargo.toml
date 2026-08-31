@@ -1,0 +1,22 @@
+[package]
+name = "solana-inbox-core"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Pure, wasm32-wasip2-friendly parser for Solana JSON-RPC responses shaped as inbound events for an agent runtime. No solana-sdk, no async, no network. Used by the ZeroClaw solana-inbox channel plugin; reusable by any other Rust plugin that wants to treat Solana as an inbound stream."
+repository = "https://github.com/zeroclaw-labs/zeroclaw-plugins"
+readme = "README.md"
+keywords = ["solana", "wasm", "zeroclaw", "plugin", "no_solana_sdk"]
+categories = ["parser-implementations", "wasm"]
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[dev-dependencies]
+proptest = "1"
+
+[lib]
+# Standard library crate — no wasm-specific bits. The consuming plugin is
+# the one that ships as a `cdylib` component; this crate is pure Rust and
+# can be pulled into any downstream target, including wasm32-wasip2.
