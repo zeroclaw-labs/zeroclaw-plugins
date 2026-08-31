@@ -1,0 +1,10 @@
+name = "token-risk-check"
+version = "0.1.0"
+description = "Assess the on-chain risk of a Solana token mint: authorities, Token-2022 extensions, LP status"
+author = "Alrimar Sobrinho"
+wasm_path = "token_risk_check.wasm"
+capabilities = ["tool"]
+# http_client: outbound Solana RPC calls to fetch mint account state.
+# config_read: the host injects this plugin's own config section (e.g. rpc_url)
+# into execute args as `__config`. Without it the plugin falls back to defaults.
+permissions = ["http_client", "config_read"]
