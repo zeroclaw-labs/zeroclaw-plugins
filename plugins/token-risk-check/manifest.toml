@@ -1,0 +1,11 @@
+name = "token-risk-check"
+version = "0.1.0"
+description = "Red/amber/green risk report for any Solana mint: authorities, Token-2022 extensions (permanent delegate, transfer hooks, fees, default-frozen), holder concentration. Shaped to ~200 tokens. T0: read-only, zero custody."
+author = "Petr Pogoraev"
+wasm_path = "token_risk_check.wasm"
+capabilities = ["tool"]
+# http_client: two JSON-RPC reads (getAccountInfo, getTokenLargestAccounts)
+# against the operator's rpc_url; TLS host-side.
+# config_read: optional rpc_url override — injected as `__config`. Works with
+# the public mainnet endpoint out of the box.
+permissions = ["http_client", "config_read"]

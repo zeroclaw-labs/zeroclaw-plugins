@@ -1,0 +1,11 @@
+name = "spl-transfer-build"
+version = "0.1.0"
+description = "Build unsigned SPL/SOL transfer transactions (versioned, base64) with recipient ATA handling, memo, durable-nonce support, and in-plugin mint allowlist + per-transfer caps. T1: holds no keys, signs nothing, cannot submit."
+author = "Petr Pogoraev"
+wasm_path = "spl_transfer_build.wasm"
+capabilities = ["tool"]
+# http_client: JSON-RPC reads only (mint account, recipient ATA existence,
+# blockhash / nonce account) against the operator's rpc_url; TLS host-side.
+# config_read: owner address, rpc_url, token allowlist, caps, optional
+# allowed_recipients and nonce_account — injected as `__config`.
+permissions = ["http_client", "config_read"]
