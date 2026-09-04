@@ -1,0 +1,37 @@
+# Aval verification tool: re-verifies a pending unsigned transaction at the
+# moment of approval — nonce freshness, balances, and a decoded plain-language
+# account of what the bytes actually do. Read-only (T0). Pure logic in
+# `recheck.rs` (host-tested), wasm shim in `lib.rs`.
+[package]
+name = "approval-recheck"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "ZeroClaw WIT plugin: T0 approval-time verification of pending durable transactions — what you sign is exactly what executes."
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# Vendored core (src/core/) uses the same two crypto deps as aval-core:
+# sha2 + curve25519-dalek are the minimum for PDA/ATA derivation.
+sha2 = { version = "0.10", default-features = false }
+curve25519-dalek = { version = "4", default-features = false, features = ["alloc"] }
+wit-bindgen = "0.46"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[target.'cfg(target_family = "wasm")'.dependencies]
+waki = { version = "0.5.1" }
+
+[profile.release]
+# Money code: abort on arithmetic overflow rather than wrap, even in release.
+overflow-checks = true
+opt-level = "s"
+lto = true
+strip = true
+codegen-units = 1
+
+# Standalone crate: built for wasm32-wasip2, not part of the host workspace.
+[workspace]
