@@ -1,0 +1,9 @@
+name = "solana-tx-inspect"
+version = "0.1.0"
+description = "Inspect a Solana transaction by signature: slot, time, status, fee"
+author = "Ace Zhang"
+wasm_path = "solana_tx_inspect.wasm"
+capabilities = ["tool"]
+# http_client: one outbound POST to the configured Solana RPC per lookup.
+# config_read: optional rpc_url override (defaults to public mainnet RPC).
+permissions = ["http_client", "config_read"]
