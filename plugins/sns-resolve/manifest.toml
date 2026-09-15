@@ -1,0 +1,7 @@
+name = "sns-resolve"
+version = "0.1.0"
+description = "Read-only Solana Name Service (.sol) resolution to a wallet address."
+author = "RugBuster"
+wasm_path = "sns_resolve.wasm"
+capabilities = ["tool"]
+permissions = ["http_client", "config_read"]
