@@ -1,0 +1,16 @@
+name = "solana-keychain-sign"
+version = "0.1.0"
+description = "Sign + submit Solana versioned transactions via HashiCorp Vault transit (multi-backend: Vault v0, AWS KMS / GCP KMS stubbed). Private key never enters the ZeroClaw process."
+author = "ZeroClaw Labs"
+wasm_path = "solana_keychain_sign.wasm"
+capabilities = ["tool"]
+# config_read: the host injects this plugin's own config section (vault_addr,
+# vault_token, vault_key_name, rpc_url, signer_pubkey, envelope limits)
+# into execute args as `__config`. Without it the plugin refuses to operate
+# (every sign call needs the operator-configured backend).
+# http_client: the wasm component makes outbound HTTP via wasi:http —
+# `getLatestBlockhash`, `sendTransaction`, `getSignatureStatuses` against
+# `rpc_url`, and the Vault transit POST to `vault_addr` for signing.
+# The host gates both at the manifest level; a plugin that does not declare
+# them cannot reach the network.
+permissions = ["config_read", "http_client"]

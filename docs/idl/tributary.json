@@ -1,0 +1,329 @@
+{
+  "address": "TRibg8W8zmPHQqWtyAD1rEBRXEdy13Mu6qX1Sg42tJ",
+  "metadata": {
+    "name": "tributary",
+    "version": "2.0.0",
+    "spec": "0.1.0",
+    "description": "Tributary recurring payment protocol. Sample Anchor 0.30+ IDL covering all 17 instructions. Detail is exact for executePayment (the only instruction the agent signs via solana-keychain-sign); other instructions carry enough arg/account metadata for the build-tx plugin to encode. See the Tributary skill and https://tributary.so for canonical types."
+  },
+  "instructions": [
+    {
+      "name": "initialize",
+      "args": [
+        { "name": "admin", "type": "pubkey" },
+        { "name": "protocolFeeBps", "type": "u16" }
+      ],
+      "accounts": [
+        {
+          "name": "programConfig",
+          "writable": true,
+          "pda": { "seeds": ["\"config\""] }
+        },
+        { "name": "admin", "signer": true },
+        {
+          "name": "systemProgram",
+          "address": "11111111111111111111111111111111"
+        }
+      ]
+    },
+    {
+      "name": "createPaymentGateway",
+      "args": [
+        { "name": "feeRecipient", "type": "pubkey" },
+        { "name": "signer", "type": "pubkey" },
+        { "name": "feeBps", "type": "u16" },
+        { "name": "featureFlags", "type": "u8" }
+      ],
+      "accounts": [
+        {
+          "name": "paymentGateway",
+          "writable": true,
+          "pda": { "seeds": ["\"gateway\"", "authority"] }
+        },
+        { "name": "authority", "signer": true },
+        { "name": "feePayer", "writable": true, "signer": true },
+        {
+          "name": "systemProgram",
+          "address": "11111111111111111111111111111111"
+        }
+      ]
+    },
+    {
+      "name": "deletePaymentGateway",
+      "args": [],
+      "accounts": [
+        { "name": "paymentGateway", "writable": true },
+        { "name": "authority", "signer": true },
+        { "name": "rentRecipient", "writable": true }
+      ]
+    },
+    {
+      "name": "changeGatewayFeeRecipient",
+      "args": [{ "name": "newFeeRecipient", "type": "pubkey" }],
+      "accounts": [
+        { "name": "paymentGateway", "writable": true },
+        { "name": "authority", "signer": true }
+      ]
+    },
+    {
+      "name": "changeGatewaySigner",
+      "args": [{ "name": "newSigner", "type": "pubkey" }],
+      "accounts": [
+        { "name": "paymentGateway", "writable": true },
+        { "name": "authority", "signer": true }
+      ]
+    },
+    {
+      "name": "changeGatewayFeeBps",
+      "args": [{ "name": "newFeeBps", "type": "u16" }],
+      "accounts": [
+        { "name": "paymentGateway", "writable": true },
+        { "name": "authority", "signer": true }
+      ]
+    },
+    {
+      "name": "updateGatewayFeatureFlags",
+      "args": [{ "name": "featureFlags", "type": "u8" }],
+      "accounts": [
+        { "name": "paymentGateway", "writable": true },
+        { "name": "authority", "signer": true }
+      ]
+    },
+    {
+      "name": "updateGatewayProtocolFee",
+      "args": [{ "name": "newProtocolFeeBps", "type": "u16" }],
+      "accounts": [
+        { "name": "paymentGateway", "writable": true },
+        { "name": "authority", "signer": true },
+        { "name": "programConfig", "writable": true }
+      ]
+    },
+    {
+      "name": "updateGatewayReferralSettings",
+      "args": [
+        { "name": "enabled", "type": "bool" },
+        { "name": "tier1Bps", "type": "u16" },
+        { "name": "tier2Bps", "type": "u16" },
+        { "name": "tier3Bps", "type": "u16" }
+      ],
+      "accounts": [
+        { "name": "paymentGateway", "writable": true },
+        { "name": "authority", "signer": true }
+      ]
+    },
+    {
+      "name": "createUserPayment",
+      "args": [
+        { "name": "owner", "type": "pubkey" },
+        { "name": "mint", "type": "pubkey" }
+      ],
+      "accounts": [
+        {
+          "name": "userPayment",
+          "writable": true,
+          "pda": { "seeds": ["\"user_payment\"", "owner", "mint"] }
+        },
+        { "name": "owner" },
+        { "name": "mint" },
+        { "name": "feePayer", "writable": true, "signer": true },
+        {
+          "name": "systemProgram",
+          "address": "11111111111111111111111111111111"
+        },
+        {
+          "name": "tokenProgram",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        }
+      ]
+    },
+    {
+      "name": "deleteUserPayment",
+      "args": [],
+      "accounts": [
+        { "name": "userPayment", "writable": true },
+        { "name": "owner", "signer": true },
+        { "name": "rentRecipient", "writable": true }
+      ]
+    },
+    {
+      "name": "createPaymentPolicy",
+      "args": [
+        { "name": "policyType", "type": { "defined": "PolicyType" } },
+        { "name": "recipient", "type": "pubkey" },
+        { "name": "gateway", "type": "pubkey" }
+      ],
+      "accounts": [
+        {
+          "name": "paymentPolicy",
+          "writable": true,
+          "pda": { "seeds": ["\"payment_policy\"", "userPayment", "policyId"] }
+        },
+        { "name": "userPayment", "writable": true },
+        { "name": "recipient" },
+        { "name": "paymentGateway" },
+        { "name": "feePayer", "writable": true, "signer": true },
+        {
+          "name": "systemProgram",
+          "address": "11111111111111111111111111111111"
+        }
+      ]
+    },
+    {
+      "name": "deletePaymentPolicy",
+      "args": [],
+      "accounts": [
+        { "name": "paymentPolicy", "writable": true },
+        { "name": "userPayment", "writable": true },
+        { "name": "owner", "signer": true },
+        { "name": "rentRecipient", "writable": true }
+      ]
+    },
+    {
+      "name": "changePaymentPolicyStatus",
+      "args": [{ "name": "status", "type": "u8" }],
+      "accounts": [
+        { "name": "paymentPolicy", "writable": true },
+        { "name": "userPayment", "writable": true },
+        { "name": "owner", "signer": true }
+      ]
+    },
+    {
+      "name": "createReferralAccount",
+      "args": [
+        { "name": "code", "type": "string" },
+        { "name": "referrer", "type": "pubkey" }
+      ],
+      "accounts": [
+        {
+          "name": "referralAccount",
+          "writable": true,
+          "pda": { "seeds": ["\"referral\"", "gateway", "code"] }
+        },
+        { "name": "paymentGateway" },
+        { "name": "referrer" },
+        { "name": "feePayer", "writable": true, "signer": true },
+        {
+          "name": "systemProgram",
+          "address": "11111111111111111111111111111111"
+        }
+      ]
+    },
+    {
+      "name": "executePayment",
+      "args": [{ "name": "policyId", "type": "u64" }],
+      "accounts": [
+        {
+          "name": "paymentPolicy",
+          "writable": true,
+          "pda": { "seeds": ["\"payment_policy\"", "userPayment", "policyId"] }
+        },
+        { "name": "userPayment", "writable": true },
+        { "name": "paymentGateway", "writable": true },
+        { "name": "paymentsDelegate", "pda": { "seeds": ["\"payments\""] } },
+        { "name": "sourceTokenAccount", "writable": true },
+        { "name": "recipientTokenAccount", "writable": true },
+        { "name": "feeRecipientTokenAccount", "writable": true },
+        { "name": "protocolFeeRecipientTokenAccount", "writable": true },
+        { "name": "mint" },
+        { "name": "gatewaySigner", "signer": true },
+        {
+          "name": "tokenProgram",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        }
+      ]
+    },
+    {
+      "name": "transferTokens",
+      "args": [{ "name": "amount", "type": "u64" }],
+      "accounts": [
+        { "name": "paymentGateway", "writable": true },
+        { "name": "sourceTokenAccount", "writable": true },
+        { "name": "recipientTokenAccount", "writable": true },
+        { "name": "feeRecipientTokenAccount", "writable": true },
+        { "name": "protocolFeeRecipientTokenAccount", "writable": true },
+        { "name": "mint" },
+        { "name": "gatewaySigner", "signer": true },
+        {
+          "name": "tokenProgram",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        }
+      ]
+    }
+  ],
+  "types": [
+    {
+      "name": "PolicyType",
+      "type": {
+        "kind": "enum",
+        "variants": [
+          {
+            "name": "Subscription",
+            "fields": [
+              { "name": "amount", "type": "u64" },
+              { "name": "autoRenew", "type": "bool" },
+              { "name": "maxRenewals", "type": "u32" },
+              {
+                "name": "paymentFrequency",
+                "type": { "defined": "PaymentFrequency" }
+              },
+              { "name": "nextPaymentDue", "type": "i64" }
+            ]
+          },
+          {
+            "name": "Milestone",
+            "fields": [
+              {
+                "name": "milestones",
+                "type": {
+                  "array": {
+                    "type": { "defined": "MilestoneEntry" },
+                    "count": 4
+                  }
+                }
+              },
+              { "name": "currentMilestone", "type": "u8" },
+              { "name": "releaseConditions", "type": "u8" },
+              { "name": "escrowAmount", "type": "u64" }
+            ]
+          },
+          {
+            "name": "PayAsYouGo",
+            "fields": [
+              { "name": "maxAmountPerPeriod", "type": "u64" },
+              { "name": "maxChunkAmount", "type": "u64" },
+              { "name": "periodLengthSeconds", "type": "u64" },
+              { "name": "currentPeriodStart", "type": "i64" },
+              { "name": "currentPeriodSpent", "type": "u64" }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "PaymentFrequency",
+      "type": {
+        "kind": "enum",
+        "variants": [
+          { "name": "Daily" },
+          { "name": "Weekly" },
+          { "name": "Monthly" },
+          { "name": "Quarterly" },
+          { "name": "SemiAnnually" },
+          { "name": "Annually" },
+          { "name": "Custom", "fields": [{ "name": "seconds", "type": "u64" }] }
+        ]
+      }
+    },
+    {
+      "name": "MilestoneEntry",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          { "name": "amount", "type": "u64" },
+          { "name": "dueTimestamp", "type": "i64" }
+        ]
+      }
+    }
+  ],
+  "idl_version": "0.30.0"
+}

@@ -1,0 +1,61 @@
+{
+  "address": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
+  "metadata": {
+    "name": "spl_token_2022",
+    "version": "0.4.0",
+    "spec": "0.1.0",
+    "description": "Minimal synthetic Anchor 0.30+ IDL for the SPL Token-2022 program. Covers the four instructions the build-tx plugin needs for the USDC demo; the real program exposes many more. Instruction names match the SPL Token convention (camelCase); discriminators are omitted because the plugin computes them as sha256('global:<snake_case_name>')[0..8] per bean l59k. SPL Token's native wire format uses a u8 instruction index — operators integrating the real program must provide the correct encoding override in the IDL (future bean); this sample is sufficient for the build-tx plugin's IDL-lookup + discriminator-block + simulation path."
+  },
+  "instructions": [
+    {
+      "name": "transfer",
+      "args": [{ "name": "amount", "type": "u64" }],
+      "accounts": [
+        { "name": "source", "writable": true },
+        { "name": "destination", "writable": true },
+        { "name": "authority", "signer": true }
+      ]
+    },
+    {
+      "name": "transferChecked",
+      "args": [
+        { "name": "amount", "type": "u64" },
+        { "name": "decimals", "type": "u8" }
+      ],
+      "accounts": [
+        { "name": "source", "writable": true },
+        { "name": "mint" },
+        { "name": "destination", "writable": true },
+        { "name": "authority", "signer": true }
+      ]
+    },
+    {
+      "name": "mintTo",
+      "args": [{ "name": "amount", "type": "u64" }],
+      "accounts": [
+        { "name": "mint", "writable": true },
+        { "name": "account", "writable": true },
+        { "name": "authority", "signer": true }
+      ]
+    },
+    {
+      "name": "createAccount",
+      "args": [
+        { "name": "amount", "type": "u64" },
+        { "name": "space", "type": "u64" },
+        { "name": "owner", "type": "pubkey" }
+      ],
+      "accounts": [
+        { "name": "funder", "writable": true, "signer": true },
+        { "name": "newAccount", "writable": true, "signer": true }
+      ]
+    }
+  ],
+  "types": [
+    {
+      "name": "Pubkey",
+      "type": { "defined": "pubkey" }
+    }
+  ],
+  "idl_version": "0.30.0"
+}

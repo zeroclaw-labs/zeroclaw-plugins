@@ -1,0 +1,49 @@
+# Standalone crate (own [workspace]): built for wasm32-wasip2 as a tool-plugin
+# component; the pure host-testable core (rlib) is exercised with plain
+# `cargo test` on the host without a wasm toolchain. `waki` (the blocking
+# wasi:http client) is a wasm-only dep so the host test build never tries to
+# compile it.
+#
+# Deps the full signer needs (bs58 / borsh / sha2 / ed25519-dalek / serde /
+# wit-bindgen) all ship here so descendant beans do not have to touch this
+# file. `wit-bindgen` + `serde` drive the `#[cfg(target_family = "wasm")]`
+# component shim in `lib.rs`; the Solana-primitive crates are pulled in by
+# the future message assembly in `submit.rs` (bean s37c) and signature
+# verification (also s37c). Adding more deps is fine; deleting or downgrading
+# these breaks downstream beans.
+[package]
+name = "solana-keychain-sign"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "ZeroClaw T2 tool plugin: sign + submit Solana versioned transactions via HashiCorp Vault transit (multi-backend: Vault v0, AWS KMS / GCP KMS stubbed)."
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+base64 = "0.22"
+bs58 = "0.5"
+borsh = { version = "1", features = ["derive"] }
+sha2 = "0.10"
+# Verification only — signing happens in the backend (Vault / KMS), never here.
+ed25519-dalek = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# wit-bindgen drives the `tool-plugin` world shim — only the wasm component
+# target pulls it in, host tests never do.
+[target.'cfg(target_family = "wasm")'.dependencies]
+wit-bindgen = "0.46"
+# wasi:http client — only compiled for the wasm component, never on the host.
+waki = { version = "0.5.1", features = ["json"] }
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true
+codegen-units = 1
+
+# Standalone crate: built for wasm32-wasip2, not part of the host workspace.
+[workspace]
