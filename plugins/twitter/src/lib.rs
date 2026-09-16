@@ -20,7 +20,7 @@ pub mod twitter;
 #[cfg(target_family = "wasm")]
 mod component {
     wit_bindgen::generate!({
-        path: "../../wit/v0",
+        path: "../../wit/unstable",
         world: "channel-plugin",
         features: ["plugins-wit-v0"],
     });
@@ -31,9 +31,9 @@ mod component {
     use serde_json::Value;
 
     use crate::twitter::{
-        Inbound, TWEET_MAX_CHARS, TwitterConfig, advance_cursor, build_mentions_url, build_self_url,
-        build_tweet_body, build_tweets_url, chunk_tweet, created_tweet_id, is_user_allowed,
-        parse_mentions, parse_self_handle, parse_self_id, reply_id_from_recipient,
+        advance_cursor, build_mentions_url, build_self_url, build_tweet_body, build_tweets_url,
+        chunk_tweet, created_tweet_id, is_user_allowed, parse_mentions, parse_self_handle,
+        parse_self_id, reply_id_from_recipient, Inbound, TwitterConfig, TWEET_MAX_CHARS,
     };
 
     use exports::zeroclaw::plugin::channel::{
@@ -48,7 +48,7 @@ mod component {
     thread_local! {
         static CONFIG: RefCell<TwitterConfig> = RefCell::new(TwitterConfig::default());
         static SINCE_ID: RefCell<Option<String>> = const { RefCell::new(None) };
-        static BUFFER: RefCell<VecDeque<Inbound>> = RefCell::new(VecDeque::new());
+        static BUFFER: RefCell<VecDeque<Inbound>> = const { RefCell::new(VecDeque::new()) };
         static SELF_ID: RefCell<Option<String>> = const { RefCell::new(None) };
         static SELF_HANDLE: RefCell<Option<String>> = const { RefCell::new(None) };
     }

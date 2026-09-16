@@ -8,7 +8,7 @@
 //! the interesting behavior is covered by a plain host `cargo test`.
 
 use serde::Deserialize;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
 /// The plugin's config section (`[channels.twitter.<alias>]` for a mirror, or
 /// `[[plugins.entries.twitter]].config` as a novel plugin). Field names are the
@@ -118,10 +118,7 @@ pub fn parse_mentions(response: &Value) -> Vec<Inbound> {
     let Some(arr) = response.get("data").and_then(Value::as_array) else {
         return Vec::new();
     };
-    let mut out: Vec<Inbound> = arr
-        .iter()
-        .filter_map(parse_tweet)
-        .collect();
+    let mut out: Vec<Inbound> = arr.iter().filter_map(parse_tweet).collect();
     out.reverse();
     out
 }

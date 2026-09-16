@@ -1,10 +1,40 @@
 name = "redact-text"
-version = "0.2.0"
+version = "0.3.0"
 description = "Redact secrets and PII from text: emails, bearer/API tokens, and configured patterns"
 author = "ZeroClaw Labs"
 wasm_path = "redact_text.wasm"
 capabilities = ["tool"]
-# config_read: the host injects this plugin's own config section (replacement,
-# redact_emails, patterns) into execute args as `__config`. Without it the
-# plugin still works with defaults.
+# config_read and config_schema are a biconditional: the host rejects the
+# manifest if either appears without the other. The host validates the
+# operator's values against the schema below, materializes them as typed JSON,
+# and injects that object into execute args as `__config`.
 permissions = ["config_read"]
+
+# Every property is optional, so a withheld config_read grant validates and
+# injects `{}` and the plugin runs on the defaults in src/redact.rs. A key that
+# must be present for the plugin to work at all belongs in `required` instead,
+# which fails closed.
+[config_schema]
+"$schema" = "https://json-schema.org/draft/2020-12/schema"
+type = "object"
+additionalProperties = false
+
+[config_schema.properties.replacement]
+type = "string"
+minLength = 1
+description = "Text substituted for each redacted span. Defaults to [REDACTED]."
+
+[config_schema.properties.redact_emails]
+type = "boolean"
+description = "Mask email-shaped substrings. Defaults to true."
+
+[config_schema.properties.patterns]
+type = "array"
+description = "Additional literal substrings to mask, beyond emails and tokens. Defaults to none."
+
+# An empty pattern would match at every character boundary and rewrite the whole
+# input into replacement markers, so it is rejected here as well as filtered in
+# the guest.
+[config_schema.properties.patterns.items]
+type = "string"
+minLength = 1

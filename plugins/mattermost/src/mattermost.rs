@@ -8,7 +8,7 @@
 //! `cargo test`.
 
 use serde::Deserialize;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
 /// The plugin's config section (`[channels.mattermost.<alias>]` for a mirror, or
 /// `[[plugins.entries.mattermost]].config` as a novel plugin). Field names match
@@ -126,7 +126,7 @@ pub fn extract_posts(response: &Value) -> Vec<Value> {
         return Vec::new();
     };
     let mut list: Vec<Value> = posts.values().cloned().collect();
-    list.sort_by_key(|p| post_create_at(p));
+    list.sort_by_key(post_create_at);
     list
 }
 

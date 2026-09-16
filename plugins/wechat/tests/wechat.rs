@@ -115,7 +115,10 @@ fn extract_text_handles_ref_quote_and_voice() {
         "text_item": { "text": "reply body" },
         "ref_msg": { "title": "earlier" }
     })];
-    assert_eq!(extract_text_from_items(&quoted), "[引用: earlier]\nreply body");
+    assert_eq!(
+        extract_text_from_items(&quoted),
+        "[引用: earlier]\nreply body"
+    );
 
     // Voice transcription.
     let voice = vec![json!({ "type": ITEM_TYPE_VOICE, "voice_item": { "text": "spoken words" } })];
@@ -127,7 +130,10 @@ fn extract_text_handles_ref_quote_and_voice() {
 
 #[test]
 fn error_codes_and_session_expiry() {
-    assert_eq!(response_error_code(&json!({ "ret": 0, "errcode": 0 })), None);
+    assert_eq!(
+        response_error_code(&json!({ "ret": 0, "errcode": 0 })),
+        None
+    );
     assert_eq!(response_error_code(&json!({ "ret": -14 })), Some(-14));
     assert_eq!(response_error_code(&json!({ "errcode": 500 })), Some(500));
     assert!(is_session_expired(SESSION_EXPIRED_ERRCODE));
@@ -161,7 +167,13 @@ fn sender_and_context_token_helpers() {
 
 #[test]
 fn send_body_shape() {
-    let body = build_send_body("wxid_alice", "reply", "ctx-7", "zeroclaw-1", CHANNEL_VERSION);
+    let body = build_send_body(
+        "wxid_alice",
+        "reply",
+        "ctx-7",
+        "zeroclaw-1",
+        CHANNEL_VERSION,
+    );
     assert_eq!(body["msg"]["to_user_id"], json!("wxid_alice"));
     assert_eq!(body["msg"]["from_user_id"], json!(""));
     assert_eq!(body["msg"]["client_id"], json!("zeroclaw-1"));
@@ -169,7 +181,10 @@ fn send_body_shape() {
     assert_eq!(body["msg"]["message_type"], json!(MESSAGE_TYPE_BOT));
     assert_eq!(body["msg"]["message_state"], json!(MESSAGE_STATE_FINISH));
     assert_eq!(body["msg"]["item_list"][0]["type"], json!(ITEM_TYPE_TEXT));
-    assert_eq!(body["msg"]["item_list"][0]["text_item"]["text"], json!("reply"));
+    assert_eq!(
+        body["msg"]["item_list"][0]["text_item"]["text"],
+        json!("reply")
+    );
     assert_eq!(body["base_info"]["channel_version"], json!(CHANNEL_VERSION));
 }
 
@@ -205,7 +220,10 @@ fn plain_text_strips_common_markdown() {
     assert_eq!(to_plain_text("# Heading"), "Heading");
     assert_eq!(to_plain_text("- bullet item"), "bullet item");
     assert_eq!(to_plain_text("> quoted"), "quoted");
-    assert_eq!(to_plain_text("some **bold** and `code`"), "some bold and code");
+    assert_eq!(
+        to_plain_text("some **bold** and `code`"),
+        "some bold and code"
+    );
 
     // Fenced code: the ``` marker lines drop, the content stays.
     let fenced = "before\n```rust\nlet x = 1;\n```\nafter";

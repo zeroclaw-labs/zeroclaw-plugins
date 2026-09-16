@@ -19,7 +19,7 @@ pub mod mochat;
 #[cfg(target_family = "wasm")]
 mod component {
     wit_bindgen::generate!({
-        path: "../../wit/v0",
+        path: "../../wit/unstable",
         world: "channel-plugin",
         features: ["plugins-wit-v0"],
     });
@@ -31,8 +31,8 @@ mod component {
     use serde_json::Value;
 
     use crate::mochat::{
-        DedupSet, Inbound, MochatConfig, build_send_body, extract_messages, health_url, is_send_ok,
-        message_id, parse_message, receive_url, send_error, send_url,
+        build_send_body, extract_messages, health_url, is_send_ok, message_id, parse_message,
+        receive_url, send_error, send_url, DedupSet, Inbound, MochatConfig,
     };
 
     use exports::zeroclaw::plugin::channel::{
@@ -49,7 +49,7 @@ mod component {
         // Poll cursor: the platform id of the last delivered message, sent as
         // `?since_id=` on the next receive request.
         static CURSOR: RefCell<Option<String>> = const { RefCell::new(None) };
-        static BUFFER: RefCell<VecDeque<Inbound>> = RefCell::new(VecDeque::new());
+        static BUFFER: RefCell<VecDeque<Inbound>> = const { RefCell::new(VecDeque::new()) };
         // Belt-and-suspenders with `since_id`: never re-deliver a message id we
         // have already handed out, even if the server ignores the cursor.
         static DEDUP: RefCell<DedupSet> = RefCell::new(DedupSet::default());

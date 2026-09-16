@@ -3,10 +3,10 @@
 //! no wasm).
 
 use notion::notion::{
-    MAX_RESULT_LENGTH, NotionConfig, build_complete_payload, build_query_body,
-    build_recover_payload, build_rich_text_payload, build_status_filter, build_status_payload,
-    build_status_update_payload, database_url, detect_status_type, extract_text_from_property,
-    page_url, parse_pending, query_url, truncate_result,
+    build_complete_payload, build_query_body, build_recover_payload, build_rich_text_payload,
+    build_status_filter, build_status_payload, build_status_update_payload, database_url,
+    detect_status_type, extract_text_from_property, page_url, parse_pending, query_url,
+    truncate_result, NotionConfig, MAX_RESULT_LENGTH,
 };
 use serde_json::json;
 
@@ -127,7 +127,10 @@ fn status_update_payload_flips_only_status() {
 #[test]
 fn complete_payload_writes_result_and_done() {
     let body = build_complete_payload("Status", "Result", "select", "the answer");
-    assert_eq!(body["properties"]["Status"], json!({ "select": { "name": "done" } }));
+    assert_eq!(
+        body["properties"]["Status"],
+        json!({ "select": { "name": "done" } })
+    );
     assert_eq!(
         body["properties"]["Result"]["rich_text"][0]["text"]["content"]
             .as_str()

@@ -7,7 +7,7 @@
 //! so the interesting behavior is covered by a plain host `cargo test`.
 
 use serde::Deserialize;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
 /// The plugin's config section (`[channels.telegram.<alias>]` for a mirror, or
 /// `[[plugins.entries.telegram]].config` as a novel plugin). Field names are the
@@ -77,7 +77,11 @@ pub fn parse_update(update: &Value) -> Option<Inbound> {
             from.get("username")
                 .and_then(Value::as_str)
                 .map(str::to_string)
-                .or_else(|| from.get("id").and_then(Value::as_i64).map(|id| id.to_string()))
+                .or_else(|| {
+                    from.get("id")
+                        .and_then(Value::as_i64)
+                        .map(|id| id.to_string())
+                })
                 .unwrap_or_else(|| "unknown".to_string())
         })
         .unwrap_or_else(|| "unknown".to_string());

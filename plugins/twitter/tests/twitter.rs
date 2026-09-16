@@ -4,9 +4,9 @@
 
 use serde_json::json;
 use twitter::twitter::{
-    TWEET_MAX_CHARS, TwitterConfig, advance_cursor, build_mentions_url, build_self_url,
-    build_tweet_body, build_tweets_url, chunk_tweet, created_tweet_id, is_user_allowed, max_tweet_id,
-    newest_id, parse_mentions, parse_self_handle, parse_self_id, reply_id_from_recipient,
+    advance_cursor, build_mentions_url, build_self_url, build_tweet_body, build_tweets_url,
+    chunk_tweet, created_tweet_id, is_user_allowed, max_tweet_id, newest_id, parse_mentions,
+    parse_self_handle, parse_self_id, reply_id_from_recipient, TwitterConfig, TWEET_MAX_CHARS,
 };
 
 fn mentions_response() -> serde_json::Value {
@@ -87,14 +87,26 @@ fn advances_cursor_from_meta_then_max_id() {
         { "id": "999999999999999999",  "text": "b", "author_id": "1" }
     ]});
     assert_eq!(newest_id(&no_meta), None);
-    assert_eq!(max_tweet_id(&no_meta).as_deref(), Some("1000000000000000009"));
-    assert_eq!(advance_cursor(&no_meta).as_deref(), Some("1000000000000000009"));
+    assert_eq!(
+        max_tweet_id(&no_meta).as_deref(),
+        Some("1000000000000000009")
+    );
+    assert_eq!(
+        advance_cursor(&no_meta).as_deref(),
+        Some("1000000000000000009")
+    );
 }
 
 #[test]
 fn urls_are_built_for_each_endpoint() {
-    assert_eq!(build_self_url("https://api.x.com/2"), "https://api.x.com/2/users/me");
-    assert_eq!(build_tweets_url("https://api.x.com/2"), "https://api.x.com/2/tweets");
+    assert_eq!(
+        build_self_url("https://api.x.com/2"),
+        "https://api.x.com/2/users/me"
+    );
+    assert_eq!(
+        build_tweets_url("https://api.x.com/2"),
+        "https://api.x.com/2/tweets"
+    );
 
     let no_since = build_mentions_url("https://api.x.com/2", "42", None);
     assert_eq!(
@@ -139,7 +151,10 @@ fn created_tweet_id_reads_the_new_id() {
     let ok = json!({ "data": { "id": "1701", "text": "posted" } });
     assert_eq!(created_tweet_id(&ok).as_deref(), Some("1701"));
     // A failure body has no usable id.
-    assert_eq!(created_tweet_id(&json!({ "errors": [ { "message": "bad" } ] })), None);
+    assert_eq!(
+        created_tweet_id(&json!({ "errors": [ { "message": "bad" } ] })),
+        None
+    );
     assert_eq!(created_tweet_id(&json!({ "data": { "id": "" } })), None);
 }
 
@@ -166,7 +181,10 @@ fn allow_list_semantics() {
     assert!(is_user_allowed(&["999".into()], &["*".into()]));
     assert!(!is_user_allowed(&["999".into()], &[]));
     assert!(is_user_allowed(&["mybot".into()], &["@MyBot".into()]));
-    assert!(is_user_allowed(&["999".into()], &["mybot".into(), "999".into()]));
+    assert!(is_user_allowed(
+        &["999".into()],
+        &["mybot".into(), "999".into()]
+    ));
     assert!(!is_user_allowed(&["555".into()], &["999".into()]));
 }
 
