@@ -12,3 +12,41 @@ permissions = ["http_client", "config_read"]
 # load this as a novel channel named `mattermost`, configured from
 # [[plugins.entries.mattermost]]).
 provides = "mattermost"
+
+# ── typed plugin config ───────────────────────────────────────────────────────
+# `config_read` and `config_schema` are a biconditional: a host carrying the
+# typed-config enforcement refuses to discover a manifest that requests one
+# without the other (crates/zeroclaw-plugins/src/config.rs,
+# compile_manifest_config). See zeroclaw-labs/zeroclaw-plugins#147.
+#
+# Keys are exactly the set this package's guest config struct
+# deserializes from the JSON the host hands to `configure`, so
+# `additionalProperties = false` cannot reject a key the plugin reads.
+#
+# `required` is the minimum set the guest's own activation predicate needs
+# before it will make a call; a withheld `config_read` grant then fails closed
+# instead of starting the channel half-configured.
+#
+# No `x-secret` here on purpose: the channel ABI vendored in this repo is
+# `configure(config: string)` and the host serializes the whole operator map
+# into that string, so the guest still receives credentials inline. Marking
+# them `x-secret` only becomes correct alongside a guest that reads them
+# through `secrets.get()` on the point-of-use ABI — a separate change.
+[config_schema]
+"$schema" = "https://json-schema.org/draft/2020-12/schema"
+type = "object"
+required = ["url", "bot_token"]
+additionalProperties = false
+
+[config_schema.properties.url]
+type = "string"
+minLength = 1
+[config_schema.properties.bot_token]
+type = "string"
+minLength = 1
+[config_schema.properties.channel_ids]
+type = "array"
+[config_schema.properties.channel_ids.items]
+type = "string"
+[config_schema.properties.thread_replies]
+type = "boolean"
