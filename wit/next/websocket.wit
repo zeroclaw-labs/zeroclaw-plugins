@@ -87,6 +87,8 @@ interface websocket {
         send: func(message: message) -> result<_, websocket-error>;
 
         /// Drain one event without blocking; `none` means no event is ready.
+        /// After the terminal `closed` or `failed` event has been drained,
+        /// every later call returns the `closed` error.
         receive: func() -> result<option<event>, websocket-error>;
 
         /// Start a graceful close handshake. Dropping the resource cancels it.

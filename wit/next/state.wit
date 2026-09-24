@@ -37,6 +37,8 @@ interface state {
     ///
     /// `none` requires the key to be absent. `some(revision)` requires an
     /// exact current revision match. Returns the newly committed revision.
+    /// Revisions are opaque and never reused within an instance, even after a
+    /// key is deleted and recreated.
     put: func(
         key: string,
         value: list<u8>,
