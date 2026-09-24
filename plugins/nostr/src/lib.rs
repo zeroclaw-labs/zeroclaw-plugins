@@ -3,9 +3,11 @@
 //! Nostr has no HTTP polling surface: a client keeps a persistent WebSocket to a
 //! relay, sends a `["REQ", ...]` subscription, and drains `["EVENT", ...]`
 //! frames. A plugin can't open a socket inside the WASI sandbox, so the host
-//! owns it: this shim drives the relay protocol over the host-mediated
-//! `ws-client` import (gated by the `websocket_client` permission) exactly as
-//! the sibling HTTP plugins drive `wasi:http`.
+//! owns it: this shim drives the relay protocol over the host's `websocket`
+//! resource (`wit/next`, gated by the `websocket_client` permission and the
+//! instance's egress grant) exactly as the sibling HTTP plugins drive
+//! `wasi:http`. Config arrives through `config.get`; the private key is an
+//! `x-secret` read through `secrets.get`.
 //!
 //! Scope (v0.1.0): **receive-only, plaintext notes** — it proves the WebSocket
 //! round-trip by subscribing (kind 1) and surfacing each received note as an
@@ -24,7 +26,7 @@ pub mod nostr;
 #[cfg(target_family = "wasm")]
 mod component {
     wit_bindgen::generate!({
-        path: "../../wit/unstable",
+        path: "../../wit/next",
         world: "channel-plugin",
         features: ["plugins-wit-v0", "plugins-wit-v0-websocket"],
     });
@@ -38,10 +40,12 @@ mod component {
 
     use exports::zeroclaw::plugin::channel::{
         ApprovalRequest, ApprovalResponse, ChannelCapabilities, Guest as Channel, InboundMessage,
-        SendMessage, WebhookRejection,
+        SendMessage, WebhookRejection, WebhookRequest, WebhookResponse,
     };
     use exports::zeroclaw::plugin::plugin_info::Guest as PluginInfo;
-    use zeroclaw::plugin::ws_client::{self, WsEvent};
+    use zeroclaw::plugin::config;
+    use zeroclaw::plugin::secrets::{self, SecretError};
+    use zeroclaw::plugin::websocket::{self, ConnectOptions, Connection, Event, Message};
 
     const PLUGIN_NAME: &str = "nostr";
     const PLUGIN_VERSION: &str = "0.1.0";
@@ -56,8 +60,8 @@ mod component {
 
     thread_local! {
         static CONFIG: RefCell<NostrConfig> = RefCell::new(NostrConfig::default());
-        // Current ws-client handle; 0 = not connected.
-        static CONN: Cell<u64> = const { Cell::new(0) };
+        // The live relay connection; dropping it closes the socket.
+        static CONN: RefCell<Option<Connection>> = const { RefCell::new(None) };
         // Whether the REQ has been sent on the current connection.
         static SUBSCRIBED: Cell<bool> = const { Cell::new(false) };
         static BUFFER: RefCell<VecDeque<Inbound>> = const { RefCell::new(VecDeque::new()) };
@@ -101,10 +105,28 @@ mod component {
     }
 
     /// Close and forget the current connection so the next poll redials.
-    fn drop_connection(handle: u64) {
-        ws_client::ws_close(handle);
-        CONN.with(|c| c.set(0));
+    /// Dropping the resource closes the socket and releases the host's slot.
+    fn drop_connection() {
+        CONN.with(|c| *c.borrow_mut() = None);
         SUBSCRIBED.with(|s| s.set(false));
+    }
+
+    /// Typed public config from `config.get`, plus the `x-secret` private key.
+    fn load_config() -> Result<NostrConfig, String> {
+        let public = config::get().map_err(|error| format!("nostr: config: {error:?}"))?;
+        let mut value: serde_json::Value =
+            serde_json::from_str(&public).map_err(|error| format!("nostr: config: {error}"))?;
+        let object = value
+            .as_object_mut()
+            .ok_or_else(|| "nostr: config is not an object".to_string())?;
+        match secrets::get("private_key") {
+            Ok(key) => {
+                object.insert("private_key".to_string(), serde_json::Value::String(key));
+            }
+            Err(SecretError::NotFound) => {}
+            Err(error) => return Err(format!("nostr: secret private_key: {error:?}")),
+        }
+        Ok(NostrConfig::from_json(&value.to_string()))
     }
 
     struct NostrChannel;
@@ -123,15 +145,10 @@ mod component {
             PLUGIN_NAME.to_string()
         }
 
-        fn configure(config: String) -> Result<(), String> {
-            let cfg = NostrConfig::from_json(&config);
+        fn configure() -> Result<(), String> {
+            let cfg = load_config()?;
             // A fresh config invalidates any live connection; redial lazily.
-            let handle = CONN.with(Cell::get);
-            if handle != 0 {
-                ws_client::ws_close(handle);
-            }
-            CONN.with(|c| c.set(0));
-            SUBSCRIBED.with(|s| s.set(false));
+            drop_connection();
             CONFIG.with(|c| *c.borrow_mut() = cfg);
             Ok(())
         }
@@ -157,24 +174,29 @@ mod component {
             let relay = cfg.first_relay()?.to_string();
 
             // 2) Ensure a live connection (redial on the next poll if it fails).
-            let mut handle = CONN.with(Cell::get);
-            if handle == 0 {
-                match ws_client::ws_connect(&relay, &[]) {
-                    Ok(h) => {
-                        CONN.with(|c| c.set(h));
-                        SUBSCRIBED.with(|s| s.set(false));
-                        handle = h;
-                    }
-                    Err(_e) => return None,
-                }
+            if CONN.with(|c| c.borrow().is_none()) {
+                let connection = websocket::connect(&ConnectOptions {
+                    url: relay,
+                    headers: Vec::new(),
+                    subprotocols: Vec::new(),
+                    tls_profile: cfg.tls_profile.clone(),
+                })
+                .ok()?;
+                CONN.with(|c| *c.borrow_mut() = Some(connection));
+                SUBSCRIBED.with(|s| s.set(false));
             }
 
             // 3) Subscribe once per connection.
             if !SUBSCRIBED.with(Cell::get) {
-                match ws_client::ws_send_text(handle, &cfg.build_req_frame()) {
-                    Ok(()) => SUBSCRIBED.with(|s| s.set(true)),
-                    Err(_e) => {
-                        drop_connection(handle);
+                let sent = CONN.with(|c| {
+                    c.borrow()
+                        .as_ref()
+                        .map(|conn| conn.send(&Message::Text(cfg.build_req_frame())))
+                });
+                match sent {
+                    Some(Ok(())) => SUBSCRIBED.with(|s| s.set(true)),
+                    _ => {
+                        drop_connection();
                         return None;
                     }
                 }
@@ -182,8 +204,9 @@ mod component {
 
             // 4) Drain a bounded batch of frames into the buffer.
             for _ in 0..MAX_DRAIN_PER_POLL {
-                match ws_client::ws_receive(handle) {
-                    Ok(WsEvent::Text(frame)) => {
+                let received = CONN.with(|c| c.borrow().as_ref().map(Connection::receive));
+                match received? {
+                    Ok(Some(Event::Message(Message::Text(frame)))) => {
                         if let RelayMessage::Event { event, .. } = decode_relay_message(&frame) {
                             if should_emit(&cfg, &event) && first_sighting(&event.id) {
                                 let inb = event_to_inbound(&event, None);
@@ -191,15 +214,13 @@ mod component {
                             }
                         }
                     }
+                    // Binary frames carry no Nostr protocol messages.
+                    Ok(Some(Event::Message(Message::Binary(_)))) => {}
                     // No frame ready — stop draining and let the host back off.
-                    Ok(WsEvent::Idle) => break,
+                    Ok(None) => break,
                     // Connection ended (or errored); redial on the next poll.
-                    Ok(WsEvent::Closed(_reason)) => {
-                        drop_connection(handle);
-                        break;
-                    }
-                    Err(_e) => {
-                        drop_connection(handle);
+                    Ok(Some(Event::Closed(_) | Event::Failed(_))) | Err(_) => {
+                        drop_connection();
                         break;
                     }
                 }
@@ -297,10 +318,7 @@ mod component {
             None
         }
 
-        fn parse_webhook(
-            _headers: Vec<(String, String)>,
-            _body: Vec<u8>,
-        ) -> Result<Vec<InboundMessage>, WebhookRejection> {
+        fn parse_webhook(_request: WebhookRequest) -> Result<WebhookResponse, WebhookRejection> {
             Err(WebhookRejection::BadRequest(
                 "this channel does not serve webhooks".to_string(),
             ))

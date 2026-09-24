@@ -68,6 +68,9 @@ pub struct NostrConfig {
     /// Sender allow-list (hex pubkeys or `"*"`). Empty = allow everyone
     /// (mirrors the sibling Telegram plugin's `allowed_users` semantics).
     pub allowed_pubkeys: Vec<String>,
+    /// Host-configured TLS profile for the relay (a private CA or a client
+    /// certificate). `None` uses the roots the host already trusts.
+    pub tls_profile: Option<String>,
 }
 
 impl Default for NostrConfig {
@@ -80,6 +83,7 @@ impl Default for NostrConfig {
             subscription_id: DEFAULT_SUBSCRIPTION_ID.to_string(),
             limit: DEFAULT_LIMIT,
             allowed_pubkeys: Vec::new(),
+            tls_profile: None,
         }
     }
 }
@@ -111,6 +115,8 @@ struct RawConfig {
     limit: Option<u64>,
     #[serde(default)]
     allowed_pubkeys: Option<Vec<String>>,
+    #[serde(default)]
+    tls_profile: Option<String>,
 }
 
 impl NostrConfig {
@@ -183,6 +189,7 @@ impl NostrConfig {
             subscription_id,
             limit,
             allowed_pubkeys,
+            tls_profile: raw.tls_profile.filter(|p| !p.trim().is_empty()),
         }
     }
 

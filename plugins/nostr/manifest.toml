@@ -9,10 +9,50 @@ capabilities = ["channel"]
 registry = false
 # websocket_client: the host dials the relay `wss://` socket and pumps frames;
 # the plugin drives the Nostr REQ/EVENT protocol over it (TLS is host-side).
-# config_read: read the relays + keys + allow-list from this channel's config.
+# config_read: the typed config below through config.get; private_key is
+# x-secret and reaches the plugin only through secrets.get. Binds wit/next.
 permissions = ["websocket_client", "config_read"]
 # provides: mirror the built-in `nostr` channel — read [channels.nostr.*] and
 # honor native-wins. Inert on hosts without the `provides` feature (they load
 # this as a novel channel named `nostr`, configured from
 # [[plugins.entries.nostr]]).
 provides = "nostr"
+
+[config_schema]
+"$schema" = "https://json-schema.org/draft/2020-12/schema"
+type = "object"
+additionalProperties = false
+
+[config_schema.properties.relays]
+type = "array"
+items = { type = "string" }
+
+[config_schema.properties.pubkey]
+type = "string"
+
+[config_schema.properties.kinds]
+type = "array"
+items = { type = "integer" }
+
+[config_schema.properties.subscription_id]
+type = "string"
+
+[config_schema.properties.limit]
+type = "integer"
+
+[config_schema.properties.allowed_pubkeys]
+type = "array"
+items = { type = "string" }
+
+[config_schema.properties.tls_profile]
+type = "string"
+
+[config_schema.properties.private_key]
+type = "string"
+x-secret = true
+
+# PEM CA certificates for a private relay, referenced by an operator TLS
+# profile's custom_ca_secret. The host reads it; the plugin never does.
+[config_schema.properties.tls_ca]
+type = "string"
+x-secret = true
