@@ -35,7 +35,8 @@ mod component {
     use std::collections::{HashSet, VecDeque};
 
     use crate::nostr::{
-        decode_relay_message, event_to_inbound, should_emit, Inbound, NostrConfig, RelayMessage,
+        decode_cursor, decode_relay_message, encode_cursor, event_to_inbound, should_emit,
+        since_after, Inbound, NostrConfig, RelayMessage, CURSOR_KEY,
     };
 
     use exports::zeroclaw::plugin::channel::{
@@ -45,6 +46,7 @@ mod component {
     use exports::zeroclaw::plugin::plugin_info::Guest as PluginInfo;
     use zeroclaw::plugin::config;
     use zeroclaw::plugin::secrets::{self, SecretError};
+    use zeroclaw::plugin::state::{self, StateError};
     use zeroclaw::plugin::websocket::{self, ConnectOptions, Connection, Event, Message};
 
     const PLUGIN_NAME: &str = "nostr";
@@ -67,6 +69,45 @@ mod component {
         static BUFFER: RefCell<VecDeque<Inbound>> = const { RefCell::new(VecDeque::new()) };
         // Event ids already surfaced, to suppress relay/reconnect duplicates.
         static SEEN: RefCell<HashSet<String>> = RefCell::new(HashSet::new());
+        // Durable delivery cursor: the newest delivered note's `created_at`
+        // and the state revision it was stored at. `None` until loaded.
+        static CURSOR: RefCell<Option<(u64, Option<u64>)>> = const { RefCell::new(None) };
+    }
+
+    /// Load the durable delivery cursor. State that is unavailable or not
+    /// granted leaves the channel working without persistence.
+    fn load_cursor() -> (u64, Option<u64>) {
+        let loaded = match state::get(CURSOR_KEY) {
+            Ok(Some(entry)) => (
+                decode_cursor(&entry.value).unwrap_or(0),
+                Some(entry.revision),
+            ),
+            Ok(None) | Err(_) => (0, None),
+        };
+        CURSOR.with(|c| *c.borrow_mut() = Some(loaded));
+        loaded
+    }
+
+    /// Advance the durable cursor to `created_at` if it is newer. A conflict
+    /// means another store of this instance wrote first: re-read, keep the
+    /// newer of the two, and try once more.
+    fn advance_cursor(created_at: u64) {
+        for _ in 0..2 {
+            let (current, revision) = CURSOR.with(|c| *c.borrow()).unwrap_or((0, None));
+            if created_at <= current {
+                return;
+            }
+            match state::put(CURSOR_KEY, &encode_cursor(created_at), revision) {
+                Ok(next) => {
+                    CURSOR.with(|c| *c.borrow_mut() = Some((created_at, Some(next))));
+                    return;
+                }
+                Err(StateError::Conflict) => {
+                    load_cursor();
+                }
+                Err(_) => return,
+            }
+        }
     }
 
     fn to_wit(inb: Inbound) -> InboundMessage {
@@ -186,12 +227,16 @@ mod component {
                 SUBSCRIBED.with(|s| s.set(false));
             }
 
-            // 3) Subscribe once per connection.
+            // 3) Subscribe once per connection, resuming after the newest
+            //    note a previous run of this instance delivered.
             if !SUBSCRIBED.with(Cell::get) {
+                let (cursor, _) = load_cursor();
+                let since = since_after((cursor > 0).then_some(cursor));
+                let frame = cfg.build_req_frame_since(since);
                 let sent = CONN.with(|c| {
                     c.borrow()
                         .as_ref()
-                        .map(|conn| conn.send(&Message::Text(cfg.build_req_frame())))
+                        .map(|conn| conn.send(&Message::Text(frame.clone())))
                 });
                 match sent {
                     Some(Ok(())) => SUBSCRIBED.with(|s| s.set(true)),
@@ -208,9 +253,15 @@ mod component {
                 match received? {
                     Ok(Some(Event::Message(Message::Text(frame)))) => {
                         if let RelayMessage::Event { event, .. } = decode_relay_message(&frame) {
-                            if should_emit(&cfg, &event) && first_sighting(&event.id) {
+                            let (cursor, _) = CURSOR.with(|c| *c.borrow()).unwrap_or((0, None));
+                            let already_delivered = cursor > 0 && event.created_at <= cursor;
+                            if should_emit(&cfg, &event)
+                                && !already_delivered
+                                && first_sighting(&event.id)
+                            {
                                 let inb = event_to_inbound(&event, None);
                                 BUFFER.with(|b| b.borrow_mut().push_back(inb));
+                                advance_cursor(event.created_at);
                             }
                         }
                     }

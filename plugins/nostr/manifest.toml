@@ -11,7 +11,9 @@ registry = false
 # the plugin drives the Nostr REQ/EVENT protocol over it (TLS is host-side).
 # config_read: the typed config below through config.get; private_key is
 # x-secret and reaches the plugin only through secrets.get. Binds wit/next.
-permissions = ["websocket_client", "config_read"]
+# state_read/state_write: a durable delivery cursor, so a restarted instance
+# resumes its subscription after the newest note it already delivered.
+permissions = ["websocket_client", "config_read", "state_read", "state_write"]
 # provides: mirror the built-in `nostr` channel — read [channels.nostr.*] and
 # honor native-wins. Inert on hosts without the `provides` feature (they load
 # this as a novel channel named `nostr`, configured from

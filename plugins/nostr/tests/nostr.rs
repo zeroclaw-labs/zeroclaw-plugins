@@ -55,3 +55,24 @@ fn control_frames_do_not_produce_inbound() {
         ));
     }
 }
+
+#[test]
+fn delivery_cursor_round_trips_and_narrows_the_subscription() {
+    use nostr::nostr::{decode_cursor, encode_cursor, since_after, NostrConfig};
+
+    assert_eq!(
+        decode_cursor(&encode_cursor(1_700_000_000)),
+        Some(1_700_000_000)
+    );
+    assert_eq!(decode_cursor(b"not-a-number"), None);
+    assert_eq!(since_after(None), None);
+    assert_eq!(since_after(Some(1_700_000_000)), Some(1_700_000_001));
+    assert_eq!(since_after(Some(u64::MAX)), Some(u64::MAX));
+
+    let config = NostrConfig::default();
+    let fresh: serde_json::Value = serde_json::from_str(&config.build_req_frame()).unwrap();
+    assert!(fresh[2].get("since").is_none());
+    let resumed: serde_json::Value =
+        serde_json::from_str(&config.build_req_frame_since(Some(1_700_000_001))).unwrap();
+    assert_eq!(resumed[2]["since"], 1_700_000_001);
+}
