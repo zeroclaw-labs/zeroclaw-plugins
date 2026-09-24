@@ -22,6 +22,7 @@ plugins/<name>/        # published plugins — one wit-bindgen component per dir
   manifest.toml        # name, version, wasm_path, capabilities, permissions
   README.md
 wit/v0/                # vendored ZeroClaw plugin WIT contract (the ABI plugins build against)
+wit/next/              # the unmerged host branch's contract (sockets, WebSocket, TLS profiles)
 registry.json          # GENERATED index — published by CI, do not hand-edit
 tools/build-registry.py
 .github/workflows/publish.yml
