@@ -35,6 +35,10 @@ pub struct IrcConfig {
     pub verify_tls: Option<bool>,
     #[serde(default)]
     pub mention_only: bool,
+    /// Host-configured TLS profile for this server, for a private CA or a
+    /// client certificate. `None` uses the roots the host already trusts.
+    #[serde(default)]
+    pub tls_profile: Option<String>,
 }
 
 fn default_port() -> u16 {
