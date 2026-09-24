@@ -1,11 +1,14 @@
 //! A ZeroClaw WIT channel plugin for IRC over host-mediated TLS sockets.
+//!
+//! Binds `wit/next`: the host's socket resource, typed config through
+//! `config.get`, and passwords through `secrets.get`.
 
 pub mod irc;
 
 #[cfg(target_family = "wasm")]
 mod component {
     wit_bindgen::generate!({
-        path: "../../wit/unstable",
+        path: "../../wit/next",
         world: "channel-plugin",
         features: ["plugins-wit-v0", "plugins-wit-v0-sockets"],
     });
@@ -19,10 +22,12 @@ mod component {
     };
     use exports::zeroclaw::plugin::channel::{
         ApprovalRequest, ApprovalResponse, ChannelCapabilities, Guest as Channel, InboundMessage,
-        SendMessage, WebhookRejection,
+        SendMessage, WebhookRejection, WebhookRequest, WebhookResponse,
     };
     use exports::zeroclaw::plugin::plugin_info::Guest as PluginInfo;
-    use zeroclaw::plugin::socket::{self, SocketEvent};
+    use zeroclaw::plugin::config;
+    use zeroclaw::plugin::secrets::{self, SecretError};
+    use zeroclaw::plugin::sockets::{self, ConnectMode, ConnectRequest, Connection, ReceiveEvent};
 
     const PLUGIN_VERSION: &str = "0.1.0";
     const MAX_DRAIN_PER_POLL: usize = 200;
@@ -30,7 +35,7 @@ mod component {
 
     thread_local! {
         static CONFIG: RefCell<Option<IrcConfig>> = const { RefCell::new(None) };
-        static CONNECTION: Cell<u64> = const { Cell::new(0) };
+        static CONNECTION: RefCell<Option<Connection>> = const { RefCell::new(None) };
         static SESSION: RefCell<Option<IrcSession>> = const { RefCell::new(None) };
         static RECEIVE_BUFFER: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
         static INBOUND: RefCell<VecDeque<Inbound>> = const { RefCell::new(VecDeque::new()) };
@@ -48,34 +53,44 @@ mod component {
         now_millis() / 1_000
     }
 
-    fn send_raw(handle: u64, line: &str) -> Result<(), String> {
+    fn send_raw(connection: &Connection, line: &str) -> Result<(), String> {
         if line.contains(['\r', '\n']) {
             return Err("irc: refusing to send an injected protocol line".into());
         }
         let mut bytes = Vec::with_capacity(line.len().saturating_add(2));
         bytes.extend_from_slice(line.as_bytes());
         bytes.extend_from_slice(b"\r\n");
-        socket::tcp_send(handle, &bytes)
+        connection
+            .send(&bytes)
+            .map_err(|error| format!("irc: send failed: {error:?}"))
     }
 
-    fn connect(config: &IrcConfig) -> Result<u64, String> {
-        let handle = socket::tcp_connect(&config.server, config.port, true)?;
+    fn with_connection<T>(use_it: impl FnOnce(&Connection) -> T) -> Option<T> {
+        CONNECTION.with(|state| state.borrow().as_ref().map(use_it))
+    }
+
+    fn connect(config: &IrcConfig) -> Result<(), String> {
+        let connection = sockets::connect(&ConnectRequest {
+            host: config.server.clone(),
+            port: config.port,
+            mode: ConnectMode::DirectTls,
+            tls_profile: config.tls_profile.clone(),
+        })
+        .map_err(|error| format!("irc: connect failed: {error:?}"))?;
         let session = IrcSession::new(config);
         for command in session.registration_commands(config) {
-            if let Err(error) = send_raw(handle, &command) {
-                socket::tcp_close(handle);
-                return Err(error);
-            }
+            send_raw(&connection, &command)?;
         }
         SESSION.with(|state| *state.borrow_mut() = Some(session));
         RECEIVE_BUFFER.with(|state| state.borrow_mut().clear());
-        CONNECTION.with(|state| state.set(handle));
-        Ok(handle)
+        CONNECTION.with(|state| *state.borrow_mut() = Some(connection));
+        Ok(())
     }
 
-    fn drop_connection(handle: u64) {
-        socket::tcp_close(handle);
-        CONNECTION.with(|state| state.set(0));
+    /// Drop the connection resource, which closes the socket and releases the
+    /// host's connection slot.
+    fn drop_connection() {
+        CONNECTION.with(|state| *state.borrow_mut() = None);
         SESSION.with(|state| *state.borrow_mut() = None);
         RECEIVE_BUFFER.with(|state| state.borrow_mut().clear());
     }
@@ -90,17 +105,20 @@ mod component {
         });
     }
 
-    fn process_actions(handle: u64, actions: Vec<SessionAction>) -> Result<(), String> {
+    fn process_actions(actions: Vec<SessionAction>) -> Result<(), String> {
         for action in actions {
             match action {
-                SessionAction::Send(line) => send_raw(handle, &line)?,
+                SessionAction::Send(line) => {
+                    with_connection(|connection| send_raw(connection, &line))
+                        .unwrap_or_else(|| Err("irc: not connected".into()))?
+                }
                 SessionAction::Message(message) => queue_inbound(message),
             }
         }
         Ok(())
     }
 
-    fn handle_line(handle: u64, config: &IrcConfig, line: &str) -> Result<(), String> {
+    fn handle_line(config: &IrcConfig, line: &str) -> Result<(), String> {
         let actions = SESSION.with(|state| {
             state
                 .borrow_mut()
@@ -108,7 +126,33 @@ mod component {
                 .ok_or_else(|| "irc: missing session state".to_string())?
                 .handle_line(config, line)
         })?;
-        process_actions(handle, actions)
+        process_actions(actions)
+    }
+
+    /// One optional password from the instance's secret config.
+    fn optional_secret(name: &str) -> Result<Option<String>, String> {
+        match secrets::get(name) {
+            Ok(value) => Ok(Some(value)),
+            Err(SecretError::NotFound) => Ok(None),
+            Err(error) => Err(format!("irc: secret {name}: {error:?}")),
+        }
+    }
+
+    /// Typed public config from `config.get`, plus the passwords the schema
+    /// marks `x-secret`, which the host withholds from public config.
+    fn load_config() -> Result<IrcConfig, String> {
+        let public = config::get().map_err(|error| format!("irc: config: {error:?}"))?;
+        let mut value: serde_json::Value =
+            serde_json::from_str(&public).map_err(|error| format!("irc: config: {error}"))?;
+        let object = value
+            .as_object_mut()
+            .ok_or_else(|| "irc: config is not an object".to_string())?;
+        for name in ["server_password", "nickserv_password", "sasl_password"] {
+            if let Some(secret) = optional_secret(name)? {
+                object.insert(name.to_string(), serde_json::Value::String(secret));
+            }
+        }
+        IrcConfig::from_json(&value.to_string())
     }
 
     fn to_wit(message: Inbound) -> InboundMessage {
@@ -149,14 +193,10 @@ mod component {
             CHANNEL.to_string()
         }
 
-        fn configure(config: String) -> Result<(), String> {
-            let config = IrcConfig::from_json(&config)?;
-            let handle = CONNECTION.with(Cell::get);
-            if handle != 0 {
-                socket::tcp_close(handle);
-            }
+        fn configure() -> Result<(), String> {
+            let config = load_config()?;
             CONFIG.with(|state| *state.borrow_mut() = Some(config));
-            CONNECTION.with(|state| state.set(0));
+            CONNECTION.with(|state| *state.borrow_mut() = None);
             SESSION.with(|state| *state.borrow_mut() = None);
             RECEIVE_BUFFER.with(|state| state.borrow_mut().clear());
             INBOUND.with(|state| state.borrow_mut().clear());
@@ -168,19 +208,21 @@ mod component {
             if !message.attachments.is_empty() {
                 return Err("irc: media attachments are not supported".into());
             }
-            let handle = CONNECTION.with(Cell::get);
+            let connected = with_connection(|_| ()).is_some();
             let registered = SESSION.with(|state| {
                 state
                     .borrow()
                     .as_ref()
                     .is_some_and(IrcSession::is_registered)
             });
-            if handle == 0 || !registered {
+            if !connected || !registered {
                 return Err("irc: not connected and registered".into());
             }
             for line in format_privmsg(&message.recipient, &message.content)? {
-                if let Err(error) = send_raw(handle, &line) {
-                    drop_connection(handle);
+                let sent = with_connection(|connection| send_raw(connection, &line))
+                    .unwrap_or_else(|| Err("irc: not connected".into()));
+                if let Err(error) = sent {
+                    drop_connection();
                     return Err(error);
                 }
             }
@@ -192,34 +234,33 @@ mod component {
                 return Some(to_wit(message));
             }
             let config = CONFIG.with(|state| state.borrow().clone())?;
-            let mut handle = CONNECTION.with(Cell::get);
-            if handle == 0 {
-                handle = connect(&config).ok()?;
+            if with_connection(|_| ()).is_none() {
+                connect(&config).ok()?;
             }
             for _ in 0..MAX_DRAIN_PER_POLL {
-                match socket::tcp_receive(handle) {
-                    Ok(SocketEvent::Data(bytes)) => {
+                match with_connection(Connection::receive)? {
+                    Ok(ReceiveEvent::Data(bytes)) => {
                         let lines = RECEIVE_BUFFER
                             .with(|state| drain_lines(&mut state.borrow_mut(), &bytes));
                         let Ok(lines) = lines else {
-                            drop_connection(handle);
+                            drop_connection();
                             break;
                         };
                         let mut failed = false;
                         for line in lines {
-                            if handle_line(handle, &config, &line).is_err() {
+                            if handle_line(&config, &line).is_err() {
                                 failed = true;
                                 break;
                             }
                         }
                         if failed {
-                            drop_connection(handle);
+                            drop_connection();
                             break;
                         }
                     }
-                    Ok(SocketEvent::Idle) => break,
-                    Ok(SocketEvent::Closed(_)) | Err(_) => {
-                        drop_connection(handle);
+                    Ok(ReceiveEvent::Idle) => break,
+                    Ok(ReceiveEvent::Closed(_)) | Err(_) => {
+                        drop_connection();
                         break;
                     }
                 }
@@ -236,7 +277,7 @@ mod component {
         }
 
         fn health_check() -> bool {
-            CONNECTION.with(Cell::get) != 0
+            with_connection(|_| ()).is_some()
                 && SESSION.with(|state| {
                     state
                         .borrow()
@@ -334,10 +375,7 @@ mod component {
         fn webhook_path() -> Option<String> {
             None
         }
-        fn parse_webhook(
-            _headers: Vec<(String, String)>,
-            _body: Vec<u8>,
-        ) -> Result<Vec<InboundMessage>, WebhookRejection> {
+        fn parse_webhook(_request: WebhookRequest) -> Result<WebhookResponse, WebhookRejection> {
             Err(WebhookRejection::BadRequest(
                 "irc: webhook ingress is unsupported".into(),
             ))

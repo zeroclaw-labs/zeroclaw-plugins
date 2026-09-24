@@ -6,11 +6,59 @@ wasm_path = "irc.wasm"
 capabilities = ["channel"]
 sender_match = "case_insensitive"
 # Real text implementation, kept source-only until ZeroClaw's socket-client
-# host capability reaches upstream master.
+# host capability reaches upstream master. Binds wit/next: the host's socket
+# resource, reachable only for hosts in this instance's egress_hosts.
 registry = false
 # socket_client: IRC registration and chat over host-mediated TLS.
-# config_read: read [channels.irc.*] when loaded as a mirror plugin.
+# config_read: the typed config below, through config.get; the passwords are
+# x-secret and reach the plugin only through secrets.get.
 permissions = ["socket_client", "config_read"]
 # provides: mirror the built-in `irc` channel — read the existing
 # channel config as the single source of truth and honor native-wins.
 provides = "irc"
+
+[config_schema]
+"$schema" = "https://json-schema.org/draft/2020-12/schema"
+type = "object"
+additionalProperties = false
+required = ["server", "nickname"]
+
+[config_schema.properties.server]
+type = "string"
+
+[config_schema.properties.port]
+type = "integer"
+
+[config_schema.properties.nickname]
+type = "string"
+
+[config_schema.properties.username]
+type = "string"
+
+[config_schema.properties.channels]
+type = "array"
+items = { type = "string" }
+
+[config_schema.properties.mention_only]
+type = "boolean"
+
+[config_schema.properties.tls_profile]
+type = "string"
+
+[config_schema.properties.server_password]
+type = "string"
+x-secret = true
+
+[config_schema.properties.nickserv_password]
+type = "string"
+x-secret = true
+
+[config_schema.properties.sasl_password]
+type = "string"
+x-secret = true
+
+# PEM CA certificates for a private IRC server, referenced by an operator
+# TLS profile's custom_ca_secret. The host reads it; the plugin never does.
+[config_schema.properties.tls_ca]
+type = "string"
+x-secret = true

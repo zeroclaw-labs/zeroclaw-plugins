@@ -68,6 +68,9 @@ pub struct NostrConfig {
     /// Sender allow-list (hex pubkeys or `"*"`). Empty = allow everyone
     /// (mirrors the sibling Telegram plugin's `allowed_users` semantics).
     pub allowed_pubkeys: Vec<String>,
+    /// Host-configured TLS profile for the relay (a private CA or a client
+    /// certificate). `None` uses the roots the host already trusts.
+    pub tls_profile: Option<String>,
 }
 
 impl Default for NostrConfig {
@@ -80,6 +83,7 @@ impl Default for NostrConfig {
             subscription_id: DEFAULT_SUBSCRIPTION_ID.to_string(),
             limit: DEFAULT_LIMIT,
             allowed_pubkeys: Vec::new(),
+            tls_profile: None,
         }
     }
 }
@@ -111,6 +115,8 @@ struct RawConfig {
     limit: Option<u64>,
     #[serde(default)]
     allowed_pubkeys: Option<Vec<String>>,
+    #[serde(default)]
+    tls_profile: Option<String>,
 }
 
 impl NostrConfig {
@@ -183,6 +189,7 @@ impl NostrConfig {
             subscription_id,
             limit,
             allowed_pubkeys,
+            tls_profile: raw.tls_profile.filter(|p| !p.trim().is_empty()),
         }
     }
 
@@ -196,10 +203,19 @@ impl NostrConfig {
     /// us (mentions/replies); otherwise it samples recent notes of the
     /// configured `kinds`.
     pub fn build_req_frame(&self) -> String {
+        self.build_req_frame_since(None)
+    }
+
+    /// The `REQ` frame, asking only for notes created at or after `since`
+    /// (unix seconds) when a delivery cursor is known.
+    pub fn build_req_frame_since(&self, since: Option<u64>) -> String {
         let mut filter = serde_json::Map::new();
         filter.insert("kinds".to_string(), json!(self.kinds));
         if self.limit > 0 {
             filter.insert("limit".to_string(), json!(self.limit));
+        }
+        if let Some(since) = since {
+            filter.insert("since".to_string(), json!(since));
         }
         if let Some(pk) = &self.pubkey {
             filter.insert("#p".to_string(), json!([pk]));
@@ -212,6 +228,27 @@ impl NostrConfig {
     pub fn is_pubkey_allowed(&self, pubkey_hex: &str) -> bool {
         is_pubkey_allowed(&self.allowed_pubkeys, pubkey_hex)
     }
+}
+
+/// Durable-state key for the delivery cursor: the `created_at` of the newest
+/// note this instance has delivered.
+pub const CURSOR_KEY: &str = "subscription-cursor";
+
+/// Encode a delivery cursor for durable state.
+pub fn encode_cursor(created_at: u64) -> Vec<u8> {
+    created_at.to_string().into_bytes()
+}
+
+/// Decode a stored delivery cursor; `None` for anything malformed, which the
+/// caller treats as "no cursor" rather than as an error.
+pub fn decode_cursor(bytes: &[u8]) -> Option<u64> {
+    std::str::from_utf8(bytes).ok()?.trim().parse().ok()
+}
+
+/// The `since` to subscribe with after delivering up to `cursor`: the next
+/// second, so the newest delivered note is not asked for again.
+pub fn since_after(cursor: Option<u64>) -> Option<u64> {
+    cursor.map(|created_at| created_at.saturating_add(1))
 }
 
 /// Trim, drop empties, and de-duplicate while preserving first-seen order.
