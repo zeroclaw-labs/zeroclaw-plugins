@@ -70,6 +70,7 @@ fmt
   matching tree. When `wit/next` exists, the same check compares it with
   ZeroClaw's `wit/v0` at `wit/NEXT_REF`, an unreleased host revision; the pin
   and the directory must be added and removed together.
+  The `wit/current` / `wit/CURRENT_REF` pair receives the same byte-equality check. It currently prepares Matrix for an intended host release, and does not by itself establish that a matching host artifact has shipped.
 - `components` uses bounded shards and validates every selected plugin with
   locked host tests, host Clippy, `wasm32-wasip2` Clippy, and a release WASM
   build. Tests and builds are always strict. A plugin changed by the current
@@ -82,6 +83,7 @@ fmt
   packages. Each plugin builds from a snapshot of the committed `wit/` tree;
   only a `registry = false` plugin's snapshot includes `wit/next`, so a plugin
   headed for the registry cannot bind the unreleased contract.
+  The shared current-contract consumer policy permits registry-enabled Matrix to retain `wit/current`; every other registry-enabled guest has that directory withheld. Source-only guests retain their staging access.
 - `package` merges the staged shard artifacts and performs a dry-run registry
   build. The staged directory identities must exactly match the existing shard
   matrix before packaging; missing, substituted, or unexpected components fail
@@ -98,6 +100,8 @@ fmt
   from the staged bytes. Generation requires a fresh output directory, and an
   exact-set check rejects any file or digest not derived from newly added
   ledger identities.
+
+A change under `wit/current/`, to `wit/CURRENT_REF`, or to its shared policy in `tools/registry_contract.py` also forces full validation and selects only the current-contract consumers as release inputs, unioned with directly changed plugins. The planner and snapshot validator use that same consumer policy, initially Matrix only. Adopting the current contract for another registry guest requires an explicit policy change; it cannot silently reuse an existing package identity. This does not alter the v0 fanout rule or relax the next-contract exclusion. Matrix's registry exclusion remains until proof against the selected downloaded host artifact and a separate publication decision.
 - The gate always runs, aggregates shard results into the GitHub step summary,
   and requires report identities and strictness to match that same shard matrix
   exactly. It fails if any required dependency failed or was cancelled.

@@ -1,14 +1,50 @@
 name = "matrix"
-version = "0.2.0"
+version = "0.3.0"
 description = "Matrix channel plugin for ZeroClaw: Client-Server sync + text send over wasi:http."
 author = "JordanTheJet"
 wasm_path = "matrix.wasm"
 capabilities = ["channel"]
-sender_match = "case_insensitive"
+registry = false
+sender_match = "exact"
 # http_client: Matrix Client-Server API sync, whoami, room alias resolution,
 # and text sends. TLS is performed host-side.
-# config_read: read [channels.matrix.*] when loaded as a mirror plugin.
+# config_read: current typed public config and scoped access_token secret.
 permissions = ["http_client", "config_read"]
-# provides: mirror the built-in `matrix` channel — read the existing
-# channel config as the single source of truth and honor native-wins.
+# Explicit plugin instances only; native Matrix is not replaced.
 provides = "matrix"
+
+[config_schema]
+"$schema" = "https://json-schema.org/draft/2020-12/schema"
+type = "object"
+additionalProperties = false
+required = ["homeserver", "access_token"]
+
+[config_schema.properties.homeserver]
+type = "string"
+minLength = 1
+maxLength = 2048
+pattern = '^https?://[^\s?#@]+$'
+
+[config_schema.properties.access_token]
+type = "string"
+minLength = 1
+maxLength = 8192
+x-secret = true
+
+# Optional assertion checked against authenticated whoami, never a fallback.
+[config_schema.properties.user_id]
+type = "string"
+minLength = 1
+maxLength = 255
+pattern = '^@[^\s:]+:[^\s]+$'
+
+[config_schema.properties.allowed_rooms]
+type = "array"
+maxItems = 256
+items = { type = "string", minLength = 1, maxLength = 255, pattern = '^![^\s\x00-\x1f\x7f-\x9f]+$' }
+
+[config_schema.properties.mention_only]
+type = "boolean"
+
+[config_schema.properties.reply_in_thread]
+type = "boolean"

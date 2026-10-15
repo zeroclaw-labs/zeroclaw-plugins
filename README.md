@@ -23,6 +23,7 @@ plugins/<name>/        # published plugins — one wit-bindgen component per dir
   README.md
 wit/v0/                # vendored ZeroClaw plugin WIT contract (the ABI plugins build against)
 wit/next/              # the same contract at an unreleased host (pinned by wit/NEXT_REF)
+wit/current/           # Matrix's intended new-host contract (pinned by wit/CURRENT_REF)
 registry.json          # GENERATED index — published by CI, do not hand-edit
 tools/build-registry.py
 .github/workflows/publish.yml
@@ -43,6 +44,8 @@ includes yet, pinned by `wit/NEXT_REF`. It carries interfaces released hosts
 lack, such as durable `state`, so only a `registry = false` plugin may bind it
 (see [Host-gated source plugins](#host-gated-source-plugins)). CI checks
 `wit/v0/` and `wit/next/` byte for byte against their pins.
+
+`wit/current/` prepares Matrix for the intended next host release without changing the older WIT trees or unrelated package identities. Its pin is an exact host commit, not proof that a plugin-capable release is available. Matrix remains `registry = false` until the matching downloaded host and package pass install, alias-binding and real-host checks. The shared consumer policy admits only Matrix to publish against this directory; a directory, pin or policy change selects those consumers as changed release inputs. Historical registry entries and assets remain immutable.
 
 ## How install works
 

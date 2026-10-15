@@ -187,11 +187,12 @@ for plugin in "$@"; do
       echo "error: registry must be true or false" >>"$metadata_log"
       manifest_valid=0
     fi
-    # No released host implements wit/next, so only a plugin that stays out of
-    # the registry may build against it.
-    if [[ $registry != false ]] \
-      && ! rm -rf -- "$canonical_root/wit/next" "$build_root/wit/next"; then
-      echo "error: could not withhold wit/next from $plugin" >>"$metadata_log"
+    # The planner and snapshot admission share explicit current-WIT consumers.
+    if ! python3 "$SCRIPT_DIR/manifest_field.py" --prepare-wit-snapshot \
+        "$manifest" "$canonical_root/wit" "$plugin" \
+      || ! python3 "$SCRIPT_DIR/manifest_field.py" --prepare-wit-snapshot \
+        "$manifest" "$build_root/wit" "$plugin"; then
+      echo "error: could not prepare admitted WIT snapshot for $plugin" >>"$metadata_log"
       manifest_valid=0
     fi
     if [[ $name != "$plugin" ]]; then

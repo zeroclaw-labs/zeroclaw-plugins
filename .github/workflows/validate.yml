@@ -174,17 +174,8 @@ jobs:
             local pin_file=$1
             local vendored=$2
             local upstream=$3
-            local -a refs
-            mapfile -t refs < <(
-              sed -E 's/[[:space:]]*#.*$//' "$pin_file" \
-                | sed -E '/^[[:space:]]*$/d; s/^[[:space:]]+//; s/[[:space:]]+$//'
-            )
-            if [[ "${#refs[@]}" -ne 1 || ! "${refs[0]}" =~ ^[0-9a-f]{40}$ ]]; then
-              echo "::error file=${pin_file}::Expected exactly one lowercase 40-hex commit SHA"
-              return 1
-            fi
-
-            local pinned_ref="${refs[0]}"
+            local pinned_ref
+            pinned_ref=$(python3 tools/ci/manifest_field.py --wit-pin "$pin_file" "$vendored") || return 1
             local fetched_ref
             git init --quiet "$upstream"
             git -C "$upstream" remote add origin \
@@ -211,6 +202,9 @@ jobs:
               exit 1
             fi
             compare_pinned_wit wit/NEXT_REF wit/next "${RUNNER_TEMP}/zeroclaw-next"
+          fi
+          if [[ -e wit/CURRENT_REF || -e wit/current ]]; then
+            compare_pinned_wit wit/CURRENT_REF wit/current "${RUNNER_TEMP}/zeroclaw-current"
           fi
 
   components:

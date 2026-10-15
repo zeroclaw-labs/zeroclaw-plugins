@@ -3,9 +3,33 @@
 import os
 import re
 import stat
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 PLUGIN_RELEASE_TAG = "plugins"
+
+# Explicit ownership avoids inferring bindgen dependencies from Rust source.
+CURRENT_WIT_DIRECTORY = "wit/current"
+CURRENT_WIT_PIN = "wit/CURRENT_REF"
+CURRENT_WIT_CONSUMERS = frozenset({"matrix"})
+
+
+def current_wit_release_inputs(changed_paths: list[str]) -> set[str]:
+    for raw_path in changed_paths:
+        path = PurePosixPath(raw_path).as_posix().removeprefix("./")
+        if (
+            path in {CURRENT_WIT_PIN, CURRENT_WIT_DIRECTORY, "tools/registry_contract.py"}
+            or path.startswith(f"{CURRENT_WIT_DIRECTORY}/")
+        ):
+            return set(CURRENT_WIT_CONSUMERS)
+    return set()
+
+
+def withheld_wit_directories(plugin: str, *, registry: bool) -> tuple[str, ...]:
+    if not registry:
+        return ()
+    if plugin in CURRENT_WIT_CONSUMERS:
+        return ("next",)
+    return ("next", "current")
 
 # Mirrors src/plugin_registry.rs MAX_PLUGIN_ZIP_BYTES. Packaging enforces this
 # value and CI summaries render artifact size against the same source.

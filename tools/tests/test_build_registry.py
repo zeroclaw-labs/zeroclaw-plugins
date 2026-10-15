@@ -6,6 +6,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
@@ -14,6 +15,8 @@ RELEASE_BASE = "https://example.invalid/releases/download/plugins"
 sys.path.insert(0, str(REPOSITORY_ROOT / "tools"))
 
 from registry_contract import PLUGIN_VERSION_RE  # noqa: E402
+sys.path.insert(0, str(REPOSITORY_ROOT / "tools" / "ci"))
+import plan_matrix  # noqa: E402
 
 
 def write_plugin(
@@ -25,15 +28,16 @@ def write_plugin(
     sender_match: str | None = "exact",
     permissions: tuple[str, ...] = ("config_read",),
     registry: bool | None = None,
+    name: str = "bridge",
 ) -> None:
-    plugin = root / "bridge"
+    plugin = root / name
     plugin.mkdir(parents=True)
     lines = [
-        'name = "bridge"',
+        f'name = "{name}"',
         f'version = "{version}"',
         'description = "Bridge messages"',
         'author = "ZeroClaw Labs"',
-        'wasm_path = "bridge.wasm"',
+        f'wasm_path = "{name}.wasm"',
         'capabilities = ["channel"]',
         f"permissions = {json.dumps(list(permissions))}",
     ]
@@ -44,7 +48,7 @@ def write_plugin(
     if sender_match is not None:
         lines.append(f'sender_match = "{sender_match}"')
     (plugin / "manifest.toml").write_text("\n".join(lines) + "\n")
-    (plugin / "bridge.wasm").write_bytes(wasm)
+    (plugin / f"{name}.wasm").write_bytes(wasm)
 
 
 def run_registry(
@@ -185,6 +189,43 @@ class BuildRegistryTests(unittest.TestCase):
         )
         self.assertIn("bump the canonical manifest version", changed.stderr)
         self.assertFalse((collision / "bridge-0.1.0.zip").exists())
+
+    def test_current_wit_selection_rejects_matrix_identity_reuse_only(self) -> None:
+        staged = self.root / "staged"
+        write_plugin(staged)
+        write_plugin(staged, name="matrix", version="0.3.0", provides="matrix")
+        initial = self.root / "initial"
+        first = self.build(staged, initial)
+        self.assertEqual(first.returncode, 0, first.stderr)
+        original = json.loads((initial / "registry.json").read_text())["plugins"]
+        repository = self.root / "repository"
+        for name in ("bridge", "matrix"):
+            (repository / "plugins" / name).mkdir(parents=True)
+        with mock.patch.object(plan_matrix, "git_changed_paths", return_value=["wit/CURRENT_REF"]):
+            plan = plan_matrix.make_plan(repository, "pull_request", "origin/main")
+        matrix = json.dumps(plan["matrix"])
+
+        def publish(source: Path, out: Path):
+            return run_registry(
+                "--staged", source, "--out", out, "--release-base", RELEASE_BASE,
+                "--existing-registry", initial / "registry.json", "--matrix-json", matrix,
+            )
+
+        collision = publish(staged, self.root / "collision")
+        self.assertNotEqual(collision.returncode, 0)
+        self.assertIn("changed release input reuses immutable package identity matrix@0.3.0", collision.stderr)
+        self.assertNotIn("changed release input reuses immutable package identity bridge", collision.stderr)
+        upgraded = self.root / "upgraded"
+        write_plugin(upgraded)
+        write_plugin(upgraded, name="matrix", version="0.3.1", provides="matrix", wasm=b"current-wit")
+        out = self.root / "published"
+        result = publish(upgraded, out)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        entries = json.loads((out / "registry.json").read_text())["plugins"]
+        self.assertTrue(all(entry in entries for entry in original))
+        self.assertEqual(len(entries), 3)
+        self.assertTrue((out / "matrix-0.3.1.zip").is_file())
+        self.assertFalse((out / "bridge-0.1.0.zip").exists())
 
     def test_archive_bytes_match_golden_packager_contract(self) -> None:
         wasm = (
