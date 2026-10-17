@@ -1,0 +1,12 @@
+name = "tx-preflight"
+version = "0.1.0"
+description = "Simulate a Solana transaction and report what it will actually do before signing"
+author = "Ace"
+wasm_path = "tx_preflight.wasm"
+capabilities = ["tool"]
+# http_client: reaches the operator's own Solana RPC to fetch state and simulate.
+# config_read: spending limits, the protected wallet, and the endpoint all
+# arrive via the host-injected __config, which the host strips from
+# caller-supplied args first — so the model cannot rewrite its own guardrails.
+permissions = ["http_client", "config_read"]
+registry = false
