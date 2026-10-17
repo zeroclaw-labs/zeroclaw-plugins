@@ -1,0 +1,10 @@
+name = "squads-watch"
+version = "0.1.0"
+description = "Read only Squads v4 treasury monitor: pending proposals, approval counts, and outcomes since a cursor. Built for SOP schedules. Custody tier T0: holds nothing, signs nothing."
+author = "big14way"
+wasm_path = "squads_watch.wasm"
+capabilities = ["tool"]
+# http_client: read only JSON-RPC (getAccountInfo, getMultipleAccounts).
+# config_read: the watched multisig address and rpc_url arrive via `__config`,
+# never from the model, so a watcher cannot be repointed by injected text.
+permissions = ["http_client", "config_read"]

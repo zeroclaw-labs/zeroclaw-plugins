@@ -1,0 +1,10 @@
+name = "squads-propose"
+version = "0.1.0"
+description = "Draft Squads v4 multisig payment proposals as unsigned transactions: allowlisted mints, address book recipients, per proposal caps. Custody tier T1: builds and never signs."
+author = "big14way"
+wasm_path = "squads_propose.wasm"
+capabilities = ["tool"]
+# http_client: outbound JSON-RPC to the configured Solana endpoint only.
+# config_read: policy (mints, recipients, caps), multisig address, creator
+# pubkey, and rpc_url are injected into execute args as `__config`.
+permissions = ["http_client", "config_read"]
