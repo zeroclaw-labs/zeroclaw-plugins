@@ -1,0 +1,793 @@
+//! Pure core for `depin-rewards` (no wasm dependency).
+//!
+//! Host-tested with plain `cargo test`; the wasm component (src/lib.rs) reuses
+//! this logic through a thin shim. Grown per TDD slice (PLAN-3):
+//! - **Slice A** (this): `HttpClient` trait + `MockHttp` + error types.
+//! - Later slices: config parsing, Relay fetch/parse, watch/summary, optional
+//!   unsigned claim-tx builder.
+//!
+//! All HTTP goes through the [`HttpClient`] trait so the pure core is
+//! network-free on the host (tests use [`MockHttp`]); the shim supplies a real
+//! `waki` impl behind `#[cfg(target_family = "wasm")]`.
+
+use std::cell::RefCell;
+use std::collections::HashMap;
+
+// ── Errors ──────────────────────────────────────────────────────────────────
+
+/// Transport / HTTP-level error from an [`HttpClient`] call.
+#[derive(Clone, Debug)]
+pub enum HttpError {
+  /// Non-2xx HTTP status (code + response body / message).
+  Status(u16, String),
+  /// Transport failure (DNS, connection, TLS, timeout).
+  Transport(String),
+  /// Response body decode failure (malformed JSON, etc.).
+  Decode(String),
+  /// (Mock) No scripted response registered for the requested URL.
+  NotRegistered(String),
+}
+
+/// Top-level error for the depin-rewards pure core. Specific + actionable —
+/// never an opaque "failed".
+///
+/// `Rpc` carries a formatted message rather than wrapping
+/// `palinurus_core::RpcError`, to keep this module substrate-free in the early
+/// slices; refined when the claim-tx slice (G) adds the `palinurus-core` dep.
+#[derive(Debug)]
+pub enum RewardsError {
+  Config(String),
+  Http(HttpError),
+  Relay(String),
+  Parse(String),
+  Telegram(String),
+  Rpc(String),
+  ClaimResolution(String),
+  NotConfigured(String),
+}
+
+/// A recorded POST call: `(url, form fields)`. Factored out so the recorded-
+/// calls list doesn't trip `clippy::type_complexity`.
+pub type RecordedPost = (String, Vec<(String, String)>);
+
+// ── HTTP client trait + host mock ────────────────────────────────────────────
+
+/// Blocking HTTP client used by the pure core: a Bearer-auth GET and a
+/// form-encoded POST (the two shapes depin-rewards needs — Relay REST reads
+/// and Telegram `sendMessage`). No wasm dependency; the real `waki` impl lives
+/// behind `#[cfg(target_family = "wasm")]` in the shim, host tests use
+/// [`MockHttp`].
+pub trait HttpClient {
+  /// GET `url` with `Authorization: Bearer <bearer>`; returns the raw body.
+  fn get(&self, url: &str, bearer: &str) -> Result<Vec<u8>, HttpError>;
+  /// POST `url` form-encoded with `fields`; returns the raw body.
+  fn post_form(&self, url: &str, fields: &[(String, String)]) -> Result<Vec<u8>, HttpError>;
+}
+
+/// Host-only [`HttpClient`] mock: serves scripted responses keyed by exact URL
+/// and records every POST for later assertion. No network. Uses `RefCell`
+/// (single-threaded) so the module compiles cleanly for `wasm32-wasip2` even
+/// though the mock itself is only exercised in host tests.
+pub struct MockHttp {
+  gets: HashMap<String, Vec<u8>>,
+  get_errs: HashMap<String, HttpError>,
+  post_resp: HashMap<String, Vec<u8>>,
+  posts: RefCell<Vec<RecordedPost>>,
+}
+
+impl Default for MockHttp {
+  fn default() -> Self {
+    Self {
+      gets: HashMap::new(),
+      get_errs: HashMap::new(),
+      post_resp: HashMap::new(),
+      posts: RefCell::new(Vec::new()),
+    }
+  }
+}
+
+impl MockHttp {
+  pub fn new() -> Self {
+    Self::default()
+  }
+
+  /// Register the body returned for a GET of exactly `url`.
+  pub fn set_get(&mut self, url: String, body: Vec<u8>) {
+    self.gets.insert(url, body);
+  }
+
+  /// Register the body returned for a POST to exactly `url`.
+  pub fn set_post(&mut self, url: String, body: Vec<u8>) {
+    self.post_resp.insert(url, body);
+  }
+
+  /// Register an error to return for a GET of exactly `url` (for testing the
+  /// status-code → RewardsError mapping in `fetch_*`).
+  pub fn set_get_err(&mut self, url: String, err: HttpError) {
+    self.get_errs.insert(url, err);
+  }
+
+  /// Every recorded POST call `(url, fields)`, in call order.
+  pub fn posts(&self) -> Vec<RecordedPost> {
+    self.posts.borrow().clone()
+  }
+}
+
+impl HttpClient for MockHttp {
+  fn get(&self, url: &str, _bearer: &str) -> Result<Vec<u8>, HttpError> {
+    if let Some(err) = self.get_errs.get(url) {
+      return Err(err.clone());
+    }
+    self
+      .gets
+      .get(url)
+      .cloned()
+      .ok_or_else(|| HttpError::NotRegistered(url.to_string()))
+  }
+
+  fn post_form(&self, url: &str, fields: &[(String, String)]) -> Result<Vec<u8>, HttpError> {
+    self
+      .posts
+      .borrow_mut()
+      .push((url.to_string(), fields.to_vec()));
+    self
+      .post_resp
+      .get(url)
+      .cloned()
+      .ok_or_else(|| HttpError::NotRegistered(url.to_string()))
+  }
+}
+
+// ── Config (parsed from the flat `config_read` section) ─────────────────────
+
+/// Plugin configuration parsed from the jailed `config_read` section (flat
+/// `String → String`). Slice B covers the T0 fields (relay + hotspots +
+/// telegram + cadence + network); the claim-tx fields (`rpc_endpoint`,
+/// `rpc_api_key`, `claim_nonce_*`) land in slice G when the unsigned claim-tx
+/// needs them.
+pub struct RewardsConfig {
+  /// Relay API bearer key (free Community plan signup). Required.
+  pub relay_api_key: String,
+  /// Relay API base URL (default `https://api.relaywireless.com/v1`).
+  pub relay_base_url: String,
+  /// Watched hotspot ids (ECC compact key / Solana asset id / UUID).
+  /// JSON array of strings, ≥1 entry. Required.
+  pub hotspots: Vec<String>,
+  /// Telegram bot token (@BotFather). Required.
+  pub telegram_bot_token: String,
+  /// Telegram destination chat id. Required.
+  pub telegram_chat_id: String,
+  /// Polling cadence hint (minutes) for the SOP — informational, not enforced
+  /// by the plugin. Default 120 (keeps a single hotspot under the 1k/mo
+  /// Community quota with headroom).
+  pub poll_interval_minutes: u32,
+  /// Solana network — `"mainnet-beta"` or `"devnet"` (explorer URLs +
+  /// claim-tx target). Default `mainnet-beta`.
+  pub network: String,
+}
+
+impl std::fmt::Debug for RewardsConfig {
+  // Custody: never print the credentials. relay_api_key + telegram_bot_token
+  // are redacted (SPEC-3 §10 — secrets never echoed). The rest (base_url,
+  // hotspot count, chat_id, cadence, network) are non-credentials and useful
+  // for config debugging.
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    f.debug_struct("RewardsConfig")
+      .field("relay_api_key", &"<redacted>")
+      .field("relay_base_url", &self.relay_base_url)
+      .field("hotspots", &format!("[{} hotspot(s)]", self.hotspots.len()))
+      .field("telegram_bot_token", &"<redacted>")
+      .field("telegram_chat_id", &self.telegram_chat_id)
+      .field("poll_interval_minutes", &self.poll_interval_minutes)
+      .field("network", &self.network)
+      .finish()
+  }
+}
+
+impl RewardsConfig {
+  /// Parse from a flat config section. Fails closed on: empty section, missing
+  /// required keys, empty-valued required keys, malformed `hotspots` JSON,
+  /// empty `hotspots` array, non-string `hotspots` entries, bad `network`,
+  /// non-numeric `poll_interval_minutes`.
+  pub fn from_section(section: &HashMap<String, String>) -> Result<Self, RewardsError> {
+    if section.is_empty() {
+      return Err(RewardsError::Config(
+        "not configured: no config section received".to_string(),
+      ));
+    }
+
+    let req = |key: &str| -> Result<String, RewardsError> {
+      section
+        .get(key)
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+        .ok_or_else(|| RewardsError::Config(format!("missing required key: {key}")))
+    };
+
+    let relay_api_key = req("relay_api_key")?;
+    let telegram_bot_token = req("telegram_bot_token")?;
+    let telegram_chat_id = req("telegram_chat_id")?;
+
+    let hotspots_str = section.get("hotspots").map(|s| s.as_str()).unwrap_or("");
+    if hotspots_str.trim().is_empty() {
+      return Err(RewardsError::Config("missing required key: hotspots".to_string()));
+    }
+    let hotspots: Vec<String> = serde_json::from_str(hotspots_str).map_err(|e| {
+      RewardsError::Config(format!("hotspots must be a JSON array of strings: {e}"))
+    })?;
+    if hotspots.is_empty() {
+      return Err(RewardsError::Config("hotspots must have ≥1 entry".to_string()));
+    }
+    if hotspots.iter().any(|h| h.trim().is_empty()) {
+      return Err(RewardsError::Config(
+        "hotspots entries must be non-empty".to_string(),
+      ));
+    }
+
+    let relay_base_url = section
+      .get("relay_base_url")
+      .map(|s| s.trim())
+      .filter(|s| !s.is_empty())
+      .unwrap_or("https://api.relaywireless.com/v1")
+      .to_string();
+
+    let poll_interval_minutes = match section.get("poll_interval_minutes").map(|s| s.trim()) {
+      None | Some("") => 120,
+      Some(s) => s.parse::<u32>().map_err(|e| {
+        RewardsError::Config(format!("poll_interval_minutes must be a u32: {e}"))
+      })?,
+    };
+
+    let network = match section.get("network").map(|s| s.trim()) {
+      None | Some("") => "mainnet-beta".to_string(),
+      Some(s) if s == "mainnet-beta" || s == "devnet" => s.to_string(),
+      Some(other) => {
+        return Err(RewardsError::Config(format!(
+          "network must be 'mainnet-beta' or 'devnet', got '{other}'"
+        )))
+      }
+    };
+
+    Ok(RewardsConfig {
+      relay_api_key,
+      relay_base_url,
+      hotspots,
+      telegram_bot_token,
+      telegram_chat_id,
+      poll_interval_minutes,
+      network,
+    })
+  }
+}
+
+/// Fail-closed guard: reject any hotspot id not in the configured allowlist.
+/// Wired into every action's entry point (slice F) so a malicious message
+/// cannot target an arbitrary hotspot.
+pub fn enforce_hotspot_allowlist(cfg: &RewardsConfig, id: &str) -> Result<(), RewardsError> {
+  if cfg.hotspots.iter().any(|h| h == id) {
+    Ok(())
+  } else {
+    Err(RewardsError::Config(format!(
+      "hotspot '{id}' not in configured allowlist"
+    )))
+  }
+}
+
+// ── HotspotInfo (Relay get-hotspot response) ────────────────────────────────
+
+#[derive(serde::Deserialize)]
+struct RawNetInfo {
+  #[serde(default)]
+  is_active: Option<bool>,
+  #[serde(default)]
+  location: Option<i64>,
+}
+
+#[derive(serde::Deserialize)]
+struct RawMaker {
+  #[serde(default)]
+  name: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+struct RawHotspotInfo {
+  owner: String,
+  name: String,
+  #[serde(default)]
+  networks: Vec<String>,
+  #[serde(default)]
+  iot_info: Option<RawNetInfo>,
+  #[serde(default)]
+  mobile_info: Option<RawNetInfo>,
+  #[serde(default)]
+  maker: Option<RawMaker>,
+}
+
+/// The parsed Relay `GET /helium/l2/hotspots/:id` response — only the fields
+/// the plugin consumes. Tolerant of missing `mobile_info` (iot-only hotspots)
+/// and missing `maker`.
+#[derive(Debug)]
+pub struct HotspotInfo {
+  pub owner: String,
+  pub name: String,
+  pub networks: Vec<String>,
+  pub iot_is_active: Option<bool>,
+  pub mobile_is_active: Option<bool>,
+  pub iot_location: Option<i64>,
+  pub maker_name: Option<String>,
+}
+
+impl HotspotInfo {
+  pub fn parse(json: &[u8]) -> Result<Self, RewardsError> {
+    let raw: RawHotspotInfo = serde_json::from_slice(json)
+      .map_err(|e| RewardsError::Parse(format!("hotspot info: {e}")))?;
+    Ok(HotspotInfo {
+      owner: raw.owner,
+      name: raw.name,
+      networks: raw.networks,
+      iot_is_active: raw.iot_info.as_ref().and_then(|i| i.is_active),
+      mobile_is_active: raw.mobile_info.as_ref().and_then(|i| i.is_active),
+      iot_location: raw.iot_info.as_ref().and_then(|i| i.location),
+      maker_name: raw.maker.and_then(|m| m.name),
+    })
+  }
+
+  /// Online/offline reduction across joined networks: `Some(true)` if ANY
+  /// joined network reports active; `Some(false)` if all known networks
+  /// inactive; `None` only if both unknown.
+  pub fn is_active(&self) -> Option<bool> {
+    match (self.iot_is_active, self.mobile_is_active) {
+      (None, None) => None,
+      (iot, mob) => Some(iot.unwrap_or(false) || mob.unwrap_or(false)),
+    }
+  }
+
+  /// The network to read status/rewards from: iot preferred, else mobile.
+  pub fn primary_network(&self) -> &'static str {
+    if self.networks.iter().any(|n| n == "iot") {
+      "iot"
+    } else if self.networks.iter().any(|n| n == "mobile") {
+      "mobile"
+    } else {
+      "iot"
+    }
+  }
+}
+
+// ── fetch + do_status ────────────────────────────────────────────────────────
+
+/// Map an HTTP error from Relay to a specific `RewardsError::Relay` message
+/// (404 → not found, 402 → quota, 429 → rate-limited, 5xx → server error).
+fn map_relay_http(e: HttpError) -> RewardsError {
+  match e {
+    HttpError::Status(404, msg) => RewardsError::Relay(format!("hotspot not found: {msg}")),
+    HttpError::Status(402, msg) => {
+      RewardsError::Relay(format!("Relay quota exhausted: {msg}"))
+    }
+    HttpError::Status(429, msg) => {
+      RewardsError::Relay(format!("Relay rate-limited (429): {msg}"))
+    }
+    HttpError::Status(c, msg) if (500..600).contains(&c) => {
+      RewardsError::Relay(format!("Relay server error {c}: {msg}"))
+    }
+    HttpError::Status(c, msg) => RewardsError::Relay(format!("Relay HTTP {c}: {msg}")),
+    other => RewardsError::Http(other),
+  }
+}
+
+/// `GET {base}/helium/l2/hotspots/:id` → parsed [`HotspotInfo`]. HTTP status
+/// codes map to specific Relay errors (404/402/429/5xx); other transport
+/// errors pass through as `RewardsError::Http`.
+pub fn fetch_hotspot(
+  http: &dyn HttpClient,
+  cfg: &RewardsConfig,
+  id: &str,
+) -> Result<HotspotInfo, RewardsError> {
+  let url = format!("{}/helium/l2/hotspots/{}", cfg.relay_base_url, id);
+  let bearer = format!("Bearer {}", cfg.relay_api_key);
+  let body = http.get(&url, &bearer).map_err(map_relay_http)?;
+  HotspotInfo::parse(&body)
+}
+
+/// A short `4…4` form of an address (owner pubkey) for the shaped output.
+/// Char-based so it never panics on non-ASCII; the substantive
+/// `palinurus_core::short_pubkey` reuse lands in slice G alongside the claim-tx
+/// Pubkey handling.
+fn short_addr(s: &str) -> String {
+  let chars: Vec<char> = s.chars().collect();
+  if chars.len() <= 8 {
+    s.to_string()
+  } else {
+    let head: String = chars[..4].iter().collect();
+    let tail: String = chars[chars.len() - 4..].iter().collect();
+    format!("{head}…{tail}")
+  }
+}
+
+/// Shape a status read into a ≤200-token summary (SPEC-3 §7).
+fn shape_status(info: &HotspotInfo) -> String {
+  let active = match info.is_active() {
+    Some(true) => "ONLINE",
+    Some(false) => "OFFLINE",
+    None => "UNKNOWN",
+  };
+  let net = info.primary_network();
+  let nets = if info.networks.is_empty() {
+    "none".to_string()
+  } else {
+    info.networks.join(", ")
+  };
+  let mut s = format!(
+    "✓ hotspot {} — {} ({})\n  owner: {}  networks: {}",
+    info.name,
+    active,
+    net,
+    short_addr(&info.owner),
+    nets
+  );
+  if let Some(maker) = &info.maker_name {
+    s.push_str(&format!("  maker: {maker}"));
+  }
+  s
+}
+
+/// The shaped result of an `execute` action. Grows per slice (C = status;
+/// D adds rewards; E adds alerts_sent; G adds tx_b64 + explorer_url).
+#[derive(Debug)]
+pub struct RewardsOutput {
+  pub is_active: Option<bool>,
+  pub alerts_sent: Vec<String>,
+  pub summary: String,
+}
+
+/// `action = "status"`: read one hotspot's online/offline now + shape. Fails
+/// closed on (a) hotspot not in the configured allowlist, (b) Relay errors.
+pub fn do_status(
+  http: &dyn HttpClient,
+  cfg: &RewardsConfig,
+  id: &str,
+) -> Result<RewardsOutput, RewardsError> {
+  enforce_hotspot_allowlist(cfg, id)?;
+  let info = fetch_hotspot(http, cfg, id)?;
+  let summary = shape_status(&info);
+  Ok(RewardsOutput {
+    is_active: info.is_active(),
+    alerts_sent: Vec::new(),
+    summary,
+  })
+}
+
+// ── Rewards (Relay iot/mobile-reward-shares list → client-side sum) ───────────────────────────
+
+/// Aggregated rewards for a hotspot over a time range, summed client-side from
+/// the Relay **list** endpoint (`/helium/l2/{iot|mobile}-reward-shares`). The
+/// `/totals` aggregate endpoint exists but is **gated behind the OracleData
+/// feature** (HTTP 401 `feature_not_available` on the free Community plan —
+/// verified live 2026-07-21), so the list endpoint is the only path that works
+/// for the bounty demo + every free-tier user. Each record carries a nested
+/// `reward_detail` with `beacon_amount` / `witness_amount` / `dc_transfer_amount`
+/// in **HNT bones (1 HNT = 10⁸ bones)** (Relay `formatted_*` fields confirm the
+/// 10⁸ scaling); summed here.
+#[derive(Debug)]
+pub struct RewardSummary {
+  pub total_amount: u64,
+  pub beacon_amount: u64,
+  pub witness_amount: u64,
+  pub dc_transfer_amount: u64,
+  pub from_iso: String,
+  pub to_iso: String,
+}
+
+impl RewardSummary {
+  /// Parse + sum the Relay list response `{ records: [{ reward_detail: {…} }],
+  /// meta }`. Two record shapes (both handled): **iot** carries
+  /// `beacon_amount` + `witness_amount` + `dc_transfer_amount`; **mobile**
+  /// carries a single `amount`. All present fields are summed (absent → 0), so
+  /// `total_amount` is correct for either network; the iot-style breakdown fields
+  /// stay 0 for mobile. `from_iso`/`to_iso` are carried through for the shaped
+  /// output. Records with a missing `reward_detail` contribute 0. Sums use
+  /// `saturating_add` (defensive against overflow). **Single page only**
+  /// (`per_page=100`, the endpoint max); a hotspot with >100 records in the
+  /// window under-counts — documented cap, fine for single-hotspot daily
+  /// summaries (the real iot fixture has 6 records).
+  ///
+  /// **Scaling:** iot is verified live as HNT bones (10⁸). Mobile `amount` is
+  /// shape-handled and presumed the same 10⁸ (Helium consistency) but NOT yet
+  /// verified against a filtered `hotspot_key` mobile sample — verify before
+  /// mobile production use.
+  pub fn from_records(json: &[u8], from_iso: &str, to_iso: &str) -> Result<Self, RewardsError> {
+    #[derive(serde::Deserialize)]
+    struct RawDetail {
+      #[serde(default)]
+      beacon_amount: u64,
+      #[serde(default)]
+      witness_amount: u64,
+      #[serde(default)]
+      dc_transfer_amount: u64,
+      // mobile reward_detail carries a single `amount` (iot has no such field).
+      #[serde(default)]
+      amount: u64,
+    }
+    #[derive(serde::Deserialize)]
+    struct RawRecord {
+      #[serde(default)]
+      reward_detail: Option<RawDetail>,
+    }
+    #[derive(serde::Deserialize)]
+    struct RawList {
+      #[serde(default)]
+      records: Vec<RawRecord>,
+    }
+    let raw: RawList = serde_json::from_slice(json)
+      .map_err(|e| RewardsError::Parse(format!("reward shares list: {e}")))?;
+    let (mut beacon, mut witness, mut dc, mut amount) = (0u64, 0u64, 0u64, 0u64);
+    for r in raw.records {
+      if let Some(d) = r.reward_detail {
+        beacon = beacon.saturating_add(d.beacon_amount);
+        witness = witness.saturating_add(d.witness_amount);
+        dc = dc.saturating_add(d.dc_transfer_amount);
+        amount = amount.saturating_add(d.amount);
+      }
+    }
+    let total = beacon
+      .saturating_add(witness)
+      .saturating_add(dc)
+      .saturating_add(amount);
+    Ok(RewardSummary {
+      total_amount: total,
+      beacon_amount: beacon,
+      witness_amount: witness,
+      dc_transfer_amount: dc,
+      from_iso: from_iso.to_string(),
+      to_iso: to_iso.to_string(),
+    })
+  }
+}
+
+/// `GET {base}/helium/l2/{net}-reward-shares?from=&to=&hotspot_key=&per_page=100`
+/// → summed [`RewardSummary`]. `net` = "iot" | "mobile". Uses the **list**
+/// endpoint (not `/totals`, which is OracleData-gated on the free plan — see
+/// [`RewardSummary`]). Status codes map as in `fetch_hotspot`.
+pub fn fetch_rewards(
+  http: &dyn HttpClient,
+  cfg: &RewardsConfig,
+  net: &str,
+  hotspot_key: &str,
+  from: &str,
+  to: &str,
+) -> Result<RewardSummary, RewardsError> {
+  let url = format!(
+    "{}/helium/l2/{}-reward-shares?from={}&to={}&hotspot_key={}&per_page=100",
+    cfg.relay_base_url, net, from, to, hotspot_key
+  );
+  let bearer = format!("Bearer {}", cfg.relay_api_key);
+  let body = http.get(&url, &bearer).map_err(map_relay_http)?;
+  RewardSummary::from_records(&body, from, to)
+}
+
+/// Format an atomic-token amount (Helium IOT/MOBILE = 6 decimals) to a
+/// human-readable 2-decimal string, rounded. Never emits the raw u64.
+/// `3_420_000` → `"3.42"`; `0` → `"0.00"`; `999_999` → `"1.00"` (rounds up).
+pub fn format_amount(atomic: u64, decimals: u8) -> String {
+  if decimals == 0 {
+    return atomic.to_string();
+  }
+  if decimals < 2 {
+    let div = 10u64.pow(decimals as u32);
+    return format!("{}.{:0>width$}", atomic / div, atomic % div, width = decimals as usize);
+  }
+  let divisor = 10u64.pow(decimals as u32);
+  let whole = atomic / divisor;
+  let frac = atomic % divisor;
+  let two_dp_divisor = 10u64.pow((decimals as u32) - 2);
+  let frac_2 = (frac + two_dp_divisor / 2) / two_dp_divisor; // round half-up to 2 dp
+  if frac_2 >= 100 {
+    format!("{}.00", whole + 1) // rounding overflowed (e.g. 0.999999 → 1.00)
+  } else {
+    format!("{}.{:02}", whole, frac_2)
+  }
+}
+
+/// Shape a rewards summary into a ≤200-token summary (SPEC-3 §7).
+fn shape_summary(info: &HotspotInfo, rewards: &RewardSummary, net: &str) -> String {
+  // Relay returns rewards in HNT bones (10⁸) regardless of subnetwork (manifest
+  // token = `*_reward_token_hnt`), so the symbol is HNT + amounts format at 8
+  // decimals. `net` labels the earning subnetwork.
+  let mut s = format!(
+    "✓ rewards {} — earned {} HNT [{}] ({}–{})",
+    info.name,
+    format_amount(rewards.total_amount, 8),
+    net,
+    rewards.from_iso,
+    rewards.to_iso,
+  );
+  // iot breaks rewards into beacon/witness/dc; mobile uses a single `amount`
+  // (no breakdown) — only show the breakdown line when those components are
+  // non-zero (avoids a misleading "0.00 · 0.00 · 0.00" for mobile / zero days).
+  if rewards.beacon_amount + rewards.witness_amount + rewards.dc_transfer_amount > 0 {
+    s.push_str(&format!(
+      "\n  beacon {} · witness {} · dc-transfer {}",
+      format_amount(rewards.beacon_amount, 8),
+      format_amount(rewards.witness_amount, 8),
+      format_amount(rewards.dc_transfer_amount, 8),
+    ));
+  }
+  s.push_str(&format!("\n  owner: {}", short_addr(&info.owner)));
+  s
+}
+
+/// `action = "summary"`: rewards for a hotspot over a time range + shape.
+/// `from`/`to` are ISO8601 (the shim defaults them to 00:00-today-UTC / now).
+pub fn do_summary(
+  http: &dyn HttpClient,
+  cfg: &RewardsConfig,
+  id: &str,
+  from: &str,
+  to: &str,
+) -> Result<RewardsOutput, RewardsError> {
+  enforce_hotspot_allowlist(cfg, id)?;
+  let info = fetch_hotspot(http, cfg, id)?;
+  let net = info.primary_network();
+  let rewards = fetch_rewards(http, cfg, net, id, from, to)?;
+  let summary = shape_summary(&info, &rewards, net);
+  Ok(RewardsOutput {
+    is_active: info.is_active(),
+    alerts_sent: Vec::new(),
+    summary,
+  })
+}
+
+// ── Telegram + do_watch (the workhorse) ──────────────────────────────────────
+
+/// Shape the watch-tick status line (≤200 tokens, SPEC-3 §7).
+fn shape_watch(info: &HotspotInfo, current: Option<bool>, alerts_sent: &[String]) -> String {
+  let state = match current {
+    Some(true) => "ONLINE",
+    Some(false) => "OFFLINE",
+    None => "UNKNOWN",
+  };
+  let alert_line = if alerts_sent.is_empty() {
+    "no alert sent".to_string()
+  } else {
+    format!("alert(s) sent: {}", alerts_sent.join(", "))
+  };
+  format!(
+    "✓ watch {} — {}, {}\n  current_active={} (persist for next tick)",
+    info.name,
+    state,
+    alert_line,
+    current.unwrap_or(false),
+  )
+}
+
+/// POST a Telegram `sendMessage` (`chat_id` + `text`) via the Bot API. Parses
+/// the `{"ok":true}` ack; `ok=false` → `RewardsError::Telegram` with the
+/// description. The bot token is sourced from config, never the message.
+pub fn send_telegram(
+  http: &dyn HttpClient,
+  cfg: &RewardsConfig,
+  text: &str,
+) -> Result<(), RewardsError> {
+  let url = format!("https://api.telegram.org/bot{}/sendMessage", cfg.telegram_bot_token);
+  let fields = vec![
+    ("chat_id".to_string(), cfg.telegram_chat_id.clone()),
+    ("text".to_string(), text.to_string()),
+  ];
+  let resp = http
+    .post_form(&url, &fields)
+    .map_err(|e| RewardsError::Telegram(format!("sendMessage transport: {e:?}")))?;
+  #[derive(serde::Deserialize)]
+  struct TgResp {
+    ok: bool,
+    #[serde(default)]
+    description: Option<String>,
+  }
+  let tg: TgResp = serde_json::from_slice(&resp)
+    .map_err(|e| RewardsError::Telegram(format!("sendMessage response parse: {e}")))?;
+  if !tg.ok {
+    return Err(RewardsError::Telegram(format!(
+      "sendMessage returned ok=false: {}",
+      tg.description.unwrap_or_default()
+    )));
+  }
+  Ok(())
+}
+
+/// `action = "watch"`: the cron-tick workhorse. Fetches status, detects an
+/// online→offline flip vs `prev_active` (fires a Telegram alert), optionally
+/// sends the daily rewards summary. Returns the new `is_active` for the SOP to
+/// persist. **Stateless** — the SOP passes `prev_active` in and persists the
+/// returned `is_active` (no in-plugin state).
+pub fn do_watch(
+  http: &dyn HttpClient,
+  cfg: &RewardsConfig,
+  id: &str,
+  prev_active: Option<bool>,
+  send_summary: bool,
+  from: &str,
+  to: &str,
+) -> Result<RewardsOutput, RewardsError> {
+  enforce_hotspot_allowlist(cfg, id)?;
+  let info = fetch_hotspot(http, cfg, id)?;
+  let current = info.is_active();
+  let net = info.primary_network();
+  let mut alerts_sent: Vec<String> = Vec::new();
+
+  // Offline-flip: prev was active, now inactive. (prev_active=None = first
+  // tick → never fire, no baseline.)
+  if prev_active == Some(true) && current == Some(false) {
+    let msg = format!(
+      "⚠ hotspot {} went OFFLINE ({}) — owner {}. Check your hotspot.",
+      info.name,
+      net,
+      short_addr(&info.owner)
+    );
+    send_telegram(http, cfg, &msg)?;
+    alerts_sent.push("offline-alert".to_string());
+  }
+
+  // Daily rewards summary (SOP sets send_summary=true on the 08:00 tick).
+  if send_summary {
+    let rewards = fetch_rewards(http, cfg, net, id, from, to)?;
+    // HNT bones (10⁸) — see `shape_summary`.
+    let msg = format!(
+      "✓ {} daily rewards — earned {} HNT [{}] ({}–{})",
+      info.name,
+      format_amount(rewards.total_amount, 8),
+      net,
+      rewards.from_iso,
+      rewards.to_iso,
+    );
+    send_telegram(http, cfg, &msg)?;
+    alerts_sent.push("daily-summary".to_string());
+  }
+
+  let summary = shape_watch(&info, current, &alerts_sent);
+  Ok(RewardsOutput {
+    is_active: current,
+    alerts_sent,
+    summary,
+  })
+}
+
+/// The unified entry point the WIT shim calls: routes `action` to the right
+/// `do_*` pure-core fn. The host-testable dispatch seam (TDD with `MockHttp`);
+/// the wasm `WakiHttp` impl is verified by the `wasm32-wasip2` build.
+///
+/// `claim_tx` is deliberately not shipped (Helium hotspots are compressed NFTs
+/// → `distribute_compression_rewards_v0` + a DAS `get_asset_proof` merkle proof,
+/// a focused next milestone). It fails closed with an honest message — never
+/// silently no-ops or pretends to claim.
+pub struct RewardsRequest<'a> {
+  pub action: &'a str,
+  pub hotspot_id: &'a str,
+  pub from: &'a str,
+  pub to: &'a str,
+  pub prev_active: Option<bool>,
+  pub send_summary: bool,
+}
+
+pub fn execute_entry(
+  req: &RewardsRequest,
+  http: &dyn HttpClient,
+  cfg: &RewardsConfig,
+) -> Result<RewardsOutput, RewardsError> {
+  match req.action {
+    "status" => do_status(http, cfg, req.hotspot_id),
+    "summary" => do_summary(http, cfg, req.hotspot_id, req.from, req.to),
+    "watch" => do_watch(
+      http, cfg, req.hotspot_id, req.prev_active, req.send_summary, req.from, req.to,
+    ),
+    "claim_tx" => Err(RewardsError::Config(
+      "claim_tx is roadmap-only: Helium hotspots are compressed NFTs so the claim needs \
+       distribute_compression_rewards_v0 + a DAS get_asset_proof merkle proof — a \
+       focused next milestone, not yet shipped. The alerts core (status/summary/watch) \
+       ships complete."
+        .to_string(),
+    )),
+    other => Err(RewardsError::Config(format!(
+      "unknown action: '{other}' — expected one of: status | summary | watch | claim_tx"
+    ))),
+  }
+}

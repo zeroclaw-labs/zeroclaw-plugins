@@ -1,0 +1,9 @@
+name = "depin-attest"
+version = "0.1.0"
+description = "Attest a physical sensor reading to Solana (SAS + durable nonce). T1 unsigned / T2 scoped-sign. Palinurus Track C."
+author = "RECTOR"
+wasm_path = "depin_attest.wasm"
+capabilities = ["tool"]
+# http_client: outbound JSON-RPC to a Solana RPC endpoint (TLS host-side via wasi:http).
+# config_read: read this plugin's jailed config section (RPC endpoint, SAS PDAs, custody mode, nonce account).
+permissions = ["http_client", "config_read"]

@@ -1,0 +1,36 @@
+{
+  "id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+  "asset_id": "EJzwL9CmDyiUkj5o6cN1mJv5K7v3oW2xYq8Rt4sBmV0",
+  "ecc_key": "11dZxvRHqYyMcuL1ivz8WbJcYq5pHT8UczRwjVn5M5PYuLjDxKc",
+  "owner": "BcJzP2hEYgzjUwpHEtS6RhuqGfEJVx8Rq3MejujAAWrR",
+  "networks": ["iot"],
+  "name": "tall-plum-ocelot",
+  "maker": {
+    "id": "a1b2c3d4-uuid",
+    "address": "D1pxZxpq2MWGKq5hYbN1rVw3uXy9BmT8nKjCsLp4mQ6v",
+    "update_authority": "9xQeWvG8Z3JkNp7mBcF2LtRyHsTuVwXyZqAbCdEfGhIj",
+    "issuing_authority": "5nT2vQxY8wKpLmBcFdRjHsVuXyZqAbCdEfGhIjKlMnOp",
+    "name": "SenseCAP",
+    "bump_seed": 255,
+    "collection": "Col1nT2vQxY8wKpLmBcFdRjHsVuXyZqAbCdEfGhIjKlM",
+    "merkle_tree": "Mt4nT2vQxY8wKpLmBcFdRjHsVuXyZqAbCdEfGhIjKlO",
+    "collection_bump_seed": 254,
+    "dao": "Dao1nT2vQxY8wKpLmBcFdRjHsVuXyZqAbCdEfGhIjK"
+  },
+  "iot_info": {
+    "location": 631842973910616063,
+    "elevation": 10,
+    "gain": 12,
+    "is_full_hotspot": true,
+    "num_location_asserts": 1,
+    "is_active": true,
+    "dc_onboarding_fee_paid": 4000000
+  },
+  "mobile_info": {
+    "location": null,
+    "is_full_hotspot": false,
+    "num_location_asserts": 0,
+    "is_active": false,
+    "dc_onboarding_fee_paid": 0
+  }
+}
