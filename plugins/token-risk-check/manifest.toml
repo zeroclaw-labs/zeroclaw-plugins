@@ -1,0 +1,7 @@
+name = "token-risk-check"
+version = "0.1.0"
+description = "Solana token risk scanner: mint/freeze authority, Token-2022 extensions, holder concentration, LP status. Returns green/amber/red verdict with reasons."
+author = "Jorch Lab"
+wasm_path = "token_risk_check.wasm"
+capabilities = ["tool"]
+permissions = ["http_client", "config_read"]

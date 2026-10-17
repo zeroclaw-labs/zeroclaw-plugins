@@ -1,0 +1,7 @@
+name = "sns-resolve"
+version = "0.1.0"
+description = "Resolve .sol SNS domains and validate Solana addresses. Returns public key and domain metadata."
+author = "Jorch Lab"
+wasm_path = "sns_resolve.wasm"
+capabilities = ["tool"]
+permissions = ["http_client"]
