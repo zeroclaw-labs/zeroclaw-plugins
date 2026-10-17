@@ -1,20 +1,45 @@
 name = "telegram"
-version = "0.3.0"
+version = "0.4.0"
 description = "Telegram channel plugin for ZeroClaw: getUpdates long-poll + sendMessage over wasi:http."
 author = "JordanTheJet"
 wasm_path = "telegram.wasm"
 capabilities = ["channel"]
-# Withdrawn from the registry until this package is ported to the plugin
-# contract ZeroClaw v0.8.6 ships: it binds wit/unstable, whose
-# configure(config) the v0.8.6 host no longer calls. Its published versions
-# are listed in registry-retirements.json.
-registry = false
+# Needs ZeroClaw v0.8.6 or later: it binds the plugin contract first released
+# in v0.8.6 (typed config through config.get, credentials through
+# secrets.get), and reads both when the host configures the instance.
+registry = true
 sender_match = "handle"
-# http_client: outbound calls to api.telegram.org (TLS is performed host-side).
-# config_read: read the bot token + settings from this channel's config section.
+# http_client: getUpdates long-poll and sendMessage against the Bot API (TLS
+#   is performed host-side).
+# config_read: the typed config below through config.get; bot_token is
+#   x-secret and reaches the plugin only through secrets.get.
 permissions = ["http_client", "config_read"]
-# provides: mirror the built-in `telegram` channel — read [channels.telegram.*]
-# and honor native-wins. Inert on hosts without the `provides` feature (they
-# load this as a novel channel named `telegram`, configured from
-# [[plugins.entries.telegram]]).
+# provides: the built-in channel this package can stand in for. Hosts construct
+# this plugin only from an explicit [channels.plugin.<alias>] binding, so it
+# never reads [channels.telegram.*].
 provides = "telegram"
+
+# The hosts this plugin contacts. A declaration grants nothing: an operator
+# grants them with `zeroclaw plugin bind telegram --channel-alias <alias>
+# --egress declared`. api.telegram.org serves the Bot API.
+[egress]
+hosts = ["api.telegram.org"]
+
+[config_schema]
+"$schema" = "https://json-schema.org/draft/2020-12/schema"
+type = "object"
+required = ["bot_token"]
+additionalProperties = false
+
+[config_schema.properties.bot_token]
+type = "string"
+x-secret = true
+minLength = 1
+[config_schema.properties.api_base_url]
+type = "string"
+[config_schema.properties.allowed_users]
+type = "array"
+[config_schema.properties.allowed_users.items]
+type = "string"
+[config_schema.properties.parse_mode]
+type = "string"
