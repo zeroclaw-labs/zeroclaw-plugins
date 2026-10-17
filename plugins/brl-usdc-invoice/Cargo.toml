@@ -1,0 +1,24 @@
+[package]
+name = "brl-usdc-invoice"
+version = "0.3.6"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "ZeroClaw tool: dual-rail BRL PIX + Solana USDC invoice (T1, no keys)"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+wit-bindgen = "0.46"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+solana-wasm-core = { path = "vendor/solana-wasm-core" }
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true
+codegen-units = 1
+
+[workspace]
