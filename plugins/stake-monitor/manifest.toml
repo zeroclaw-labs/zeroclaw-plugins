@@ -1,0 +1,7 @@
+name = "stake-monitor"
+version = "0.1.0"
+description = "Read-only Solana stake activation and delegation health monitor."
+author = "Briefline contributors"
+wasm_path = "stake_monitor.wasm"
+capabilities = ["tool"]
+permissions = ["config_read"]

@@ -1,0 +1,8 @@
+name = "token-risk-check"
+version = "0.1.0"
+description = "Read-only deterministic Solana token risk assessment from bounded verified signals."
+author = "Briefline contributors"
+wasm_path = "token_risk_check.wasm"
+capabilities = ["tool"]
+permissions = ["config_read"]
+registry = false
