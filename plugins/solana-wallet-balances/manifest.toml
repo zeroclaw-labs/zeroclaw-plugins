@@ -1,0 +1,9 @@
+name = "solana-wallet-balances"
+version = "0.1.0"
+description = "SOL + non-zero SPL token balances for any Solana address, in one compact answer"
+author = "Ace Zhang"
+wasm_path = "solana_wallet_balances.wasm"
+capabilities = ["tool"]
+# http_client: one outbound POST to the configured Solana RPC per lookup.
+# config_read: optional rpc_url override (defaults to public mainnet RPC).
+permissions = ["http_client", "config_read"]
