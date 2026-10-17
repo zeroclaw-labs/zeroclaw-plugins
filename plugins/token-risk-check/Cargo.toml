@@ -1,0 +1,28 @@
+[package]
+name = "token-risk-check"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+description = "ZeroClaw WIT tool plugin (T0): score a Solana SPL/Token-2022 mint for rug/abuse risk. Read-only, zero custody."
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+wit-bindgen = "0.46"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+base64 = "0.22"
+
+# wasi:http client — only compiled for the wasm component, never on the host.
+[target.'cfg(target_family = "wasm")'.dependencies]
+waki = { version = "0.5.1", features = ["json"] }
+futures = "0.3"
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true
+
+[workspace]

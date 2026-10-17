@@ -1,0 +1,9 @@
+name = "token-risk-check"
+version = "0.1.0"
+description = "Score a Solana SPL / Token-2022 mint for rug/abuse risk: mint & freeze authority, holder concentration, LP status, and Token-2022 extensions (transfer hooks, transfer fees, permanent delegate). Read-only, zero custody (T0)."
+author = "Akira"
+wasm_path = "token_risk_check.wasm"
+capabilities = ["tool"]
+# http_client: outbound HTTPS to any Solana RPC / DAS endpoint (TLS host-side).
+# config_read: this plugin's own config section (rpc_url, extensions to flag).
+permissions = ["http_client", "config_read"]
