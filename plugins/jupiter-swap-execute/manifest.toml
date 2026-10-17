@@ -1,0 +1,7 @@
+name = "jupiter-swap-execute"
+version = "0.1.0"
+description = "Quote and execute Solana swaps via Jupiter with OutLayer custody enforcement (T1)"
+author = "Kampouse"
+wasm_path = "jupiter_swap_execute.wasm"
+capabilities = ["tool"]
+permissions = ["http_client", "config_read"]
