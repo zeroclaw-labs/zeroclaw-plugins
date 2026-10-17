@@ -1,0 +1,7 @@
+name = "solana-pay-request"
+version = "0.1.0"
+description = "Create deterministic Solana Pay transfer-request URLs without network access or custody"
+author = "ZeroClaw Solana contributors"
+wasm_path = "solana_pay_request.wasm"
+capabilities = ["tool"]
+permissions = ["config_read"]
