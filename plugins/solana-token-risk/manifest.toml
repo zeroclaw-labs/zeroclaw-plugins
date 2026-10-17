@@ -1,0 +1,11 @@
+name = "solana-token-risk"
+version = "0.1.0"
+description = "Check if a Solana token is safe. Returns RED/AMBER/GREEN with mint authority, freeze authority, Token-2022 extensions, holder concentration, and LP status."
+author = "Levrone"
+wasm_path = "solana_token_risk.wasm"
+capabilities = ["tool"]
+permissions = ["http_client", "config_read"]
+
+[config]
+rpc_url = "https://api.mainnet-beta.solana.com"
+das_url = "https://api.mainnet-beta.solana.com"
