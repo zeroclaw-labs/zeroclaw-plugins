@@ -1,0 +1,84 @@
+{
+  "checks": [
+    {
+      "artifact": "01-cluster-identity.json",
+      "check": "the endpoint really is Solana mainnet-beta",
+      "detail": "genesis hash 5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d, solana-core 4.1.0, slot 436186907",
+      "ok": true
+    },
+    {
+      "artifact": "02-sender-account.json",
+      "check": "the sender is a funded wallet owned by the system program",
+      "detail": "10249012047571677 lamports, owner 11111111111111111111111111111111, data space 0",
+      "ok": true
+    },
+    {
+      "artifact": "03-build-sol.json, 04-decoded-sol-transaction.json",
+      "check": "spl-transfer-build produced an unsigned SOL transfer against live mainnet state",
+      "detail": "315 bytes, 1 signature slot left all zero, programs MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr, 11111111111111111111111111111111, blockhash 7u2N6dBi7HRkAAtKfgvCHqJvVJ9Y1zYh7jkV1essKAFP, 1 rpc call",
+      "ok": true
+    },
+    {
+      "artifact": "05-simulate-sol.json",
+      "check": "mainnet simulation ACCEPTED the unsigned SOL transfer",
+      "detail": "err None, fee 5000 lamports, 12928 compute units, simulated at slot 436186946. Logs: Program MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr invoke [1] | Program log: Memo (len 32): \"zeroclaw mainnet simulation only\" | Program MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr consumed 12778 of 203000 compute units | Program MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr success | Program 11111111111111111111111111111111 invoke [1] | Program 11111111111111111111111111111111 success",
+      "ok": true
+    },
+    {
+      "artifact": "06-simulate-sol-sigverify-on.json",
+      "check": "the same bytes are rejected once signatures are checked, so they are genuinely unsigned",
+      "detail": "err SignatureFailure with sigVerify true, against err null with sigVerify false",
+      "ok": true
+    },
+    {
+      "artifact": "07-build-usdc.json, 08-decoded-usdc-transaction.json",
+      "check": "spl-transfer-build read the real USDC mint and built the transfer plus token account creation",
+      "detail": "485 bytes, 3 rpc calls, programs ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL, MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr, TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
+      "ok": true
+    },
+    {
+      "artifact": "09-simulate-usdc.json",
+      "check": "mainnet simulation ACCEPTED the unsigned USDC transfer",
+      "detail": "err None, fee 5000 lamports, 26476 compute units, simulated at slot 436186957. Logs: Program ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL invoke [1] | Program log: CreateIdempotent | Program TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA invoke [2] | Program TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA consumed 179 of 594571 compute units | Program return: TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA pQAAAAAAAAA= | Program TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA success | Program 11111111111111111111111111111111 invoke [2] | Program 11111111111111111111111111111111 success | Program log: Initialize the associated token account | Program TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA invoke [2] | Program TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA consumed 37 of 589482 compute units | Program TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA success | Program TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA invoke [2] | Program TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA consumed 233 of 587019 compute units | Program TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA success | Program ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL consumed 13518 of 600000 compute units | Program ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL success | Program MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr invoke [1] | Program log: Memo (len 32): \"zeroclaw mainnet simulation only\" | Program MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr consumed 12778 of 586482 compute units | Program MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr success | Program TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA invoke [1] | Program TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA consumed 180 of 573704 compute units | Program TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA success",
+      "ok": true
+    },
+    {
+      "artifact": "10-refused-over-cap.json",
+      "check": "the operator cap refuses 5 SOL against mainnet before any RPC call",
+      "detail": "transfer refused: amount 5 exceeds the operator's per-transfer cap of 0.01 for SOL; no transaction was built (0 rpc calls)",
+      "ok": true
+    },
+    {
+      "artifact": "11-watch-unused-reference.json",
+      "check": "payment-watch queried mainnet for an unused reference and reported nothing paid",
+      "detail": "NOT SEEN: no transaction under this reference yet (1 rpc calls)",
+      "ok": true
+    },
+    {
+      "artifact": "12-nonce-absent-account.json",
+      "check": "nonce-status read mainnet and reported the account absent instead of guessing",
+      "detail": "MISSING: nonce account 9yXPTQZhqq1yvG22NE8Vz4HobeXUJ1dwirgByV5EJt1 does not exist. Create it once with: solana-keygen new -o nonce.json && solana create-nonce-account nonce.json 0.0015 (rent 1447680 lamports), then set nonce_account in this plugin's config. (1 rpc calls)",
+      "ok": true
+    },
+    {
+      "artifact": "95-method-census.json, 90-component-rpc-transcript.jsonl",
+      "check": "no write method was called anywhere in this run",
+      "detail": "13 JSON-RPC calls over 7 distinct methods: getAccountInfo, getGenesisHash, getLatestBlockhash, getSignaturesForAddress, getSlot, getVersion, simulateTransaction",
+      "ok": true
+    }
+  ],
+  "checks_failed": 0,
+  "checks_total": 11,
+  "endpoint": "https://api.mainnet-beta.solana.com",
+  "failed": [],
+  "finished": "2026-07-30T16:35:39Z",
+  "notes": [
+    {
+      "artifact": "",
+      "detail": "Simulation is not settlement. Nothing here was signed, broadcast or paid, and this rig holds no keypair. The sender is a public wallet nobody here controls.",
+      "note": "what this stage does not prove"
+    }
+  ],
+  "repo_commit": "e0bd851145fc76fc1de4f528f38ef3c67d8dfdbd",
+  "started": "2026-07-30T16:35:27Z"
+}

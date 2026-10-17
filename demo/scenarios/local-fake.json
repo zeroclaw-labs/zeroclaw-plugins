@@ -1,0 +1,332 @@
+{
+  "note": [
+    "Scenarios for the offline end-to-end run. Every args object below is exactly",
+    "what the ZeroClaw host passes to the component's execute(), including the",
+    "host-injected __config the caller cannot spoof. {{RPC_URL}} is replaced with",
+    "the local fake's loopback https endpoint at run time.",
+    "expect: accept means the component returned a result, refuse means it said no.",
+    "rpc_calls is the number of round trips the component made, so a refusal that",
+    "never touched the network is visible as 0."
+  ],
+  "addresses": {
+    "sender": "9B5XszUGdMaxCZ7uSQhPzdks5ZQSmWxrmzCSvtJ6Ns6g",
+    "allowlisted_recipient": "mvines9iiHiQTysrwkJjGf2gb9Ex9jXJX8ns3qwf2kN",
+    "off_allowlist_wallet": "SysvarC1ock11111111111111111111111111111111",
+    "mint_6_decimals": "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU",
+    "nonce_account": "8XkoSVfNbLKKzcpsTCyzysXbygqrGrbW8t5RS6Wxsdb1",
+    "nonce_account_wrong_authority": "D76rpNLGyDF8c6jgbqi2rXRieX4Z1q4BtkKAnKUJsNQv",
+    "reference_with_payment": "FPPZ8UK5r9BiNQ7N9DhGumcQkQJE9JXXvkCRvFG4d5X5",
+    "reference_with_nothing": "CxaaW7Fd6LfZAT3gVDEs5pxK2PT9T9nd7JfuAyYWHyFq",
+    "account_that_does_not_exist": "9yXPTQZhqq1yvG22NE8Vz4HobeXUJ1dwirgByV5EJt1"
+  },
+  "cases": [
+    {
+      "id": "sol-durable-nonce",
+      "driver": "build",
+      "what": "0.05 SOL to the allowlisted supplier, durable nonce, memo and Solana Pay reference",
+      "expect": "accept",
+      "must_contain": "safe to approve later",
+      "rpc_calls": 1,
+      "args": {
+        "sender": "9B5XszUGdMaxCZ7uSQhPzdks5ZQSmWxrmzCSvtJ6Ns6g",
+        "recipient": "mvines9iiHiQTysrwkJjGf2gb9Ex9jXJX8ns3qwf2kN",
+        "amount": "0.05",
+        "memo": "invoice 042",
+        "reference": "FPPZ8UK5r9BiNQ7N9DhGumcQkQJE9JXXvkCRvFG4d5X5",
+        "__config": {
+          "rpc_url": "{{RPC_URL}}",
+          "allow_recipients": "mvines9iiHiQTysrwkJjGf2gb9Ex9jXJX8ns3qwf2kN",
+          "caps": "SOL:0.1:9,4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU:25:6",
+          "nonce_account": "8XkoSVfNbLKKzcpsTCyzysXbygqrGrbW8t5RS6Wxsdb1"
+        }
+      }
+    },
+    {
+      "id": "sol-fresh-blockhash",
+      "driver": "build",
+      "what": "same transfer with no nonce account configured, so it rides a fresh blockhash",
+      "expect": "accept",
+      "must_contain": "sign within",
+      "rpc_calls": 1,
+      "args": {
+        "sender": "9B5XszUGdMaxCZ7uSQhPzdks5ZQSmWxrmzCSvtJ6Ns6g",
+        "recipient": "mvines9iiHiQTysrwkJjGf2gb9Ex9jXJX8ns3qwf2kN",
+        "amount": "0.05",
+        "__config": {
+          "rpc_url": "{{RPC_URL}}",
+          "allow_recipients": "mvines9iiHiQTysrwkJjGf2gb9Ex9jXJX8ns3qwf2kN",
+          "caps": "SOL:0.1:9"
+        }
+      }
+    },
+    {
+      "id": "spl-creates-missing-ata",
+      "driver": "build",
+      "what": "25 of the 6-decimal mint, destination token account missing, so the build adds create-idempotent",
+      "expect": "accept",
+      "must_contain": "25 mint 4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU",
+      "rpc_calls": 3,
+      "args": {
+        "sender": "9B5XszUGdMaxCZ7uSQhPzdks5ZQSmWxrmzCSvtJ6Ns6g",
+        "recipient": "mvines9iiHiQTysrwkJjGf2gb9Ex9jXJX8ns3qwf2kN",
+        "amount": "25",
+        "mint": "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU",
+        "memo": "invoice 043",
+        "reference": "FPPZ8UK5r9BiNQ7N9DhGumcQkQJE9JXXvkCRvFG4d5X5",
+        "__config": {
+          "rpc_url": "{{RPC_URL}}",
+          "allow_recipients": "mvines9iiHiQTysrwkJjGf2gb9Ex9jXJX8ns3qwf2kN",
+          "caps": "SOL:0.1:9,4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU:25:6",
+          "nonce_account": "8XkoSVfNbLKKzcpsTCyzysXbygqrGrbW8t5RS6Wxsdb1"
+        }
+      }
+    },
+    {
+      "id": "refuse-off-allowlist",
+      "driver": "build",
+      "what": "recipient the operator never allowlisted",
+      "expect": "refuse",
+      "must_contain": "not on the operator's allowlist",
+      "rpc_calls": 0,
+      "args": {
+        "sender": "9B5XszUGdMaxCZ7uSQhPzdks5ZQSmWxrmzCSvtJ6Ns6g",
+        "recipient": "SysvarC1ock11111111111111111111111111111111",
+        "amount": "0.05",
+        "__config": {
+          "rpc_url": "{{RPC_URL}}",
+          "allow_recipients": "mvines9iiHiQTysrwkJjGf2gb9Ex9jXJX8ns3qwf2kN",
+          "caps": "SOL:0.1:9",
+          "nonce_account": "8XkoSVfNbLKKzcpsTCyzysXbygqrGrbW8t5RS6Wxsdb1"
+        }
+      }
+    },
+    {
+      "id": "refuse-over-cap",
+      "driver": "build",
+      "what": "0.2 SOL against a 0.1 SOL per-transfer cap",
+      "expect": "refuse",
+      "must_contain": "exceeds the operator's per-transfer cap",
+      "rpc_calls": 0,
+      "args": {
+        "sender": "9B5XszUGdMaxCZ7uSQhPzdks5ZQSmWxrmzCSvtJ6Ns6g",
+        "recipient": "mvines9iiHiQTysrwkJjGf2gb9Ex9jXJX8ns3qwf2kN",
+        "amount": "0.2",
+        "__config": {
+          "rpc_url": "{{RPC_URL}}",
+          "allow_recipients": "mvines9iiHiQTysrwkJjGf2gb9Ex9jXJX8ns3qwf2kN",
+          "caps": "SOL:0.1:9",
+          "nonce_account": "8XkoSVfNbLKKzcpsTCyzysXbygqrGrbW8t5RS6Wxsdb1"
+        }
+      }
+    },
+    {
+      "id": "refuse-config-typo",
+      "driver": "build",
+      "what": "a misspelled policy key, which must never silently disable a cap",
+      "expect": "refuse",
+      "must_contain": "unknown config key",
+      "rpc_calls": 0,
+      "args": {
+        "sender": "9B5XszUGdMaxCZ7uSQhPzdks5ZQSmWxrmzCSvtJ6Ns6g",
+        "recipient": "mvines9iiHiQTysrwkJjGf2gb9Ex9jXJX8ns3qwf2kN",
+        "amount": "0.05",
+        "__config": {
+          "rpc_url": "{{RPC_URL}}",
+          "allow_recipients": "mvines9iiHiQTysrwkJjGf2gb9Ex9jXJX8ns3qwf2kN",
+          "caps": "SOL:0.1:9",
+          "max_amout": "999"
+        }
+      }
+    },
+    {
+      "id": "refuse-plain-http-endpoint",
+      "driver": "build",
+      "what": "an http endpoint in operator config",
+      "expect": "refuse",
+      "must_contain": "rpc_url must be an https:// endpoint",
+      "rpc_calls": 0,
+      "args": {
+        "sender": "9B5XszUGdMaxCZ7uSQhPzdks5ZQSmWxrmzCSvtJ6Ns6g",
+        "recipient": "mvines9iiHiQTysrwkJjGf2gb9Ex9jXJX8ns3qwf2kN",
+        "amount": "0.05",
+        "__config": {
+          "rpc_url": "http://127.0.0.1:1",
+          "allow_recipients": "mvines9iiHiQTysrwkJjGf2gb9Ex9jXJX8ns3qwf2kN",
+          "caps": "SOL:0.1:9"
+        }
+      }
+    },
+    {
+      "id": "refuse-injected-argument",
+      "driver": "build",
+      "what": "a caller trying to pass its own rpc_url as a tool argument",
+      "expect": "refuse",
+      "must_contain": "bad arguments",
+      "rpc_calls": 0,
+      "args": {
+        "sender": "9B5XszUGdMaxCZ7uSQhPzdks5ZQSmWxrmzCSvtJ6Ns6g",
+        "recipient": "mvines9iiHiQTysrwkJjGf2gb9Ex9jXJX8ns3qwf2kN",
+        "amount": "0.05",
+        "rpc_url": "https://rpc.attacker.example",
+        "__config": {
+          "rpc_url": "{{RPC_URL}}",
+          "allow_recipients": "mvines9iiHiQTysrwkJjGf2gb9Ex9jXJX8ns3qwf2kN",
+          "caps": "SOL:0.1:9"
+        }
+      }
+    },
+    {
+      "id": "refuse-wrong-nonce-authority",
+      "driver": "build",
+      "what": "a nonce account whose authority is not the sender, read live from the endpoint",
+      "expect": "refuse",
+      "must_contain": "is not the sender",
+      "rpc_calls": 1,
+      "args": {
+        "sender": "9B5XszUGdMaxCZ7uSQhPzdks5ZQSmWxrmzCSvtJ6Ns6g",
+        "recipient": "mvines9iiHiQTysrwkJjGf2gb9Ex9jXJX8ns3qwf2kN",
+        "amount": "0.05",
+        "__config": {
+          "rpc_url": "{{RPC_URL}}",
+          "allow_recipients": "mvines9iiHiQTysrwkJjGf2gb9Ex9jXJX8ns3qwf2kN",
+          "caps": "SOL:0.1:9",
+          "nonce_account": "D76rpNLGyDF8c6jgbqi2rXRieX4Z1q4BtkKAnKUJsNQv"
+        }
+      }
+    },
+    {
+      "id": "refuse-decimals-mismatch",
+      "driver": "build",
+      "what": "cap written at 9 decimals while the mint really has 6, a 1000x mistake",
+      "expect": "refuse",
+      "must_contain": "decimals",
+      "rpc_calls": 2,
+      "args": {
+        "sender": "9B5XszUGdMaxCZ7uSQhPzdks5ZQSmWxrmzCSvtJ6Ns6g",
+        "recipient": "mvines9iiHiQTysrwkJjGf2gb9Ex9jXJX8ns3qwf2kN",
+        "amount": "25",
+        "mint": "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU",
+        "__config": {
+          "rpc_url": "{{RPC_URL}}",
+          "allow_recipients": "mvines9iiHiQTysrwkJjGf2gb9Ex9jXJX8ns3qwf2kN",
+          "caps": "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU:25:9"
+        }
+      }
+    },
+    {
+      "id": "refuse-numeric-amount",
+      "driver": "build",
+      "what": "amount as a JSON number, where a float would silently round the value",
+      "expect": "refuse",
+      "must_contain": "bad arguments",
+      "rpc_calls": 0,
+      "args": {
+        "sender": "9B5XszUGdMaxCZ7uSQhPzdks5ZQSmWxrmzCSvtJ6Ns6g",
+        "recipient": "mvines9iiHiQTysrwkJjGf2gb9Ex9jXJX8ns3qwf2kN",
+        "amount": 0.05,
+        "__config": {
+          "rpc_url": "{{RPC_URL}}",
+          "allow_recipients": "mvines9iiHiQTysrwkJjGf2gb9Ex9jXJX8ns3qwf2kN",
+          "caps": "SOL:0.1:9"
+        }
+      }
+    },
+    {
+      "id": "watch-payment-arrived",
+      "driver": "watch",
+      "what": "the reference carries a confirmed 25-token transfer to the expected recipient",
+      "expect": "accept",
+      "must_contain": "PAID: 25 of mint",
+      "rpc_calls": 2,
+      "args": {
+        "reference": "FPPZ8UK5r9BiNQ7N9DhGumcQkQJE9JXXvkCRvFG4d5X5",
+        "expected_amount": "25",
+        "mint": "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU",
+        "recipient": "mvines9iiHiQTysrwkJjGf2gb9Ex9jXJX8ns3qwf2kN",
+        "__config": { "rpc_url": "{{RPC_URL}}" }
+      }
+    },
+    {
+      "id": "watch-nothing-under-reference",
+      "driver": "watch",
+      "what": "a reference nobody has paid against yet",
+      "expect": "accept",
+      "must_contain": "NOT SEEN",
+      "rpc_calls": 1,
+      "args": {
+        "reference": "CxaaW7Fd6LfZAT3gVDEs5pxK2PT9T9nd7JfuAyYWHyFq",
+        "__config": { "rpc_url": "{{RPC_URL}}" }
+      }
+    },
+    {
+      "id": "watch-amount-short",
+      "driver": "watch",
+      "what": "a real transfer that is smaller than the invoice, which must not read as paid",
+      "expect": "accept",
+      "must_contain": "NOT CONFIRMED: received 25",
+      "rpc_calls": 2,
+      "args": {
+        "reference": "FPPZ8UK5r9BiNQ7N9DhGumcQkQJE9JXXvkCRvFG4d5X5",
+        "expected_amount": "50",
+        "mint": "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU",
+        "__config": { "rpc_url": "{{RPC_URL}}" }
+      }
+    },
+    {
+      "id": "watch-refuse-plain-http-endpoint",
+      "driver": "watch",
+      "what": "the same https rule on the read-only tool",
+      "expect": "refuse",
+      "must_contain": "rpc_url must be an https:// endpoint",
+      "rpc_calls": 0,
+      "args": {
+        "reference": "FPPZ8UK5r9BiNQ7N9DhGumcQkQJE9JXXvkCRvFG4d5X5",
+        "__config": { "rpc_url": "http://127.0.0.1:1" }
+      }
+    },
+    {
+      "id": "nonce-ready",
+      "driver": "nonce",
+      "what": "the configured nonce account, read live",
+      "expect": "accept",
+      "must_contain": "READY: nonce account",
+      "rpc_calls": 1,
+      "args": {
+        "__config": {
+          "rpc_url": "{{RPC_URL}}",
+          "nonce_account": "8XkoSVfNbLKKzcpsTCyzysXbygqrGrbW8t5RS6Wxsdb1"
+        }
+      }
+    },
+    {
+      "id": "nonce-missing-account",
+      "driver": "nonce",
+      "what": "an account that does not exist, answered with the create command instead of a stack trace",
+      "expect": "accept",
+      "must_contain": "MISSING: nonce account",
+      "rpc_calls": 1,
+      "args": {
+        "account": "9yXPTQZhqq1yvG22NE8Vz4HobeXUJ1dwirgByV5EJt1",
+        "__config": {
+          "rpc_url": "{{RPC_URL}}",
+          "nonce_account": "8XkoSVfNbLKKzcpsTCyzysXbygqrGrbW8t5RS6Wxsdb1"
+        }
+      }
+    },
+    {
+      "id": "nonce-not-a-nonce-account",
+      "driver": "nonce",
+      "what": "an account owned by the token program, so transfer-build cannot use it",
+      "expect": "accept",
+      "must_contain": "NOT A NONCE ACCOUNT",
+      "rpc_calls": 1,
+      "args": {
+        "account": "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU",
+        "__config": {
+          "rpc_url": "{{RPC_URL}}",
+          "nonce_account": "8XkoSVfNbLKKzcpsTCyzysXbygqrGrbW8t5RS6Wxsdb1"
+        }
+      }
+    }
+  ]
+}

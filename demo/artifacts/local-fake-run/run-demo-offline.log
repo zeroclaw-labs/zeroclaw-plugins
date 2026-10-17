@@ -1,0 +1,106 @@
+
+== stage 0: environment
+  rustc 1.97.1 (8bab26f4f 2026-07-14)
+  cargo 1.97.1 (c980f4866 2026-06-30)
+  Python 3.11.5
+  curl 8.5.0 (x86_64-pc-linux-gnu) libcurl/8.5.0 OpenSSL/3.0.13 zlib/1.3 brotli/1.1.0 zstd/1.5.5 libidn2/2.3.7 libpsl/0.21.2 (+libidn2/2.3.7) libssh/0.10.6/openssl/zlib nghttp2/1.59.0 librtmp/2.3 OpenLDAP/2.6.10
+  OpenSSL 3.0.13 30 Jan 2024 (Library: OpenSSL 3.0.13 30 Jan 2024)
+  wasm32-wasip2 target present
+  repo e0bd851 on branch solana-payment-suite
+  plugin directories and wit/v0 are clean
+  cargo may fetch crates from crates.io on a cold cache. The demo itself talks to 127.0.0.1 only
+
+== stage 1: the repo's own component gates, tools/ci/validate_components.sh
+  per component: cargo test, clippy on the host, clippy on wasm32-wasip2, release wasm build
+  validator exit code 0, full log demo/out/validate.log
+  component             tests  fail  ign  test  clip  wasm-clip  build  wasm bytes  wasm sha256
+  spl-transfer-build       67     0    0     0     0          0      0     406,706  2616522a1bd1b293cb1783e248861907
+  payment-watch            66     0    0     0     0          0      0     366,760  f768a38e357656b0adcf5a9bcbc4617e
+  nonce-status             63     0    0     0     0          0      0     332,005  b0b2d353c9bd8be997f12e608f72131f
+  3 components, 196 tests passed, 0 failed
+
+== stage 1b: one shared core, three vendored copies
+  libs/solana-core/src                        9d57e7e9aa968ac5f09d4a2af04ce407833ae750244818ff24dc27c1f5d8b34b
+  plugins/spl-transfer-build/solana-core/src  9d57e7e9aa968ac5f09d4a2af04ce407833ae750244818ff24dc27c1f5d8b34b  same
+  plugins/payment-watch/solana-core/src       9d57e7e9aa968ac5f09d4a2af04ce407833ae750244818ff24dc27c1f5d8b34b  same
+  plugins/nonce-status/solana-core/src        9d57e7e9aa968ac5f09d4a2af04ce407833ae750244818ff24dc27c1f5d8b34b  same
+  three vendored copies, one source of truth, digests identical
+
+== stage 2: build the demo drivers
+  a driver runs one component's real core on the host and prints what it returned
+  build  11370528 bytes  demo/drivers/build/target/debug/zc-drive-build
+  watch  10962648 bytes  demo/drivers/watch/target/debug/zc-drive-watch
+  nonce  10656648 bytes  demo/drivers/nonce/target/debug/zc-drive-nonce
+
+== stage 3: end to end against a local fake RPC on 127.0.0.1
+  self-signed loopback certificate generated, because the components refuse any rpc_url that is not https
+  local fake RPC on https://127.0.0.1:42545 (synthetic fixtures, not a cluster)
+  18 scenarios, endpoint https://127.0.0.1:42545
+  [ 1/18] sol-durable-nonce  PASS  accept  rpc=1  tx=368 B  sha256=5fec8ba6d981  durable_nonce=true
+        UNSIGNED transfer: 0.05 SOL from 9B5XszUGdMaxCZ7uSQhPzdks5ZQSmWxrmzCSvtJ6Ns6g to mvines9iiHiQTysrwkJjGf2gb9Ex9jXJX8ns3qwf2kN, memo "invoice 042", with payment reference. Durable nonce: valid until the nonce advances — safe to approve later. This tool holds no keys; nothing moves until the owner signs.
+  [ 2/18] sol-fresh-blockhash  PASS  accept  rpc=1  tx=215 B  sha256=ac0889d0cd55  durable_nonce=false
+        UNSIGNED transfer: 0.05 SOL from 9B5XszUGdMaxCZ7uSQhPzdks5ZQSmWxrmzCSvtJ6Ns6g to mvines9iiHiQTysrwkJjGf2gb9Ex9jXJX8ns3qwf2kN. Fresh blockhash: sign within ~60s or it expires. This tool holds no keys; nothing moves until the owner signs.
+  [ 3/18] spl-creates-missing-ata  PASS  accept  rpc=3  tx=538 B  sha256=2eb44005c76a  durable_nonce=true
+        UNSIGNED transfer: 25 mint 4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU from 9B5XszUGdMaxCZ7uSQhPzdks5ZQSmWxrmzCSvtJ6Ns6g to mvines9iiHiQTysrwkJjGf2gb9Ex9jXJX8ns3qwf2kN, memo "invoice 043", with payment reference. Durable nonce: valid until the nonce advances — safe to approve later. This tool holds no keys; nothing moves until the owner signs.
+  [ 4/18] refuse-off-allowlist  PASS  refuse  rpc=0
+        transfer refused: recipient SysvarC1ock11111111111111111111111111111111 is not on the operator's allowlist; no transaction was built
+  [ 5/18] refuse-over-cap  PASS  refuse  rpc=0
+        transfer refused: amount 0.2 exceeds the operator's per-transfer cap of 0.1 for SOL; no transaction was built
+  [ 6/18] refuse-config-typo  PASS  refuse  rpc=0
+        policy config error (transfer denied): unknown config key 'max_amout' — refusing to guess (fail closed)
+  [ 7/18] refuse-plain-http-endpoint  PASS  refuse  rpc=0
+        policy config error (transfer denied): rpc_url must be https, got 'http://127.0.0.1:1'
+  [ 8/18] refuse-injected-argument  PASS  refuse  rpc=0
+        bad arguments: unknown field `rpc_url`, expected one of `sender`, `recipient`, `amount`, `mint`, `memo`, `reference`, `__config` at line 1 column 146
+  [ 9/18] refuse-wrong-nonce-authority  PASS  refuse  rpc=1
+        transfer refused: nonce account authority mvines9iiHiQTysrwkJjGf2gb9Ex9jXJX8ns3qwf2kN is not the sender 9B5XszUGdMaxCZ7uSQhPzdks5ZQSmWxrmzCSvtJ6Ns6g; refusing to build an unusable transaction
+  [10/18] refuse-decimals-mismatch  PASS  refuse  rpc=2
+        transfer refused: operator cap for 4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU was written at 9 decimals but the mint has 6; fix the cap entry (fail closed)
+  [11/18] refuse-numeric-amount  PASS  refuse  rpc=0
+        bad arguments: invalid type: floating point `0.05`, expected a string at line 1 column 133
+  [12/18] watch-payment-arrived  PASS  accept  rpc=2  paid=true
+        PAID: 25 of mint 4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU to mvines9iiHiQTysrwkJjGf2gb9Ex9jXJX8ns3qwf2kN — sig 45TB5n9Lyxpk… slot 401234567 (finalized)
+  [13/18] watch-nothing-under-reference  PASS  accept  rpc=1  paid=false
+        NOT SEEN: no transaction under this reference yet
+  [14/18] watch-amount-short  PASS  accept  rpc=2  paid=false
+        NOT CONFIRMED: received 25 of mint 4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU, expected at least 50
+  [15/18] watch-refuse-plain-http-endpoint  PASS  refuse  rpc=0
+        config error: rpc_url must be https, got 'http://127.0.0.1:1'
+  [16/18] nonce-ready  PASS  accept  rpc=1
+        READY: nonce account 8XkoSVfNbLKKzcpsTCyzysXbygqrGrbW8t5RS6Wxsdb1 — authority 9B5XszUGdMaxCZ7uSQhPzdks5ZQSmWxrmzCSvtJ6Ns6g, current nonce Ab9CuAh7wGin…, fee 5000 lamports/sig. transfer-build transactions built against it stay valid until the nonce advances (i.e. until one of them lands).
+  [17/18] nonce-missing-account  PASS  accept  rpc=1
+        MISSING: nonce account 9yXPTQZhqq1yvG22NE8Vz4HobeXUJ1dwirgByV5EJt1 does not exist. Create it once with: solana-keygen new -o nonce.json && solana create-nonce-account nonce.json 0.0015 (rent 1447680 lamports), then set nonce_account in this plugin's config.
+  [18/18] nonce-not-a-nonce-account  PASS  accept  rpc=1
+        NOT A NONCE ACCOUNT: 4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU is owned by TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA, not the system program. transfer-build cannot use it.
+  golden: MATCH, 18 cases, sha256 7985bc832ed09b2c7ade54fe26dac860d3d15d7bff0de96dbd479e7718a5d06a
+  scenarios: 18 clean of 18
+  the fake answered 16 JSON-RPC requests, every one logged in demo/out/fake-rpc.jsonl
+  request and response bodies as the components saw them: demo/out/rpc-transcript.jsonl
+
+== stage 4: mainnet read path, optional
+  SKIPPED by default. This is the only stage that leaves 127.0.0.1.
+  It reads mainnet through a public RPC and asks mainnet to simulate an unsigned
+  transaction this build produced. Simulation never broadcasts, so it moves nothing
+  and needs no key. Run it with: MAINNET=1 demo/run-demo.sh
+  The last captured run is committed under demo/artifacts/mainnet-readpath/
+
+== verdict
+  nonce-status 0.1.0: 63 tests passed, 0 failed, wasm 332,005 bytes
+  payment-watch 0.1.0: 66 tests passed, 0 failed, wasm 366,760 bytes
+  spl-transfer-build 0.1.0: 67 tests passed, 0 failed, wasm 406,706 bytes
+  totals: 3 components, 196 tests passed
+  scenarios: 18 run, 3 unsigned transactions built, 9 refusals, 7 of those refused before any RPC call
+    sol-durable-nonce: 368 bytes, sha256 5fec8ba6d9810a412b1e37a7aa42a6cfd9f53d069d8085d0b788b9ceaff72ccf
+    sol-fresh-blockhash: 215 bytes, sha256 ac0889d0cd553354c603cb94bdc4a669e6a2e77b0cd57dca2346fda7d69f2c98
+    spl-creates-missing-ata: 538 bytes, sha256 2eb44005c76a16a796d2feedc4cc207a0d28f7a9919152e129110338b01b0d03
+  wall clock 17s
+
+  What this run proves: the three components build for wasm32-wasip2, their own
+  test suites pass, the shared core has not drifted, and each component behaves
+  correctly end to end against a live https endpoint, including refusing what it
+  should refuse before it touches the network.
+  What it does not prove: stage 3 data is a local fake, so no on-chain state is
+  involved and nothing here was signed, broadcast or paid. Mainnet evidence lives
+  in stage 4 and in demo/artifacts/mainnet-readpath/.
+
+  RESULT: green, 17s, every number above came from this run.

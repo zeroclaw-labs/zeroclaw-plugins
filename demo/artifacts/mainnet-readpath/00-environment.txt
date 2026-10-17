@@ -1,0 +1,12 @@
+run at            2026-07-30T16:35:27Z
+endpoint          https://api.mainnet-beta.solana.com
+repo commit       e0bd851145fc76fc1de4f528f38ef3c67d8dfdbd
+sender            9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM   (public mainnet wallet, not ours, never signs here)
+recipient         2PQcNtSophRAG7ZsHaDT87Zx8MNkCu3GPKsmrR2qthty   (our desk wallet, empty on mainnet)
+mint              EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v   (USDC)
+reference         FPPZ8UK5r9BiNQ7N9DhGumcQkQJE9JXXvkCRvFG4d5X5   (Solana Pay reference, synthetic)
+
+Read-only. Every call below is getGenesisHash, getVersion, getSlot,
+getAccountInfo, getLatestBlockhash, getSignaturesForAddress, getTransaction
+or simulateTransaction. simulateTransaction does not broadcast. No
+sendTransaction, no signature, no keypair, no wallet.

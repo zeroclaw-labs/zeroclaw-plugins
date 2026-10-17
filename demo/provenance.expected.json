@@ -1,0 +1,148 @@
+{
+  "artifacts": {
+    "nonce-status": {
+      "bytes": 332253,
+      "rustc_commits": [
+        "8bab26f4f68e0e26f0bb7960be334d5b520ea452"
+      ],
+      "sha256": "ffd4f0ad1e1425c0396817019a72813ce1d7d64b3e328890bd4c36ecdd3f3c00",
+      "wasm": "nonce_status.wasm"
+    },
+    "payment-watch": {
+      "bytes": 367973,
+      "rustc_commits": [
+        "8bab26f4f68e0e26f0bb7960be334d5b520ea452"
+      ],
+      "sha256": "7f6b810678095f56a9173869582946bc76602e1fb9a47688c7a0a37bc9a2d105",
+      "wasm": "payment_watch.wasm"
+    },
+    "spl-transfer-build": {
+      "bytes": 409058,
+      "rustc_commits": [
+        "8bab26f4f68e0e26f0bb7960be334d5b520ea452"
+      ],
+      "sha256": "d57ad6beb5ced07351fee08193e221d49c5c72fdfae9b8128a6e1bed5bdcae0e",
+      "wasm": "spl_transfer_build.wasm"
+    }
+  },
+  "claims": {
+    "core": {
+      "copies": [
+        "plugins/nonce-status/solana-core",
+        "plugins/payment-watch/solana-core",
+        "plugins/spl-transfer-build/solana-core"
+      ],
+      "digest_algorithm": "sha256 over sorted relative paths, path and bytes NUL terminated",
+      "files": {
+        "Cargo.lock": "38175fb453e26c3e834a0005f7aa263a11f647e0f7f3cebb6dec5b3ec4a6c2c0",
+        "Cargo.toml": "45301416cecadb6262c8106e033710d659bd73ba8920dfb6f42fdb08f40ffdb9",
+        "LICENSE": "d79272275e5911acd8836b7cc036987b3fe8ef79784e4d51246399b513622317",
+        "README.md": "736833fcc37ef5ab3ada5adbc9d32dc6f6d22ed7b5e4bf5fe5dafa265f6fec59",
+        "src/amount.rs": "ce7ff3c2e91c8d4edca68ff5e62692003c5b08e9673a7016ccc4b5fd7484062f",
+        "src/encoding.rs": "e30b8d3d5ed15eeb35b0a8b0836acd574a282563661c404f2f291f5c1fb0a31d",
+        "src/instruction.rs": "acd630d3a6eb81052d1701ec184460224466ba16888927805555276c588df7c1",
+        "src/lib.rs": "806cd03e7bf39ead7da661e3435923496f2635df046677d3f67f7888100f93e0",
+        "src/message.rs": "a3170fadb627bc3a025250808f2db634f9b5a3cf767e4df9d5efc20a31d7d5ba",
+        "src/nonce.rs": "6aa465a46a3cb9e0621974f6d393cdc78617a6ba50ca6cae57d234c32b7d4ad3",
+        "src/pay.rs": "65480d960b205c598ce17a1edec2e154929adffb6e8316748b4fc64e872cd083",
+        "src/policy.rs": "d2b41455fb95c6729373002084ff479d22fd10bbf6782c8084a4cd87091edf3b",
+        "src/pubkey.rs": "bd1d7d82ce61fe3343154393181f1c71ccb0c3220b4aeb3845f097c3b6b9d217",
+        "src/rpc.rs": "9f46b8dd481d3871cad2766d5745db2c5a31f480e06725ec3e06392e1d93d994",
+        "tests/vectors.rs": "6a4005b8565f96c8c413c9bd0b3c7d77520ffa12421d5e37b8c5cec100215193",
+        "vendor.sh": "545c63f6d204de2322e95bbe749fda2b7740ff69267c4aa9abc76aa7aaca7c9a"
+      },
+      "hashed_files": [
+        "Cargo.toml",
+        "src/amount.rs",
+        "src/encoding.rs",
+        "src/instruction.rs",
+        "src/lib.rs",
+        "src/message.rs",
+        "src/nonce.rs",
+        "src/pay.rs",
+        "src/policy.rs",
+        "src/pubkey.rs",
+        "src/rpc.rs",
+        "tests/vectors.rs"
+      ],
+      "left_behind_by_vendor_sh": [
+        "Cargo.lock",
+        "vendor.sh"
+      ],
+      "pinned_by_the_rust_tests": "1707bb69c692dc4dd9a62da040f1eb106846c97e642ee4da923f36a826c2648f",
+      "source_digest": "289217c3f999d6c2ac9f5a4b6e5b9559646223e953430c014a4516e655fe0798",
+      "source_of_truth": "libs/solana-core",
+      "vendor_script_sha256": "545c63f6d204de2322e95bbe749fda2b7740ff69267c4aa9abc76aa7aaca7c9a",
+      "vendored_digest": "1707bb69c692dc4dd9a62da040f1eb106846c97e642ee4da923f36a826c2648f"
+    },
+    "plugins": {
+      "nonce-status": {
+        "digest": "f3b534eb5f68e53037e1f1f3eb9eedd1f22cd6aa5598caab7f18675e06a771e2",
+        "files": {
+          "Cargo.lock": "869a3100f3bd6aaf0f36aa0ad210151fe900f3654a7412ea71dc2cc58f27bd09",
+          "Cargo.toml": "f9e3ad0ab9ce55a2e08ddac4bc1ff0666ce610850e37e13e3a4bc286c94f0401",
+          "manifest.toml": "cd4bc333fe88f17208fc064b6a40bfcd8b7e54130b124fbc4b52fed873e00884",
+          "src/core.rs": "58e957eb35158f10e937c237af31c971c6f57faed72e4f0031c3b8d6f1ae7500",
+          "src/lib.rs": "f9d6cfca228837c88af0845ffe820481337c34d07f0c2d89ea24acd6e545a949"
+        },
+        "version": "0.1.0",
+        "wasm": "nonce_status.wasm"
+      },
+      "payment-watch": {
+        "digest": "2988389124360405ef64874d8570e90468e7a61736b3942becdb9f62897df884",
+        "files": {
+          "Cargo.lock": "81a3c30e8b6115b8052bead96a259fe9bc14432f19256cb8a42a3ef7fb9c5ffe",
+          "Cargo.toml": "eda3957b344f95794ce4da6e89f81e559f59763779b4b4984d8992965e4b6505",
+          "manifest.toml": "09c3fdf555edeb6ad6ee93407dbced14c0039c7bace326cf2d914b7fefc3bdad",
+          "src/lib.rs": "57f4e4253294a2a628b8a07e6e87e1ade48117d25260fbee5e92baddc1b1aea3",
+          "src/watcher.rs": "bc8d3ab07864eb08368556d1946381165b3a26234936cf4c96f8570ad27c5bc6"
+        },
+        "version": "0.1.0",
+        "wasm": "payment_watch.wasm"
+      },
+      "spl-transfer-build": {
+        "digest": "07b14fffa963d06d26a7a32392fbedbd900de310dd51baa5e87c6978a2696c0b",
+        "files": {
+          "Cargo.lock": "b032b0c6da51f7a4ad33092d802eda02c1fc27aafaae8299a072bcb4065dabe0",
+          "Cargo.toml": "b8931e2bd7b1c61d1b283113c1a50a3c291c02108b24a145ea2d3e12431c3ab0",
+          "manifest.toml": "04c23a52fa98f3abed4cf9b29f3795622f9f9bf0ae2278f7abb89880b77217ad",
+          "src/builder.rs": "6245c2467048cfcb57a69f461507902829c45a54463b773687663c8f11fde8dd",
+          "src/lib.rs": "2fb54257edfdfce2299c54c38a5b54f46df2842258e28216d618e8e21b7cdf0c"
+        },
+        "version": "0.1.0",
+        "wasm": "spl_transfer_build.wasm"
+      }
+    },
+    "toolchain": {
+      "declared_in": ".github/workflows/validate.yml",
+      "rust_toolchain": "1.96.1",
+      "rust_toolchain_toml_present": false
+    },
+    "wit": {
+      "digest": "9d6e1cb2abe7c3a2a04a754bcb1b0914adac96a33b0c8dc0bfdbaa6f6304417e",
+      "files": {
+        "UPSTREAM_REF": "aa0dc76f82c4aa9bd47233c4659fb802e026f4e9d9ddfdf04d06c7be5de23068",
+        "VERSIONING.md": "cb59429413ff62950ba4cb02cb85b11d467f3592a0e75eed2bd78ccff3bb2858",
+        "v0/README.md": "f48c1318a0694e2d4de1419bb17276c92a9b61a323e467db119482a355fcedae",
+        "v0/channel.wit": "29d4c2ae9b21f068306c05b4654218d3006a2f6888eaad1314796c29f0333d05",
+        "v0/inbound.wit": "06b2df1c4d5279b2c7026b8c86a894dfd26a01cb0a8aa22ee8f20f53b8ea6001",
+        "v0/logging.wit": "673151f5d006c38b62748dcc63f23a6a8fff88c87f3e8340b02004d607db348a",
+        "v0/memory.wit": "9b3daa0128423c5b8c617c91fc21c9596f9649840f758b335809cd5aa7e7ede5",
+        "v0/plugin-info.wit": "c303eba97103c918268f9ba3c59ed1970cf14dc1c88d53e65ec0ad8051c77926",
+        "v0/sockets.wit": "5b8a41dd710da58fb0175ddcf31444573b627edc2c4ad58f4d12bc71cd23296a",
+        "v0/tool.wit": "f32783414fb5f423e24b87a3e78c6e8d80e7e4c482f2e4f12a477fdaae931503",
+        "v0/types.wit": "4fcc54329a52451b37ed20e2733dbd988d26bd8806d8179f11f89e6b4e2acc6e",
+        "v0/ws-client.wit": "f19a27fd6a9c66b5e6e7ae8602a1d14df12471305048dc028dbfca03dddd5a10"
+      },
+      "upstream_ref": "e112ce6b5ccdac9e1cb166bab217e730dd7e24c2"
+    }
+  },
+  "recorded_at": {
+    "branch": "solana-payment-suite",
+    "head_commit": "d8c354c75b7f06ace76c7d8f4b37b43b6ce92bae",
+    "last_commit_touching_the_pinned_paths": "d8c354c75b7f06ace76c7d8f4b37b43b6ce92bae",
+    "rustc_on_the_recording_machine": "rustc 1.97.1 (8bab26f4f 2026-07-14)",
+    "utc": "2026-08-03T10:56:13Z"
+  },
+  "schema": "zeroclaw-solana-provenance/1"
+}

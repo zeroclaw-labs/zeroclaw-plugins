@@ -1,0 +1,15 @@
+[package]
+name = "zc-drive-watch"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Demo driver: runs the payment-watch component core on the host against a local fake or a read-only RPC endpoint."
+publish = false
+
+[dependencies]
+serde_json = "1"
+payment-watch = { path = "../../../plugins/payment-watch" }
+
+# Standalone: see drivers/build/Cargo.toml for why each driver is its own
+# workspace.
+[workspace]

@@ -1,0 +1,28 @@
+{
+  "account_keys": [
+    "9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM",
+    "9qiMGGyqX3Ly5QgJ1ReWZ8z48yhqwhJhNkAjjmYtoRYg",
+    "FGETo8T8wMcN2wCjav8VK6eh3dLk63evNDPxzLSJra8B",
+    "2PQcNtSophRAG7ZsHaDT87Zx8MNkCu3GPKsmrR2qthty",
+    "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+    "11111111111111111111111111111111",
+    "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
+    "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL",
+    "MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr",
+    "FPPZ8UK5r9BiNQ7N9DhGumcQkQJE9JXXvkCRvFG4d5X5"
+  ],
+  "header_signers_readonly_signed_readonly_unsigned": [
+    1,
+    0,
+    7
+  ],
+  "instruction_programs": [
+    "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL",
+    "MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr",
+    "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+  ],
+  "recent_blockhash_or_nonce": "DxTuPFELnRePB6o1sJLL5mx5iEEJM67J8nX1KNe2VoXS",
+  "signature_slots": 1,
+  "signatures_all_zero": true,
+  "total_bytes": 485
+}

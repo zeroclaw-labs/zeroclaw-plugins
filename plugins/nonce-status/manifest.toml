@@ -1,0 +1,32 @@
+name = "nonce-status"
+version = "0.1.0"
+description = "Inspect a durable nonce account: current nonce, authority, rent status, and whether spl-transfer-build can use it. Read-only, one RPC call. Holds no keys, moves nothing."
+author = "zkasuran"
+wasm_path = "nonce_status.wasm"
+capabilities = ["tool"]
+# http_client: one JSON-RPC call to the operator-configured Solana RPC
+# endpoint (TLS host-side). config_read: rpc_url and the default
+# nonce_account are read from this plugin's own config section.
+permissions = ["http_client", "config_read"]
+
+# config_read and config_schema are a biconditional: issue #147 makes the host
+# reject a manifest carrying either without the other, and it validates the
+# operator's values against the schema below before the guest ever runs. Values
+# arrive as typed JSON. The closed object plus an explicit properties map is what
+# makes the config_read grant enumerable.
+[config_schema]
+"$schema" = "https://json-schema.org/draft/2020-12/schema"
+type = "object"
+additionalProperties = false
+required = ["rpc_url"]
+
+[config_schema.properties.rpc_url]
+type = "string"
+description = "HTTPS Solana JSON-RPC endpoint every read goes through. Operator-set, never a call argument."
+minLength = 1
+
+# Optional: absent falls back to the read-only `account` argument, and failing
+# that the tool returns the create-a-nonce-account instructions.
+[config_schema.properties.nonce_account]
+type = "string"
+description = "Base58 durable nonce account inspected by default. Absent falls back to the `account` argument."

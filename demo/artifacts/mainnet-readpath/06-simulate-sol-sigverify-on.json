@@ -1,0 +1,44 @@
+{
+  "request": {
+    "id": 1,
+    "jsonrpc": "2.0",
+    "method": "simulateTransaction",
+    "params": [
+      "AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABAAMFfowIh2C/3h3dzzLBfyCbgkLuUqrxMfrNiNDqLG0LBvIUmSkcNWZ2gERQawdBskY0Fv4mWyOg5MI+flmvIRb4fgVKU1qZKSEGTSTocWDaOHx8NbXdvJK7geQfqEBBBUSN1b/lh0fSx0zzkBdpuTmicivN7lkqToVOitb4bJZ5ApAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAGZ53ZkMllMdejG8Dm4dVVFcJ6p/07bVjHEVZbnb5e/2AgIAIHplcm9jbGF3IG1haW5uZXQgc2ltdWxhdGlvbiBvbmx5BAMAAQMMAgAAAICWmAAAAAAA",
+      {
+        "commitment": "confirmed",
+        "encoding": "base64",
+        "sigVerify": true
+      }
+    ]
+  },
+  "response": {
+    "id": 1,
+    "jsonrpc": "2.0",
+    "result": {
+      "context": {
+        "apiVersion": "4.1.0",
+        "slot": 436186948
+      },
+      "value": {
+        "accounts": null,
+        "err": "SignatureFailure",
+        "fee": null,
+        "innerInstructions": null,
+        "loadedAccountsDataSize": 0,
+        "loadedAddresses": {
+          "readonly": [],
+          "writable": []
+        },
+        "logs": [],
+        "postBalances": null,
+        "postTokenBalances": null,
+        "preBalances": null,
+        "preTokenBalances": null,
+        "replacementBlockhash": null,
+        "returnData": null,
+        "unitsConsumed": 0
+      }
+    }
+  }
+}
