@@ -1,0 +1,13 @@
+name = "depin-attest"
+version = "0.1.0"
+description = "Turn a sensor reading from this device into an unsigned, hash-chained Solana memo attestation (base64) for human approval and signing. T1 build-only: no keys held, no transfer expressible; readings outside the operator's configured bounds are refused."
+author = "Rune Lynx"
+wasm_path = "depin_attest.wasm"
+capabilities = ["tool"]
+# http_client: JSON-RPC calls (getSignaturesForAddress, getLatestBlockhash) to
+#   the operator-configured Solana RPC (TLS is performed host-side by wasi:http).
+# config_read: the host injects this plugin's own config section into execute
+#   args as `__config`: device_pubkey (REQUIRED — the attestation identity and
+#   fee payer; never taken from the model), metrics (REQUIRED allowlist,
+#   "name:min:max:unit" comma-separated), rpc_url (optional).
+permissions = ["http_client", "config_read"]
