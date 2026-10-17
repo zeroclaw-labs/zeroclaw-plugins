@@ -1,20 +1,42 @@
 name = "bluesky"
-version = "0.3.0"
+version = "0.4.0"
 description = "Bluesky (AT Protocol) channel plugin for ZeroClaw: notification poll + threaded post replies over wasi:http."
 author = "JordanTheJet"
 wasm_path = "bluesky.wasm"
 capabilities = ["channel"]
-# Withdrawn from the registry until this package is ported to the plugin
-# contract ZeroClaw v0.8.6 ships: it binds wit/unstable, whose
-# configure(config) the v0.8.6 host no longer calls. Its published versions
-# are listed in registry-retirements.json.
-registry = false
-# http_client: outbound XRPC calls to the PDS (bsky.social by default; TLS is
-# performed host-side).
-# config_read: read the handle + app password from this channel's config section.
+# Needs ZeroClaw v0.8.6 or later: it binds the plugin contract first released
+# in v0.8.6 (typed config through config.get, credentials through
+# secrets.get), and reads both when the host configures the instance.
+registry = true
+# http_client: XRPC calls to the PDS: createSession, notification polling and
+#   posting (TLS is performed host-side).
+# config_read: the typed config below through config.get; app_password is
+#   x-secret and reaches the plugin only through secrets.get.
 permissions = ["http_client", "config_read"]
-# provides: mirror the built-in `bluesky` channel — read [channels.bluesky.*]
-# and honor native-wins. Inert on hosts without the `provides` feature (they
-# load this as a novel channel named `bluesky`, configured from
-# [[plugins.entries.bluesky]]).
+# provides: the built-in channel this package can stand in for. Hosts construct
+# this plugin only from an explicit [channels.plugin.<alias>] binding, so it
+# never reads [channels.bluesky.*].
 provides = "bluesky"
+
+# The hosts this plugin contacts. A declaration grants nothing: an operator
+# grants them with `zeroclaw plugin bind bluesky --channel-alias <alias>
+# --egress declared`. bsky.social is the default PDS; grant your own PDS host
+# instead if you set service.
+[egress]
+hosts = ["bsky.social"]
+
+[config_schema]
+"$schema" = "https://json-schema.org/draft/2020-12/schema"
+type = "object"
+required = ["handle", "app_password"]
+additionalProperties = false
+
+[config_schema.properties.handle]
+type = "string"
+minLength = 1
+[config_schema.properties.app_password]
+type = "string"
+x-secret = true
+minLength = 1
+[config_schema.properties.service]
+type = "string"
