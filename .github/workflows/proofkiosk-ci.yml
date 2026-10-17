@@ -1,0 +1,56 @@
+name: proofkiosk-ci
+
+on:
+  push:
+    branches: [feat/proofkiosk]
+    paths:
+      - "crates/kiosk-core/**"
+      - "plugins/kiosk-charge/**"
+      - "plugins/kiosk-watch/**"
+      - "plugins/kiosk-attest/**"
+      - "scripts/verify-no-network.sh"
+      - ".github/workflows/proofkiosk-ci.yml"
+  pull_request:
+    paths:
+      - "crates/kiosk-core/**"
+      - "plugins/kiosk-charge/**"
+      - "plugins/kiosk-watch/**"
+      - "plugins/kiosk-attest/**"
+
+jobs:
+  build-test-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust + wasm32-wasip2
+        run: |
+          rustup toolchain install stable --profile minimal --component clippy,rustfmt
+          rustup target add wasm32-wasip2
+
+      - name: Test (host, no network)
+        run: |
+          for d in crates/kiosk-core plugins/kiosk-charge plugins/kiosk-watch plugins/kiosk-attest; do
+            echo "::group::cargo test $d" && (cd "$d" && cargo test) && echo "::endgroup::"
+          done
+
+      - name: Clippy (-D warnings)
+        run: |
+          for d in crates/kiosk-core plugins/kiosk-charge plugins/kiosk-watch plugins/kiosk-attest; do
+            echo "::group::cargo clippy $d" && (cd "$d" && cargo clippy --all-targets -- -D warnings) && echo "::endgroup::"
+          done
+
+      - name: rustfmt check
+        run: |
+          for d in crates/kiosk-core plugins/kiosk-charge plugins/kiosk-watch plugins/kiosk-attest; do
+            (cd "$d" && cargo fmt --check)
+          done
+
+      - name: Build wasm32-wasip2 (release)
+        run: |
+          for d in plugins/kiosk-charge plugins/kiosk-watch plugins/kiosk-attest; do
+            echo "::group::wasm build $d" && (cd "$d" && cargo build --target wasm32-wasip2 --release) && echo "::endgroup::"
+          done
+
+      - name: Prove kiosk-charge imports no wasi:http
+        run: ./scripts/verify-no-network.sh

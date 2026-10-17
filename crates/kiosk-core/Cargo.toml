@@ -1,0 +1,29 @@
+[package]
+name = "kiosk-core"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Pure, wasm32-wasip2-friendly Solana substrate for the ProofKiosk plugins: base58, shortvec, Solana Pay URLs, output shaping. No solana-sdk, no wasm deps, host-testable."
+publish = false
+
+[lib]
+crate-type = ["rlib"]
+
+[dependencies]
+serde_json = "1"
+# waki is the blocking wasi:http client. It only exists inside a wasm
+# component, so it is optional and pulled in only by the `http` feature, which
+# the plugins enable for their wasm build. Host tests never touch it.
+waki = { version = "0.5.1", optional = true }
+
+[features]
+# Enable the real WakiTransport (production HTTPS). Off by default so the pure
+# core and all host tests compile with zero network dependency.
+http = ["dep:waki"]
+
+# Host-only: property-based and untrusted-input fuzz tests. Never in the wasm build.
+[dev-dependencies]
+proptest = "1"
+
+# Standalone crate: not part of any parent workspace.
+[workspace]

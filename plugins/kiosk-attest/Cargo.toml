@@ -1,0 +1,28 @@
+[package]
+name = "kiosk-attest"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "ZeroClaw WIT tool plugin: build an UNSIGNED, hash-chained, durable-nonce memo attestation transaction for the ProofKiosk. T1. Holds no key; the tx is structurally incapable of moving funds (Memo + System advance-nonce only)."
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+kiosk-core = { path = "../../crates/kiosk-core" }
+wit-bindgen = "0.46"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Real HTTPS transport (waki) only for the wasm target — host tests stay zero-network.
+[target.'cfg(target_family = "wasm")'.dependencies]
+kiosk-core = { path = "../../crates/kiosk-core", features = ["http"] }
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true
+codegen-units = 1
+
+[workspace]

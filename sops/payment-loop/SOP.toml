@@ -1,0 +1,34 @@
+# ProofKiosk — payment loop SOP (EXAMPLE)
+#
+# Cron polls kiosk_watch for a specific charge; the relay pulse fires for EXACTLY
+# one condition: kiosk_watch returned a verified payment. Every other outcome
+# (pending, expired, mismatch, RPC failure) leaves the relay shut.
+#
+# NOTE: the exact result-field path in `when:` (`$.steps.1.success`) is the one
+# open question for maintainers — see the top-level PR. It binds to the boolean
+# `ToolResult.success`, which kiosk-watch sets true ONLY for a verified payment.
+
+name = "proofkiosk-payment-loop"
+description = "Fire the delivery relay only after an on-chain USDC payment is verified."
+
+[trigger]
+type = "cron"
+schedule = "*/10 * * * * *"   # poll every 10s while a charge is outstanding
+
+# 1. Ask the chain whether the expected payment landed.
+[[steps]]
+tool = "kiosk_watch"
+tools = ["kiosk_watch"]          # restrict this step to the watch tool only
+[steps.args]
+reference       = "REFERENCE_FROM_KIOSK_CHARGE"
+expected_amount = "1.5"
+window_s        = 300
+
+# 2. Deliver ONLY if step 1 verified the payment (success == true).
+[[steps]]
+when = "$.steps.1.success == true"
+tool = "relay_pulse"             # GPIO relay tool (hardware,peripheral-rpi)
+tools = ["relay_pulse"]
+requires_confirmation = false    # the on-chain verification IS the confirmation
+[steps.args]
+pin_ms = 400                     # pulse the dispense relay for 400ms
