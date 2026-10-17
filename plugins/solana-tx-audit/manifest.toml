@@ -1,0 +1,9 @@
+name = "solana-tx-audit"
+version = "0.1.0"
+description = "Inspect unsigned Solana transactions before approval: programs, transfers, signers, recipients, authorities, expiry, and simulation."
+author = "ZeroClaw Labs"
+wasm_path = "solana_tx_audit.wasm"
+capabilities = ["tool"]
+# http_client: optional Solana JSON-RPC for simulation, blockhash freshness, and lookup-table resolution.
+# config_read: read administrator policy from this plugin's jailed config section.
+permissions = ["http_client", "config_read"]
