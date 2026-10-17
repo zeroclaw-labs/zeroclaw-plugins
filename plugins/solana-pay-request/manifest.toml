@@ -1,0 +1,8 @@
+name = "solana-pay-request"
+version = "0.1.0"
+description = "Build Solana Pay transfer-request URLs + QR-ready payloads (recipient, amount, SPL mint, memo, reference). Tier 1: zero secrets — the payer's wallet signs."
+author = "nandy-technologies"
+wasm_path = "solana_pay_request.wasm"
+capabilities = ["tool"]
+# Pure URL/payload construction — no network access needed at all.
+permissions = []
