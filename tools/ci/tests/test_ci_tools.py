@@ -98,6 +98,7 @@ class ManifestFieldTests(unittest.TestCase):
     def test_snapshot_admission_uses_the_shared_current_wit_consumers(self) -> None:
         for plugin, registry, withheld in (
             ("matrix", True, {"next"}),
+            ("discord", True, {"next"}),
             ("redact-text", True, {"next", "current"}),
             ("matrix", False, set()),
             ("amqp", False, set()),

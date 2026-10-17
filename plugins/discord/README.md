@@ -8,11 +8,10 @@ from a sandboxed `wasm32-wasip2` component.
 
 ## Host requirement
 
-The plugin binds `wit/next`: the host contract with the `websocket` connection
-resource, typed config, and point-of-use secrets. No released ZeroClaw provides
-it yet (v0.8.5 and earlier do not), so the package keeps `registry = false` and
-is not in `registry.json`. To run it, build ZeroClaw from a commit that contains
-that contract with the Cranelift backend, which compiles `.wasm` components:
+The plugin binds the host contract with the `websocket` connection resource,
+typed config, and point-of-use secrets. ZeroClaw v0.8.6 is the first release
+that carries it; v0.8.5 and earlier do not. The host also needs the Cranelift
+backend, which compiles `.wasm` components. A source build enables it with:
 
 ```bash
 cargo build --release --features plugins-wasm-cranelift

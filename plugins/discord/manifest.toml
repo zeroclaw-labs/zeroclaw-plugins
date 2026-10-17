@@ -4,9 +4,9 @@ description = "Discord channel plugin for ZeroClaw: the Gateway over the host we
 author = "JordanTheJet"
 wasm_path = "discord.wasm"
 capabilities = ["channel"]
-# Host-gated source: binds wit/next, which no released host provides yet. Keep
-# the source in this repo, but do not publish it into registry.json yet.
-registry = false
+# Needs ZeroClaw v0.8.6 or later: it binds the host contract (the websocket
+# resource, typed config, point-of-use secrets) first released in v0.8.6.
+registry = true
 # websocket_client: the Discord Gateway, a persistent WebSocket the host dials
 #   and pumps; the plugin speaks the Gateway protocol over it.
 # http_client: gateway discovery (GET /gateway/bot), replies
