@@ -1,0 +1,11 @@
+name = "token-risk-check"
+version = "0.1.0"
+description = "Red/amber/green safety verdict for a Solana token: mint/freeze authority, Token-2022 extensions, holder concentration"
+author = "greyat-labs"
+wasm_path = "token_risk_check.wasm"
+capabilities = ["tool"]
+# http_client: one read-only JSON-RPC POST to the operator-configured Solana RPC
+#   endpoint (TLS is performed host-side). No writes, no signing.
+# config_read: read this plugin's own `rpc_url` setting. Without it the plugin
+#   falls back to a public mainnet endpoint and still works.
+permissions = ["http_client", "config_read"]

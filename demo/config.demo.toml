@@ -1,0 +1,120 @@
+#           ZeroClaw demo config — token-risk-check + portfolio-brief
+#
+# This is a THROWAWAY config. run-demo.sh points ZEROCLAW_CONFIG_DIR at the
+# directory holding this file, so nothing here touches your real ~/.zeroclaw.
+#
+# The `[[plugins.entries]]` / `[plugins.entries.config]` shape below is exact —
+# it matches the host's own end-to-end test
+# (zeroclaw crates/zeroclaw-plugins/tests/reference_plugin_e2e.rs).
+# Writing `[plugins.entries]` (single brackets) instead makes the WHOLE
+# [plugins] section fail deserialization and silently reset to
+# `enabled = false`, with no warning — upstream issue #8636. Don't retype it
+# from memory on camera.
+
+schema_version = 3
+
+# ── model provider ───────────────────────────────────────────────────────────
+# Shape is `[providers.models.<family>.<alias>]` — NOT `[model]` or `[llm]`.
+# The agent below references this as the dotted pair `gemini.default`.
+#
+# The key is deliberately absent. ZeroClaw does NOT read $GEMINI_API_KEY; its
+# env-override grammar is `ZEROCLAW_` + the dotted config path with `.` -> `__`,
+# so export this in the shell you record from:
+#
+#   export ZEROCLAW_providers__models__gemini__default__api_key="..."
+#
+# Env-injected secrets stay in memory and are never written back to config.toml,
+# which is why this file is safe to keep in git.
+[providers.models.gemini.default]
+model = "gemini-3.6-flash"
+# Verified against this key on 2026-07-28 by calling generateContent directly.
+# Do not trust the ListModels endpoint here: it still advertises
+# `gemini-2.5-flash`, which returns 404 "no longer available to new users" on
+# an actual call. Measured on the free tier that day:
+#   gemini-3.6-flash        200 OK   <- chosen: newest stable flash that answers
+#   gemini-flash-latest     200 OK   (works, but a moving alias — a pinned id
+#                                     keeps this PR reproducible for judges)
+#   gemini-3-flash-preview  200 OK
+#   gemini-3.5-flash        503 high demand
+#   gemini-2.5-pro          429 quota exceeded  <- would have died on camera
+#   gemini-2.0-flash        429 quota exceeded
+# Re-check with the same one-shot curl if a take ever fails at the model call;
+# free-tier availability moves.
+#
+temperature = 0.2
+# Free-tier quota is 20 req/min and metered PER MODEL, so a throttled primary
+# can fall through to a model that still has headroom rather than ending a take.
+#
+# It has to be `fallback` (other ALIASES), not `fallback_models` (other model ids
+# on this alias). The rate-limit cooldown is keyed on `<family>.<alias>`, and
+# every fallback_models entry inherits that same key — so once this alias 429s,
+# all of its fallback_models are skipped with `reason=rate_limit_cooldown` and
+# the fallback never fires. A separate alias has a separate key and does get
+# tried. Verified the hard way on 2026-07-28.
+fallback = ["gemini.spare", "gemini.spare2"]
+
+# Same key, different alias => different cooldown bucket. Fallback aliases do
+# NOT inherit the primary's api_key, so each needs its own; run-demo.sh copies
+# the one key you set into all three so you only ever paste it once.
+# `gemini-flash-latest` is deliberately NOT used here: it resolves to
+# gemini-3.6-flash and shares its quota, making it a useless spare.
+[providers.models.gemini.spare]
+model = "gemini-3-flash-preview"
+temperature = 0.2
+
+[providers.models.gemini.spare2]
+model = "gemini-3.5-flash-lite"
+temperature = 0.2
+
+# ── risk profile ─────────────────────────────────────────────────────────────
+# Mandatory — an enabled agent that names a missing risk_profile fails to start.
+# `supervised` is intentional, not a leftover: plugin tools are not in the
+# builtin auto-approve set, so this is what surfaces the operator approval
+# prompt on camera. That prompt IS the custody story (25% of the score) — do
+# not "fix" this to `full` to make the recording smoother.
+[risk_profiles.default]
+level = "supervised"          # readonly | supervised | full
+workspace_only = true
+# allowed_tools empty = no constraint, so both plugin tools are reachable.
+# allowed_commands stays empty: this demo never needs shell.
+
+# ── the agent that `-a assistant` resolves to ────────────────────────────────
+# There is no default agent in ZeroClaw. Without this table every take in
+# DEMO-SCRIPT.md dies with "is not configured (no [agents.assistant] entry)".
+[agents.assistant]
+enabled = true
+model_provider = "gemini.default"   # mandatory, dotted <family>.<alias>
+risk_profile = "default"            # mandatory for enabled agents
+# channels intentionally omitted — these are CLI-only takes.
+
+[plugins]
+enabled = true
+auto_discover = true
+# run-demo.sh rewrites this line to an absolute path.
+plugins_dir = "PLUGINS_DIR_PLACEHOLDER"
+
+[plugins.security]
+# Locally built components are unsigned. `strict` would refuse to load them.
+signature_mode = "permissive"
+
+[plugins.limits]
+call_fuel = 1000000000
+max_memory_mb = 256
+
+# ── token-risk-check ─────────────────────────────────────────────────────────
+# The host injects this map only because manifest.toml requests `config_read`.
+[[plugins.entries]]
+name = "token-risk-check"
+
+[plugins.entries.config]
+# Bounty trap #5: the public endpoint is rate-limited and WILL flake mid-take.
+# run-demo.sh substitutes $SOLANA_RPC_URL here.
+rpc_url = "RPC_URL_PLACEHOLDER"
+
+# ── portfolio-brief ──────────────────────────────────────────────────────────
+[[plugins.entries]]
+name = "portfolio-brief"
+
+[plugins.entries.config]
+rpc_url = "RPC_URL_PLACEHOLDER"
+price_api_url = "https://lite-api.jup.ag/price/v3"
