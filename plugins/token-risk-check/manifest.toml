@@ -1,0 +1,9 @@
+name = "token-risk-check"
+version = "0.1.0"
+description = "Read-only Solana token risk check: authorities, Token-2022 extensions, holder concentration, and liquidity"
+author = "Guoqiang Liu"
+wasm_path = "token_risk_check.wasm"
+capabilities = ["tool"]
+# http_client: read public Solana RPC and DEX-liquidity endpoints.
+# config_read: read operator-owned endpoints and risk thresholds.
+permissions = ["http_client", "config_read"]
