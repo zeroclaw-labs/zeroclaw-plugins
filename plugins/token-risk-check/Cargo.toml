@@ -1,0 +1,28 @@
+[package]
+name = "token-risk-check"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "ZeroClaw token risk check plugin."
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+wit-bindgen = "0.46"
+bs58 = "0.5"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["raw_value"] }
+url = "2"
+
+[target.'cfg(target_family = "wasm")'.dependencies]
+waki = { version = "0.5.1", features = ["json"] }
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true
+codegen-units = 1
+
+[workspace]

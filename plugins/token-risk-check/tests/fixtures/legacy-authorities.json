@@ -1,0 +1,24 @@
+{
+  "jsonrpc": "2.0",
+  "result": {
+    "context": { "slot": 250000000 },
+    "value": {
+      "owner": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
+      "data": {
+        "parsed": {
+          "info": {
+            "decimals": 6,
+            "freezeAuthority": "So11111111111111111111111111111111111111112",
+            "isInitialized": true,
+            "mintAuthority": "So11111111111111111111111111111111111111112",
+            "supply": "1000000"
+          },
+          "type": "mint"
+        },
+        "program": "spl-token",
+        "space": 82
+      }
+    }
+  },
+  "id": 1
+}

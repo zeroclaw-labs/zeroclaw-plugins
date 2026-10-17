@@ -1,0 +1,46 @@
+{
+  "jsonrpc": "2.0",
+  "result": {
+    "context": { "slot": 250000000 },
+    "value": {
+      "owner": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
+      "data": {
+        "parsed": {
+          "info": {
+            "decimals": 6,
+            "extensions": [
+              {
+                "extension": "permanentDelegate",
+                "state": { "delegate": "So11111111111111111111111111111111111111112" }
+              },
+              {
+                "extension": "transferHook",
+                "state": {
+                  "authority": null,
+                  "programId": "So11111111111111111111111111111111111111112"
+                }
+              },
+              {
+                "extension": "confidentialTransferMint",
+                "state": {
+                  "authority": null,
+                  "autoApproveNewAccounts": true,
+                  "auditorElgamalPubkey": null
+                }
+              },
+              { "extension": "nonTransferable" }
+            ],
+            "freezeAuthority": null,
+            "isInitialized": true,
+            "mintAuthority": null,
+            "supply": "1000000"
+          },
+          "type": "mint"
+        },
+        "program": "spl-token-2022",
+        "space": 235
+      }
+    }
+  },
+  "id": 1
+}
