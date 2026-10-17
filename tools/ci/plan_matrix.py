@@ -18,7 +18,9 @@ from registry_contract import PLUGIN_NAME_RE, current_wit_release_inputs
 DEFAULT_SHARD_SIZE = 8
 DEFAULT_MAX_SHARDS = 4
 FULL_SWEEP_PREFIXES = (".github/", "tools/", "wit/")
-FULL_SWEEP_FILES = {"registry.json"}
+# The retirement ledger changes what packaging may drop, so a ledger change
+# always runs the packaging dry run.
+FULL_SWEEP_FILES = {"registry.json", "registry-retirements.json"}
 DOC_ONLY_PREFIXES = ("docs/",)
 DOC_ONLY_FILES = {"README.md"}
 

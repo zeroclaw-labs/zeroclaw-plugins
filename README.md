@@ -25,6 +25,7 @@ wit/v0/                # vendored ZeroClaw plugin WIT contract (the ABI plugins 
 wit/next/              # the same contract at an unreleased host (pinned by wit/NEXT_REF)
 wit/current/           # Matrix's intended new-host contract (pinned by wit/CURRENT_REF)
 registry.json          # GENERATED index — published by CI, do not hand-edit
+registry-retirements.json  # reviewed list of versions withdrawn from the index
 tools/build-registry.py
 .github/workflows/publish.yml
 ```
@@ -91,6 +92,14 @@ it. Any source, manifest, compiler, or WIT change that changes the package bytes
 requires a new manifest version; new versions are appended so pinned installs
 continue resolving to their original artifact.
 
+A version that no supported host can run can be withdrawn from the index by
+listing it, with its archive digest and a reason, in
+[`registry-retirements.json`](./registry-retirements.json). The next
+publication drops it from `registry.json`; its release asset stays, and the
+version can never be published again: validation keeps the ledger
+append-only. See
+[Retiring a published version](./docs/ci.md#retiring-a-published-version).
+
 ## Add a plugin
 
 Start with the **plugin authoring guide series** in the ZeroClaw book
@@ -126,7 +135,7 @@ and its layout is the required format:
 6. Run the repository validation:
    ```bash
    python3 -m unittest discover -s tools/tests -p 'test_*.py'
-   python3 tools/build-registry.py \
+   python3 tools/build-registry.py --retirements registry-retirements.json \
      --source-plugins plugins --check-metadata registry.json
    ```
 7. Open a PR. PR validation host-tests and builds every component against the

@@ -26,14 +26,31 @@ zip timestamps (zip cannot represent dates before 1980-01-01).
 It can also synchronize or check the checked-in registry metadata against the
 canonical source manifests without rebuilding artifacts.
 
-Usage:
-  build-registry.py --staged <dir> --release-base <url> --out <dir> \
-    --matrix-json <json> [--existing-registry registry.json]
-  build-registry.py --source-plugins plugins --check-metadata registry.json
-  build-registry.py --source-plugins plugins --sync-metadata registry.json
-  build-registry.py --check-history <base-registry.json> <candidate-registry.json>
-  build-registry.py --check-publication <base-registry.json> \
-    <candidate-registry.json> <dist-dir>
+`--retirements registry-retirements.json` names the reviewed retirement
+ledger: published `<name>@<version>` identities withdrawn from the index. Every
+mode honors it. Packaging drops each listed entry from the generated registry,
+the history and publication checks accept exactly those removals, and a listed
+identity can never be indexed again. `--check-history --base-retirements` keeps
+the ledger append-only. Release assets are never deleted.
+
+`--retirements` is required whenever a registry the mode reads has
+`registry-retirements.json` beside it, as the repository's `registry.json`
+does; `--check-history` of such a registry also requires `--base-retirements`
+with the base revision's ledger.
+
+Usage (from the repository root):
+  build-registry.py --retirements registry-retirements.json \
+    --staged <dir> --release-base <url> --out <dir> \
+    --matrix-json <json> --existing-registry registry.json
+  build-registry.py --retirements registry-retirements.json \
+    --source-plugins plugins --check-metadata registry.json
+  build-registry.py --retirements registry-retirements.json \
+    --source-plugins plugins --sync-metadata registry.json
+  build-registry.py --retirements registry-retirements.json \
+    --base-retirements <base-ledger.json> \
+    --check-history <base-registry.json> registry.json
+  build-registry.py --retirements registry-retirements.json \
+    --check-publication registry.json dist/registry.json dist
 """
 import argparse
 import hashlib
@@ -100,6 +117,12 @@ REGISTRY_METADATA_FIELDS = (
     "sender_match",
 )
 REGISTRY_RELEASE_FIELDS = ("url", "sha256")
+# One retirement ledger entry, in this field order. `sha256` binds the
+# retirement to the exact published archive; `reason` is for reviewers.
+RETIREMENT_FIELDS = ("name", "version", "sha256", "reason")
+# The ledger's file name beside registry.json; any run that reads a registry
+# with this file next to it must pass the ledger.
+LEDGER_NAME = "registry-retirements.json"
 ZIP_COMPRESSION_LEVEL = 6
 
 
@@ -349,10 +372,114 @@ def load_registry(path: Path) -> tuple[dict, dict]:
     return registry, by_key
 
 
+def load_retirements(path: Path | None) -> dict:
+    """Load the reviewed retirement ledger, indexed by `(name, version)`.
+
+    A retired identity stays listed so that it can never be indexed again;
+    `--check-history --base-retirements` enforces that the ledger only grows.
+    Without a path there are no retirements.
+    """
+    if path is None:
+        return {}
+    try:
+        text = path.read_text()
+        ledger = json.loads(text)
+    except (OSError, json.JSONDecodeError) as error:
+        raise ValueError(f"cannot read retirement ledger {path}: {error}") from error
+    if (
+        not isinstance(ledger, dict)
+        or set(ledger) != {"retired"}
+        or not isinstance(ledger["retired"], list)
+    ):
+        raise ValueError(f"retirement ledger {path} must contain only a retired array")
+
+    by_key = {}
+    for index, entry in enumerate(ledger["retired"]):
+        if not isinstance(entry, dict) or list(entry) != list(RETIREMENT_FIELDS):
+            raise ValueError(
+                f"retirement {index} must have exactly the fields "
+                f"{list(RETIREMENT_FIELDS)!r}, in that order"
+            )
+        name, version, sha256, reason = (entry[field] for field in RETIREMENT_FIELDS)
+        if not isinstance(name, str) or not PLUGIN_NAME_RE.fullmatch(name):
+            raise ValueError(f"retirement {index} name {name!r} must be a lowercase slug")
+        if not isinstance(version, str) or not PLUGIN_VERSION_RE.fullmatch(version):
+            raise ValueError(
+                f"retirement {index} version {version!r} must be a safe semantic version"
+            )
+        if not isinstance(sha256, str) or not re.fullmatch(r"[0-9a-f]{64}", sha256):
+            raise ValueError(f"retirement {index} must have a lowercase 64-hex sha256")
+        if not isinstance(reason, str) or not reason.strip():
+            raise ValueError(f"retirement {index} must give a non-empty reason")
+        if (name, version) in by_key:
+            raise ValueError(f"retirement ledger {path} repeats {name}@{version}")
+        by_key[(name, version)] = entry
+
+    if ledger["retired"] != sorted(ledger["retired"], key=registry_entry_key):
+        raise ValueError(f"retirement ledger {path} is not in canonical name/version order")
+    if text != json.dumps(ledger, indent=2) + "\n":
+        raise ValueError(f"retirement ledger {path} does not use canonical JSON formatting")
+    return by_key
+
+
+def retirement_failure(entry: dict, retirements: dict) -> str | None:
+    """Explain why a registry entry may not be removed, or return None."""
+    name, version = entry["name"], entry["version"]
+    retirement = retirements.get((name, version))
+    if retirement is None:
+        return f"{name}@{version} is not in the retirement ledger"
+    if retirement["sha256"] != entry["sha256"]:
+        return (
+            f"retirement of {name}@{version} names sha256 {retirement['sha256']}, "
+            f"but the published entry is {entry['sha256']}"
+        )
+    return None
+
+
+def ledger_history_failures(base_ledger: dict, ledger: dict, base_registry: dict) -> list[str]:
+    """Keep the retirement ledger append-only against its base revision.
+
+    A base entry may not disappear or change its identity or digest; only its
+    reason may be reworded. Every entry a change adds must retire a version the
+    base registry indexes, under that version's published digest, so a typo or
+    a never-published identity cannot slip in.
+    """
+    failures = []
+    for (name, version), entry in base_ledger.items():
+        current = ledger.get((name, version))
+        if current is None:
+            failures.append(f"retirement ledger entry was removed: {name}@{version}")
+        elif current["sha256"] != entry["sha256"]:
+            failures.append(
+                f"retirement ledger entry changed its sha256: {name}@{version} "
+                f"({entry['sha256']} -> {current['sha256']})"
+            )
+    for name, version in sorted(ledger.keys() - base_ledger.keys()):
+        published = base_registry.get((name, version))
+        if published is None:
+            failures.append(
+                f"new retirement {name}@{version} is not indexed by the base registry"
+            )
+        elif published["sha256"] != ledger[(name, version)]["sha256"]:
+            failures.append(
+                f"new retirement {name}@{version} names sha256 "
+                f"{ledger[(name, version)]['sha256']}, but the base registry has "
+                f"{published['sha256']}"
+            )
+    return failures
+
+
 def check_registry_history(
-    base_path: Path, candidate_path: Path, source_plugins: Path | None = None
+    base_path: Path,
+    candidate_path: Path,
+    source_plugins: Path | None = None,
+    retirements: dict | None = None,
+    base_retirements: dict | None = None,
 ) -> None:
-    """Preserve release history and allow only canonical metadata refreshes."""
+    """Preserve release history and allow only canonical metadata refreshes
+    and the removals the retirement ledger lists. With the base revision's
+    ledger, also keep the ledger itself append-only."""
+    retirements = retirements or {}
     try:
         _, base_by_key = load_registry(base_path)
         candidate, candidate_by_key = load_registry(candidate_path)
@@ -360,17 +487,41 @@ def check_registry_history(
         sys.exit(f"error: {error}")
 
     failures = []
+    warnings = []
+    if base_retirements is not None:
+        failures.extend(ledger_history_failures(base_retirements, retirements, base_by_key))
     canonical_metadata = {}
     if source_plugins is not None:
-        canonical_metadata, _, source_failures = source_manifest_metadata(source_plugins)
+        canonical_metadata, _, source_failures = source_manifest_metadata(
+            source_plugins, retirements
+        )
         failures.extend(source_failures)
 
     metadata_refreshes = 0
+    retired_removals = 0
     for (name, version), historical in base_by_key.items():
         current = candidate_by_key.get((name, version))
         if current is None:
-            failures.append(f"historical registry entry was deleted: {name}@{version}")
+            reason = retirement_failure(historical, retirements)
+            if reason is None:
+                retired_removals += 1
+            else:
+                failures.append(
+                    f"historical registry entry was deleted: {name}@{version} ({reason})"
+                )
             continue
+        if (name, version) in retirements:
+            # The ledger lands in a source change, but only publication rewrites
+            # registry.json, so a listed entry legitimately remains until the
+            # next publication run. The publication candidate may not keep it.
+            reason = retirement_failure(current, retirements)
+            if reason is None:
+                warnings.append(
+                    f"retired registry entry is still indexed until the next "
+                    f"publication: {name}@{version}"
+                )
+            else:
+                failures.append(reason)
         if any(current[field] != historical[field] for field in REGISTRY_RELEASE_FIELDS):
             failures.append(f"immutable release fields were changed: {name}@{version}")
             continue
@@ -382,9 +533,12 @@ def check_registry_history(
                 metadata_refreshes += 1
 
     for name, version in sorted(candidate_by_key.keys() - base_by_key.keys()):
-        failures.append(
-            f"registry entry was added outside the publication builder: {name}@{version}"
-        )
+        if (name, version) in retirements:
+            failures.append(f"retired registry entry was re-added: {name}@{version}")
+        else:
+            failures.append(
+                f"registry entry was added outside the publication builder: {name}@{version}"
+            )
 
     expected_order = sorted(candidate["plugins"], key=registry_entry_key)
     if candidate["plugins"] != expected_order:
@@ -406,21 +560,29 @@ def check_registry_history(
         if candidate_text != canonical_text:
             failures.append("candidate registry does not use canonical JSON formatting")
 
+    for warning in warnings:
+        print(f"warning: {warning}", file=sys.stderr)
     if failures:
         for failure in failures:
             print(f"error: {failure}", file=sys.stderr)
         sys.exit(1)
 
     print(
-        f"registry preserves {len(base_by_key)} generated release entries "
-        f"with {metadata_refreshes} canonical metadata refresh(es)"
+        f"registry preserves {len(base_by_key) - retired_removals} generated release "
+        f"entries with {metadata_refreshes} canonical metadata refresh(es) and "
+        f"{retired_removals} listed retirement(s)"
     )
 
 
 def check_publication_artifacts(
-    base_path: Path, candidate_path: Path, dist: Path
+    base_path: Path,
+    candidate_path: Path,
+    dist: Path,
+    retirements: dict | None = None,
 ) -> None:
-    """Require dist files to equal the candidate registry's immutable additions."""
+    """Require dist files to equal the candidate registry's immutable additions,
+    and the candidate to drop exactly the entries the retirement ledger lists."""
+    retirements = retirements or {}
     try:
         _, base_by_key = load_registry(base_path)
         candidate, candidate_by_key = load_registry(candidate_path)
@@ -431,13 +593,17 @@ def check_publication_artifacts(
     for key, historical in base_by_key.items():
         current = candidate_by_key.get(key)
         if current is None:
-            failures.append(
-                f"publication candidate deleted {key[0]}@{key[1]}"
-            )
+            reason = retirement_failure(historical, retirements)
+            if reason is not None:
+                failures.append(
+                    f"publication candidate deleted {key[0]}@{key[1]} ({reason})"
+                )
         elif current != historical:
             failures.append(
                 f"publication candidate changed existing {key[0]}@{key[1]}"
             )
+    for name, version in sorted(candidate_by_key.keys() & retirements.keys()):
+        failures.append(f"publication candidate still indexes retired {name}@{version}")
 
     new_keys = candidate_by_key.keys() - base_by_key.keys()
     expected_archives = {
@@ -506,8 +672,15 @@ def check_publication_artifacts(
     )
 
 
-def source_manifest_metadata(source_plugins: Path) -> tuple[dict, set, list]:
-    """Load current canonical source metadata, including registry opt-outs."""
+def source_manifest_metadata(
+    source_plugins: Path, retirements: dict | None = None
+) -> tuple[dict, set, list]:
+    """Load current canonical source metadata, including registry opt-outs.
+
+    A registry-enabled manifest may not name a retired identity: packaging
+    would otherwise index new bytes under a withdrawn `<name>@<version>`.
+    """
+    retirements = retirements or {}
     enabled = {}
     disabled = set()
     failures = []
@@ -535,18 +708,30 @@ def source_manifest_metadata(source_plugins: Path) -> tuple[dict, set, list]:
             continue
         if meta.get("registry") is False:
             disabled.add(key)
+        elif key in retirements:
+            failures.append(
+                f"{pdir.name}: {key[0]}@{key[1]} is retired; "
+                "bump the canonical manifest version before publishing"
+            )
         else:
             enabled[key] = manifest_registry_metadata(meta)
     return enabled, disabled, failures
 
 
-def sync_registry_metadata(source_plugins: Path, registry_path: Path, *, check: bool) -> None:
+def sync_registry_metadata(
+    source_plugins: Path,
+    registry_path: Path,
+    *,
+    check: bool,
+    retirements: dict | None = None,
+) -> None:
     """Synchronize current registry metadata from canonical source manifests."""
+    retirements = retirements or {}
     try:
         registry, actual_by_key = load_registry(registry_path)
     except ValueError as error:
         sys.exit(f"error: {error}")
-    expected, disabled, failures = source_manifest_metadata(source_plugins)
+    expected, disabled, failures = source_manifest_metadata(source_plugins, retirements)
     changed = False
     matched = 0
     pending = []
@@ -577,7 +762,9 @@ def sync_registry_metadata(source_plugins: Path, registry_path: Path, *, check: 
         actual.update(release_fields)
         changed = True
 
-    disabled_present = disabled & actual_by_key.keys()
+    # A listed retirement leaves the index at the next publication, so an
+    # opted-out source at that identity is not a second, hidden copy.
+    disabled_present = (disabled & actual_by_key.keys()) - retirements.keys()
     for key in sorted(disabled_present):
         failures.append(
             f"registry=false plugin is already indexed: {key[0]}@{key[1]}; "
@@ -650,10 +837,57 @@ def main() -> None:
         metavar=("BASE", "CANDIDATE", "DIST"),
         help="verify exact new archive files and digests from BASE to CANDIDATE",
     )
+    ap.add_argument(
+        "--retirements",
+        help="reviewed retirement ledger: listed <name>@<version> entries leave the "
+        "index and can never return",
+    )
+    ap.add_argument(
+        "--base-retirements",
+        help="with --check-history: the base revision's retirement ledger, which "
+        "the candidate ledger may only extend",
+    )
     metadata_mode = ap.add_mutually_exclusive_group()
     metadata_mode.add_argument("--check-metadata", help="fail if registry metadata has drifted")
     metadata_mode.add_argument("--sync-metadata", help="rewrite registry metadata from manifests")
     args = ap.parse_args()
+    if args.base_retirements and not args.check_history:
+        ap.error("--base-retirements is only valid with --check-history")
+
+    # Fail closed: a ledger beside a registry this run reads must be passed, or
+    # retired entries would quietly stay publishable.
+    registry_paths = [
+        *(args.check_publication or [])[:1],
+        *(args.check_history or []),
+        args.check_metadata,
+        args.sync_metadata,
+        args.existing_registry,
+    ]
+    for registry_path in filter(None, registry_paths):
+        sibling = Path(registry_path).resolve().parent / LEDGER_NAME
+        if sibling.is_file() and not args.retirements:
+            ap.error(f"{sibling} exists; pass it with --retirements")
+        if (
+            args.check_history
+            and sibling.is_file()
+            and Path(registry_path) == Path(args.check_history[1])
+            and not args.base_retirements
+        ):
+            ap.error(
+                "--check-history of a registry beside its retirement ledger needs the "
+                "base revision's ledger with --base-retirements"
+            )
+    try:
+        retirements = load_retirements(Path(args.retirements) if args.retirements else None)
+        # The base ledger is held to the head's current schema. A future change
+        # to the ledger format must load the base leniently instead (only name,
+        # version and sha256 matter; the base was validated when it merged), or
+        # the change would fail its own history check.
+        base_retirements = (
+            load_retirements(Path(args.base_retirements)) if args.base_retirements else None
+        )
+    except ValueError as error:
+        sys.exit(f"error: {error}")
 
     if args.check_publication:
         if any(
@@ -671,7 +905,8 @@ def main() -> None:
         ):
             ap.error("--check-publication cannot be combined with other modes")
         check_publication_artifacts(
-            *(Path(path) for path in args.check_publication)
+            *(Path(path) for path in args.check_publication),
+            retirements,
         )
         return
 
@@ -692,6 +927,8 @@ def main() -> None:
         check_registry_history(
             *(Path(path) for path in args.check_history),
             Path(args.source_plugins) if args.source_plugins else None,
+            retirements,
+            base_retirements,
         )
         return
 
@@ -705,6 +942,7 @@ def main() -> None:
             Path(args.source_plugins),
             Path(metadata_registry),
             check=bool(args.check_metadata),
+            retirements=retirements,
         )
         return
     if not args.staged or not args.release_base or not args.out or not args.matrix_json:
@@ -730,13 +968,23 @@ def main() -> None:
 
     entries = []
     existing_by_key = {}
+    failures = []
     if args.existing_registry:
         try:
             existing, existing_by_key = load_registry(Path(args.existing_registry))
         except ValueError as error:
             sys.exit(f"error: {error}")
-        entries.extend(existing["plugins"])
-    failures = []
+        for entry in existing["plugins"]:
+            key = (entry["name"], entry["version"])
+            if key not in retirements:
+                entries.append(entry)
+                continue
+            reason = retirement_failure(entry, retirements)
+            if reason is not None:
+                failures.append(reason)
+                continue
+            del existing_by_key[key]
+            print(f"  retired {key[0]} v{key[1]}  sha256={entry['sha256'][:12]}…")
     seen = set()
     for pdir in sorted(staged.iterdir()):
         if pdir.is_symlink():
@@ -777,6 +1025,13 @@ def main() -> None:
             failures.append(f"{pdir.name}: duplicate entry {name}@{version}")
             continue
         seen.add((name, version))
+
+        if (name, version) in retirements:
+            failures.append(
+                f"{pdir.name}: {name}@{version} is retired and can never be indexed "
+                "again; bump the canonical manifest version before publishing"
+            )
+            continue
 
         existing_entry = existing_by_key.get((name, version))
         if existing_entry is not None:

@@ -308,6 +308,7 @@ class MatrixPlanTests(unittest.TestCase):
             ".github/workflows/validate.yml",
             "tools/ci/summary.py",
             "registry.json",
+            "registry-retirements.json",
             "wit/v0/channel.wit",
         ):
             with self.subTest(changed=changed):
