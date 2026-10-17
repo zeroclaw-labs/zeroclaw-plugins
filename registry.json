@@ -37,6 +37,18 @@
       "sha256": "51d592f7d80a07bc98de2ab79907e17744b3ed3c9ec3648b4995875c5068ad52"
     },
     {
+      "name": "discord",
+      "version": "0.1.0",
+      "description": "Discord channel plugin for ZeroClaw: the Gateway over the host websocket resource, replies over REST through wasi:http.",
+      "author": "JordanTheJet",
+      "capabilities": [
+        "channel"
+      ],
+      "provides": "discord",
+      "url": "https://github.com/zeroclaw-labs/zeroclaw-plugins/releases/download/plugins/discord-0.1.0.zip",
+      "sha256": "1a91a522e41d19f1b7bf93d6b5840efb442e6a93a431294ac203cf53a15a4352"
+    },
+    {
       "name": "gitea",
       "version": "0.1.0",
       "description": "Gitea/Forgejo channel plugin for ZeroClaw: notifications long-poll + issue/PR comment replies over wasi:http.",
