@@ -1,0 +1,7 @@
+name = "wallet-narrate"
+version = "0.1.0"
+description = "Turn a raw Solana transaction into a human-readable sentence: 'Received 250 USDC from X. Swapped 1 SOL for 190 USDC on Jupiter.'"
+author = "ZeroClaw Plugins"
+wasm_path = "wallet_narrate.wasm"
+capabilities = ["tool"]
+permissions = ["http_client", "config_read"]
