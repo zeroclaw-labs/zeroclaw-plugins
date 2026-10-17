@@ -1,0 +1,23 @@
+{
+  "version": "settletrace-devnet-validation-v1",
+  "network": "solana-devnet",
+  "kind": "txline-validation-with-receipt-memo",
+  "transactionSubmitted": true,
+  "stateTransitionSubmitted": false,
+  "fixtureId": 18179550,
+  "scoreSequence": 1315,
+  "proofPayloadHash": "8ceeba688820293be6b6162147eb31f207a81c1306258c5fc6b923c4d70088ca",
+  "receiptHash": "ecf06189d4604dc66198871e12b88dbc4236a5f758a624f13de2a032d23c47e2",
+  "txlineProgramId": "6pW64gN1s2uqjHkn1unFeEjAwJkPGHoppGvS715wyP2J",
+  "dailyScoresPda": "69SexUQvQ9uNpyx6bgDLVoQ5uKkbn3uRxZXCJ5KVZ7QL",
+  "predicate": "stat[1]-stat[2]>0",
+  "statValues": { "1": 3, "2": 2 },
+  "returnProgramId": "6pW64gN1s2uqjHkn1unFeEjAwJkPGHoppGvS715wyP2J",
+  "returnDataBase64": "AQ==",
+  "predicateResult": true,
+  "signature": "2NeFGwjPRQ3sZLjUZ6PsAHCnPjnmsDBzpUoTBPpFV34mMFJadP4HFx33CAvhWU29XbPw2uU6SyGsNGFJ5bsSab8y",
+  "slot": 476311319,
+  "feeLamports": 5000,
+  "explorerUrl": "https://explorer.solana.com/tx/2NeFGwjPRQ3sZLjUZ6PsAHCnPjnmsDBzpUoTBPpFV34mMFJadP4HFx33CAvhWU29XbPw2uU6SyGsNGFJ5bsSab8y?cluster=devnet",
+  "claimBoundary": "Confirmed TxLINE validation transaction and signed receipt-hash memo; no SettleTrace state account, custody, payout, or market state transition."
+}
