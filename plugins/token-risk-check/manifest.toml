@@ -1,0 +1,14 @@
+name = "token-risk-check"
+version = "0.1.0"
+description = "Report who else has power over a Solana token: freeze/mint authorities, Token-2022 permanent delegates, transfer hooks and fees, holder concentration"
+author = "OxToF"
+wasm_path = "token_risk_check.wasm"
+capabilities = ["tool"]
+# http_client: JSON-RPC to the operator's Solana endpoint. Nothing else is
+# contacted; TLS is performed host-side.
+# config_read: the RPC URL (which carries the operator's API key), the trusted
+# mint allowlist, and the thresholds. Every value that decides a verdict lives
+# in config, out of the model's reach.
+#
+# No key material of any kind. This plugin cannot sign and cannot spend.
+permissions = ["http_client", "config_read"]
