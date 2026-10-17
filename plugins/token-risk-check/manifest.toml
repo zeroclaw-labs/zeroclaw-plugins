@@ -1,0 +1,9 @@
+name = "token-risk-check"
+version = "0.1.0"
+description = "Assess Solana mint risk (authorities, holder concentration signals, Token-2022 extensions). Custody tier T0 — read-only, no keys."
+author = "Muhammad / Superteam Earn submission"
+wasm_path = "token_risk_check.wasm"
+capabilities = ["tool"]
+# http_client: Solana JSON-RPC + optional DAS over host wasi:http
+# config_read: jailed section for rpc_url / das_url / commitment
+permissions = ["http_client", "config_read"]

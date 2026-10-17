@@ -1,0 +1,30 @@
+[package]
+name = "token-risk-check"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "ZeroClaw WIT plugin (T0): assess Solana mint risk — authorities, concentration, Token-2022 extensions. Fail-closed, no custody."
+publish = false
+
+# cdylib for the wasm component; rlib so the pure core is host-testable.
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+wit-bindgen = "0.46"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+bs58 = "0.5"
+
+# wasi:http client — wasm component only; host tests mock transport.
+[target.'cfg(target_family = "wasm")'.dependencies]
+waki = { version = "0.5.1", features = ["json"] }
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true
+codegen-units = 1
+
+# Standalone crate: built for wasm32-wasip2, not part of the host workspace.
+[workspace]
