@@ -1,0 +1,14 @@
+name = "token-risk-check"
+version = "0.1.0"
+description = "Red/amber/green risk verdict for a Solana mint: authorities, holder concentration, dangerous Token-2022 extensions"
+author = "Lateef"
+wasm_path = "token_risk_check.wasm"
+capabilities = ["tool"]
+# http_client: read-only JSON-RPC calls to a Solana RPC endpoint (getAccountInfo,
+# getTokenLargestAccounts) and a best-effort Jupiter quote lookup for LP
+# liquidity. No wallet, no signing, no write capability of any kind exists in
+# this plugin (T0 — read only).
+# config_read: lets an operator override the default public RPC endpoint with
+# their own (recommended — public RPCs rate-limit aggressively). Without this
+# permission the plugin still runs against the public default.
+permissions = ["http_client", "config_read"]
