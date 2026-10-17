@@ -1,19 +1,48 @@
 name = "twitter"
-version = "0.3.0"
+version = "0.4.0"
 description = "X/Twitter channel plugin for ZeroClaw: mentions polling + reply tweets over wasi:http."
 author = "JordanTheJet"
 wasm_path = "twitter.wasm"
 capabilities = ["channel"]
-# Withdrawn from the registry until this package is ported to the plugin
-# contract ZeroClaw v0.8.6 ships: it binds wit/unstable, whose
-# configure(config) the v0.8.6 host no longer calls. Its published versions
-# are listed in registry-retirements.json.
-registry = false
-# http_client: outbound calls to api.x.com (TLS is performed host-side).
-# config_read: read the bearer token + settings from this channel's config section.
+# Needs ZeroClaw v0.8.6 or later: it binds the plugin contract first released
+# in v0.8.6 (typed config through config.get, credentials through
+# secrets.get), and reads both when the host configures the instance.
+registry = true
+# http_client: mentions polling and reply posts against the X API v2 (TLS is
+#   performed host-side).
+# config_read: the typed config below through config.get; bearer_token is
+#   x-secret and reaches the plugin only through secrets.get.
 permissions = ["http_client", "config_read"]
-# provides: mirror the built-in `twitter` channel — read [channels.twitter.*]
-# and honor native-wins. Inert on hosts without the `provides` feature (they
-# load this as a novel channel named `twitter`, configured from
-# [[plugins.entries.twitter]]).
+# provides: the built-in channel this package can stand in for. Hosts construct
+# this plugin only from an explicit [channels.plugin.<alias>] binding, so it
+# never reads [channels.twitter.*].
 provides = "twitter"
+
+# The hosts this plugin contacts. A declaration grants nothing: an operator
+# grants them with `zeroclaw plugin bind twitter --channel-alias <alias>
+# --egress declared`. api.x.com serves the X API v2.
+[egress]
+hosts = ["api.x.com"]
+
+[config_schema]
+"$schema" = "https://json-schema.org/draft/2020-12/schema"
+type = "object"
+required = ["bearer_token"]
+additionalProperties = false
+
+[config_schema.properties.bearer_token]
+type = "string"
+x-secret = true
+minLength = 1
+[config_schema.properties.enabled]
+type = "boolean"
+[config_schema.properties.api_base_url]
+type = "string"
+[config_schema.properties.allowed_users]
+type = "array"
+[config_schema.properties.allowed_users.items]
+type = "string"
+[config_schema.properties.excluded_tools]
+type = "array"
+[config_schema.properties.excluded_tools.items]
+type = "string"
