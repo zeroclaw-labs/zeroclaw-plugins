@@ -1,10 +1,25 @@
 # Matrix text-only channel plugin
 
-Matrix 0.3.0 is an opt-in current-host compatibility candidate. It binds the experimental `wit/current` contract with `plugins-wit-v0` and is excluded from registry publication by `registry = false`. Build it with the host revision pinned in `wit/CURRENT_REF`; this unfrozen interface does not promise compatibility with released hosts. Published Matrix 0.1.0 and 0.2.0 packages remain unchanged.
+Matrix 0.3.0 binds `wit/v0`, the plugin contract first released in ZeroClaw v0.8.6, with `plugins-wit-v0`. It needs ZeroClaw v0.8.6 or later; earlier hosts refuse it. Matrix 0.1.0 and 0.2.0 do not install on v0.8.6 and are withdrawn from the registry through `registry-retirements.json`; their release assets remain.
 
-Registry publication requires a matching plugin-capable host release and install, alias-binding and real-host Matrix checks against its downloaded artifact. The current pin is preparation evidence, not a released-host guarantee. Matrix is the only guest admitted to publish against this contract; the shared CI policy preserves unrelated package identities and requires a new Matrix version after any subsequently published contract changes.
+The interface is still experimental and unfrozen: a later contract change in `wit/v0` requires a new Matrix version, and published versions are never rebuilt.
 
 Use an explicit `channels.plugin.<alias>` instance with this package and the host's supported plugin configuration surface. `provides = "matrix"` describes the channel; it does not activate a native mirror or read `channels.matrix.*`. Retain native Matrix for encrypted rooms, recovery, password login, media and durable sessions.
+
+## Install and bind an instance
+
+The plugin runs only as a named channel instance, `plugin.<alias>`. The homeserver is your own, so the manifest declares no destinations: grant its host after binding. For an instance named `main`, whose config entry key is `zpi1_WyJtYXRyaXgiLCJjaGFubmVsIiwibWFpbiJd`:
+
+```bash
+zeroclaw plugin install matrix --channel-alias main
+zeroclaw config set --no-interactive plugins.entries.zpi1_WyJtYXRyaXgiLCJjaGFubmVsIiwibWFpbiJd.egress_hosts 'matrix.example.org'
+# The secret prompts without echo; it is never passed on the command line.
+zeroclaw config set plugins.entries.zpi1_WyJtYXRyaXgiLCJjaGFubmVsIiwibWFpbiJd.config.access_token
+zeroclaw config set --no-interactive plugins.entries.zpi1_WyJtYXRyaXgiLCJjaGFubmVsIiwibWFpbiJd.config.homeserver https://matrix.example.org
+zeroclaw config set plugins.enabled true
+```
+
+Route `plugin.main` to an agent and admit senders by exact Matrix user ID in a peer group bound to `plugin.main`, then restart the daemon. `zeroclaw plugin info matrix` repeats the install-time load check and lists any configuration still missing.
 
 ## Configuration
 

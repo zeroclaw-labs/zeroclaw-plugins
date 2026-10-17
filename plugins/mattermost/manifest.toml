@@ -4,6 +4,11 @@ description = "Mattermost channel plugin for ZeroClaw: v4 REST channel-post poll
 author = "JordanTheJet"
 wasm_path = "mattermost.wasm"
 capabilities = ["channel"]
+# Withdrawn from the registry until this package is ported to the plugin
+# contract ZeroClaw v0.8.6 ships: it binds wit/unstable, whose
+# configure(config) the v0.8.6 host no longer calls. Its published versions
+# are listed in registry-retirements.json.
+registry = false
 # http_client: outbound calls to the Mattermost server (TLS is performed host-side).
 # config_read: read the server URL + bot token + channel from this channel's config section.
 permissions = ["http_client", "config_read"]

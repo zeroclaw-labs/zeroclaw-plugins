@@ -4,6 +4,11 @@ description = "Reddit channel plugin for ZeroClaw: message/unread long-poll + co
 author = "JordanTheJet"
 wasm_path = "reddit.wasm"
 capabilities = ["channel"]
+# Withdrawn from the registry until this package is ported to the plugin
+# contract ZeroClaw v0.8.6 ships: it binds wit/unstable, whose
+# configure(config) the v0.8.6 host no longer calls. Its published versions
+# are listed in registry-retirements.json.
+registry = false
 # http_client: outbound calls to oauth.reddit.com + www.reddit.com (TLS host-side).
 # config_read: read the OAuth2 credentials + settings from this channel's config.
 permissions = ["http_client", "config_read"]

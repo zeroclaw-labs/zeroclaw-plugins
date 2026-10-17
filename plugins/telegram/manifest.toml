@@ -4,6 +4,11 @@ description = "Telegram channel plugin for ZeroClaw: getUpdates long-poll + send
 author = "JordanTheJet"
 wasm_path = "telegram.wasm"
 capabilities = ["channel"]
+# Withdrawn from the registry until this package is ported to the plugin
+# contract ZeroClaw v0.8.6 ships: it binds wit/unstable, whose
+# configure(config) the v0.8.6 host no longer calls. Its published versions
+# are listed in registry-retirements.json.
+registry = false
 sender_match = "handle"
 # http_client: outbound calls to api.telegram.org (TLS is performed host-side).
 # config_read: read the bot token + settings from this channel's config section.

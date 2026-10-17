@@ -14,6 +14,7 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(CI_ROOT))
 
 import manifest_field  # noqa: E402
+import registry_contract  # noqa: E402
 import plan_matrix  # noqa: E402
 import report_schema  # noqa: E402
 import summary  # noqa: E402
@@ -95,10 +96,33 @@ class ReportSchemaTests(unittest.TestCase):
 
 
 class ManifestFieldTests(unittest.TestCase):
+    def test_no_current_wit_directory_means_no_current_wit_consumers(self) -> None:
+        if not (REPOSITORY_ROOT / registry_contract.CURRENT_WIT_DIRECTORY).exists():
+            self.assertEqual(registry_contract.CURRENT_WIT_CONSUMERS, frozenset())
+
+    def test_snapshot_admission_retains_current_wit_only_for_consumers(self) -> None:
+        def snapshot(plugin: str, registry: bool) -> set[str]:
+            with tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                manifest = root / "manifest.toml"
+                manifest.write_text(f'name = "{plugin}"\nregistry = {str(registry).lower()}\n')
+                wit = root / "wit"
+                for directory in ("v0", "unstable", "next", "current"):
+                    (wit / directory).mkdir(parents=True)
+                manifest_field.prepare_wit_snapshot(manifest, wit, plugin)
+                return {path.name for path in wit.iterdir()}
+
+        everything = {"v0", "unstable", "next", "current"}
+        with mock.patch.object(registry_contract, "CURRENT_WIT_CONSUMERS", frozenset({"matrix"})):
+            self.assertEqual(snapshot("matrix", True), everything - {"next"})
+            self.assertEqual(snapshot("redact-text", True), everything - {"next", "current"})
+            self.assertEqual(snapshot("matrix", False), everything)
+
     def test_snapshot_admission_uses_the_shared_current_wit_consumers(self) -> None:
+        # The checked-in policy, through the CLI the validator calls.
         for plugin, registry, withheld in (
-            ("matrix", True, {"next"}),
-            ("discord", True, {"next"}),
+            ("matrix", True, {"next", "current"}),
+            ("discord", True, {"next", "current"}),
             ("redact-text", True, {"next", "current"}),
             ("matrix", False, set()),
             ("amqp", False, set()),
@@ -287,6 +311,9 @@ class MatrixPlanTests(unittest.TestCase):
         temp, root = self.make_repository(2)
         self.addCleanup(temp.cleanup)
         (root / "plugins" / "matrix").mkdir()
+        consumers = mock.patch.object(registry_contract, "CURRENT_WIT_CONSUMERS", frozenset({"matrix"}))
+        consumers.start()
+        self.addCleanup(consumers.stop)
         for changed in ("wit/current/channel.wit", "wit/current/README.md", "wit/CURRENT_REF", "tools/registry_contract.py"):
             with self.subTest(changed=changed):
                 with mock.patch.object(plan_matrix, "git_changed_paths", return_value=[changed]):

@@ -4,7 +4,7 @@ description = "Matrix channel plugin for ZeroClaw: Client-Server sync + text sen
 author = "JordanTheJet"
 wasm_path = "matrix.wasm"
 capabilities = ["channel"]
-registry = false
+# Binds the plugin contract first released in ZeroClaw v0.8.6.
 sender_match = "exact"
 # http_client: Matrix Client-Server API sync, whoami, room alias resolution,
 # and text sends. TLS is performed host-side.

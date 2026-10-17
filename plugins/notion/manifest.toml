@@ -4,6 +4,11 @@ description = "Notion task-queue channel plugin for ZeroClaw: poll a database fo
 author = "JordanTheJet"
 wasm_path = "notion.wasm"
 capabilities = ["channel"]
+# Withdrawn from the registry until this package is ported to the plugin
+# contract ZeroClaw v0.8.6 ships: it binds wit/unstable, whose
+# configure(config) the v0.8.6 host no longer calls. Its published versions
+# are listed in registry-retirements.json.
+registry = false
 # http_client: outbound calls to api.notion.com (TLS is performed host-side).
 # config_read: read the integration token + database id + property names from
 # this channel's config section.

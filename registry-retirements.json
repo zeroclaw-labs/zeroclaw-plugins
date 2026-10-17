@@ -1,3 +1,196 @@
 {
-  "retired": []
+  "retired": [
+    {
+      "name": "bluesky",
+      "version": "0.1.0",
+      "sha256": "695af4954c2577391af02f822569744fb1906bd3a8db05125684763c5e2a9e52",
+      "reason": "Does not install on ZeroClaw v0.8.6: the manifest requests config_read without a config_schema, and the component exports the configure(config) channel function that v0.8.6 replaced with typed config."
+    },
+    {
+      "name": "bluesky",
+      "version": "0.2.0",
+      "sha256": "bf4f3c15abefcac93a79232ad0a76f1ddf0bfe6def136776a8ed667311cabc0e",
+      "reason": "Does not install on ZeroClaw v0.8.6: the manifest requests config_read without a config_schema, and the component exports the configure(config) channel function that v0.8.6 replaced with typed config."
+    },
+    {
+      "name": "bluesky",
+      "version": "0.3.0",
+      "sha256": "51d592f7d80a07bc98de2ab79907e17744b3ed3c9ec3648b4995875c5068ad52",
+      "reason": "Does not install on ZeroClaw v0.8.6: the manifest requests config_read without a config_schema, and the component exports the configure(config) channel function that v0.8.6 replaced with typed config."
+    },
+    {
+      "name": "gitea",
+      "version": "0.1.0",
+      "sha256": "4ae5e9439d987269b596ea9d5aac313e5ac9e7cabcfe36bffd2f9d9673db7664",
+      "reason": "Does not install on ZeroClaw v0.8.6: the manifest requests config_read without a config_schema, and the component exports the configure(config) channel function that v0.8.6 replaced with typed config."
+    },
+    {
+      "name": "gitea",
+      "version": "0.2.0",
+      "sha256": "552b105a02020821eb234d4ef3ff5c93c8d98526a6e7d5ee510296d2b5323712",
+      "reason": "Does not install on ZeroClaw v0.8.6: the manifest requests config_read without a config_schema, and the component exports the configure(config) channel function that v0.8.6 replaced with typed config."
+    },
+    {
+      "name": "matrix",
+      "version": "0.1.0",
+      "sha256": "b9c535d250fd17c4b117b5151cb2a800ee165fed49c0c44e27ec56b0d9cf6ec6",
+      "reason": "Does not install on ZeroClaw v0.8.6: the manifest requests config_read without a config_schema, and the component exports the configure(config) channel function that v0.8.6 replaced with typed config."
+    },
+    {
+      "name": "matrix",
+      "version": "0.2.0",
+      "sha256": "b10fc1f0931e967d25e09a1b7ebcb3c3a2f68225eac980b974a7f054ef4a4ee0",
+      "reason": "Does not install on ZeroClaw v0.8.6: the manifest requests config_read without a config_schema, and the component exports the configure(config) channel function that v0.8.6 replaced with typed config."
+    },
+    {
+      "name": "mattermost",
+      "version": "0.1.0",
+      "sha256": "df6d8ca21f8a4a93bc8e18fef441b5886beb39e2688f850e1ccfaf431ac7b85c",
+      "reason": "Does not install on ZeroClaw v0.8.6: the manifest requests config_read without a config_schema, and the component exports the configure(config) channel function that v0.8.6 replaced with typed config."
+    },
+    {
+      "name": "mattermost",
+      "version": "0.2.0",
+      "sha256": "7123074500b727667531d77e805fd543e0ad4b8790f9c5893459046b2604374d",
+      "reason": "Does not install on ZeroClaw v0.8.6: the manifest requests config_read without a config_schema, and the component exports the configure(config) channel function that v0.8.6 replaced with typed config."
+    },
+    {
+      "name": "mattermost",
+      "version": "0.3.0",
+      "sha256": "980978349aaa980a063ceff050b8b6f127625aec400ac61012ecc51663b37eaf",
+      "reason": "Does not install on ZeroClaw v0.8.6: the manifest requests config_read without a config_schema, and the component exports the configure(config) channel function that v0.8.6 replaced with typed config."
+    },
+    {
+      "name": "mochat",
+      "version": "0.1.0",
+      "sha256": "d7ba5f552a304a88a8a27887b6f306171192c516fc53e2b37a8d422d25ff950d",
+      "reason": "Does not install on ZeroClaw v0.8.6: the manifest requests config_read without a config_schema, and the component exports the configure(config) channel function that v0.8.6 replaced with typed config."
+    },
+    {
+      "name": "mochat",
+      "version": "0.2.0",
+      "sha256": "746efaab59ae18646a11c9c6e850cdcd6ffe5cac5666d1491690da4d4cd48450",
+      "reason": "Does not install on ZeroClaw v0.8.6: the manifest requests config_read without a config_schema, and the component exports the configure(config) channel function that v0.8.6 replaced with typed config."
+    },
+    {
+      "name": "mochat",
+      "version": "0.3.0",
+      "sha256": "3ebde8c09059d135131679400fe4dafe11d936f6aca3bbc8ec0afe2f0600fd87",
+      "reason": "Does not install on ZeroClaw v0.8.6: the manifest requests config_read without a config_schema, and the component exports the configure(config) channel function that v0.8.6 replaced with typed config."
+    },
+    {
+      "name": "notion",
+      "version": "0.1.0",
+      "sha256": "14241ec074af63c093d9216657940b954eb99d105efbda68ec9078b7f8b7ee8d",
+      "reason": "Does not install on ZeroClaw v0.8.6: the manifest requests config_read without a config_schema, and the component exports the configure(config) channel function that v0.8.6 replaced with typed config."
+    },
+    {
+      "name": "notion",
+      "version": "0.2.0",
+      "sha256": "68c78395554d21eb246d7d8e537ee39da39d624191b315bb8dc47e32117383a6",
+      "reason": "Does not install on ZeroClaw v0.8.6: the manifest requests config_read without a config_schema, and the component exports the configure(config) channel function that v0.8.6 replaced with typed config."
+    },
+    {
+      "name": "notion",
+      "version": "0.3.0",
+      "sha256": "457d82c3a7087d4a32de9b705af68d88189c78e00132fe3bd7b372052ca374d4",
+      "reason": "Does not install on ZeroClaw v0.8.6: the manifest requests config_read without a config_schema, and the component exports the configure(config) channel function that v0.8.6 replaced with typed config."
+    },
+    {
+      "name": "redact-text",
+      "version": "0.1.0",
+      "sha256": "d315647652eb7c18bf00034822c271e0612c8edebb056eb58d1b7327f360aa68",
+      "reason": "Does not install on ZeroClaw v0.8.6: the manifest requests config_read without a config_schema, and the component's logging import predates the host's current log-record actions."
+    },
+    {
+      "name": "redact-text",
+      "version": "0.2.0",
+      "sha256": "65176a6eeb33cea3336ac2ad86d482f64fe3685ead5a5187be1d864e27e5e3ec",
+      "reason": "Does not install on ZeroClaw v0.8.6: the manifest requests config_read without a config_schema, and the component's logging import predates the host's current log-record actions."
+    },
+    {
+      "name": "reddit",
+      "version": "0.1.0",
+      "sha256": "a6964c868299a20e0337aac597ddf502a93ed53cb83aee6a3aaca4ef9edc06a1",
+      "reason": "Does not install on ZeroClaw v0.8.6: the manifest requests config_read without a config_schema, and the component exports the configure(config) channel function that v0.8.6 replaced with typed config."
+    },
+    {
+      "name": "reddit",
+      "version": "0.2.0",
+      "sha256": "331ff0a21e5692f27022c713b900d6923a4fce37b55ef0331d6c32b552e3b4eb",
+      "reason": "Does not install on ZeroClaw v0.8.6: the manifest requests config_read without a config_schema, and the component exports the configure(config) channel function that v0.8.6 replaced with typed config."
+    },
+    {
+      "name": "reddit",
+      "version": "0.3.0",
+      "sha256": "d720cbaa6a0f5d8acf20576098c0e18752c30e754017b16a0f035a19f9ff3b92",
+      "reason": "Does not install on ZeroClaw v0.8.6: the manifest requests config_read without a config_schema, and the component exports the configure(config) channel function that v0.8.6 replaced with typed config."
+    },
+    {
+      "name": "telegram",
+      "version": "0.1.0",
+      "sha256": "67e3e13ce7f21950da87d1432cb69cfa0867d65fa0c917e336243a968db9dbf0",
+      "reason": "Does not install on ZeroClaw v0.8.6: the manifest requests config_read without a config_schema, and the component exports the configure(config) channel function that v0.8.6 replaced with typed config."
+    },
+    {
+      "name": "telegram",
+      "version": "0.2.0",
+      "sha256": "953ed3c24ad0c9f374635f95f91ae43821bd1e7026ed4983b1856eed8c626432",
+      "reason": "Does not install on ZeroClaw v0.8.6: the manifest requests config_read without a config_schema, and the component exports the configure(config) channel function that v0.8.6 replaced with typed config."
+    },
+    {
+      "name": "telegram",
+      "version": "0.3.0",
+      "sha256": "1c1aa57c58ec80f843d4e23411bfa6ca517b1cfa89190f391ed26ee864a7083f",
+      "reason": "Does not install on ZeroClaw v0.8.6: the manifest requests config_read without a config_schema, and the component exports the configure(config) channel function that v0.8.6 replaced with typed config."
+    },
+    {
+      "name": "twitter",
+      "version": "0.1.0",
+      "sha256": "d8a4a795da05f557e17eeb378b98906b0112d5fc59f8a078c4290f42c95b8e1c",
+      "reason": "Does not install on ZeroClaw v0.8.6: the manifest requests config_read without a config_schema, and the component exports the configure(config) channel function that v0.8.6 replaced with typed config."
+    },
+    {
+      "name": "twitter",
+      "version": "0.2.0",
+      "sha256": "cfbc311e6509583a7fe93e67a5c6db1bc15374e121f5b78a54855e53b889b7d7",
+      "reason": "Does not install on ZeroClaw v0.8.6: the manifest requests config_read without a config_schema, and the component exports the configure(config) channel function that v0.8.6 replaced with typed config."
+    },
+    {
+      "name": "twitter",
+      "version": "0.3.0",
+      "sha256": "bc3347a2cef65e8bee22e99e7bde8ab7110fb6a48d1586435d4fe893f8fad8f3",
+      "reason": "Does not install on ZeroClaw v0.8.6: the manifest requests config_read without a config_schema, and the component exports the configure(config) channel function that v0.8.6 replaced with typed config."
+    },
+    {
+      "name": "wechat",
+      "version": "0.1.0",
+      "sha256": "a85ae6f57d50f67fb668671a1fdc7580334c66f6204d874a854a5c1133a15fdc",
+      "reason": "Does not install on ZeroClaw v0.8.6: the manifest requests config_read without a config_schema, and the component exports the configure(config) channel function that v0.8.6 replaced with typed config."
+    },
+    {
+      "name": "wechat",
+      "version": "0.2.0",
+      "sha256": "4e213f2b6d769077ce754efc67482d399ef5788f378219dab0dd8f656227c4fd",
+      "reason": "Does not install on ZeroClaw v0.8.6: the manifest requests config_read without a config_schema, and the component exports the configure(config) channel function that v0.8.6 replaced with typed config."
+    },
+    {
+      "name": "wechat",
+      "version": "0.3.0",
+      "sha256": "12dd33fbf966750558684e7f016c46c00958edbdfcf5ef5ca106693ee334ed9d",
+      "reason": "Does not install on ZeroClaw v0.8.6: the manifest requests config_read without a config_schema, and the component exports the configure(config) channel function that v0.8.6 replaced with typed config."
+    },
+    {
+      "name": "wecom",
+      "version": "0.1.0",
+      "sha256": "154f669e9d3689ffb31c1ac97ac21a39dd35fb2f9651ab4653c3829d1656ab53",
+      "reason": "Does not install on ZeroClaw v0.8.6: the manifest requests config_read without a config_schema, and the component exports the configure(config) channel function that v0.8.6 replaced with typed config."
+    },
+    {
+      "name": "wecom",
+      "version": "0.2.0",
+      "sha256": "6fb3132b556d44cd325779ed5c1e11b3878eb045d65a83de6b42a038963a9338",
+      "reason": "Does not install on ZeroClaw v0.8.6: the manifest requests config_read without a config_schema, and the component exports the configure(config) channel function that v0.8.6 replaced with typed config."
+    }
+  ]
 }

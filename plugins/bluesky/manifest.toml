@@ -4,6 +4,11 @@ description = "Bluesky (AT Protocol) channel plugin for ZeroClaw: notification p
 author = "JordanTheJet"
 wasm_path = "bluesky.wasm"
 capabilities = ["channel"]
+# Withdrawn from the registry until this package is ported to the plugin
+# contract ZeroClaw v0.8.6 ships: it binds wit/unstable, whose
+# configure(config) the v0.8.6 host no longer calls. Its published versions
+# are listed in registry-retirements.json.
+registry = false
 # http_client: outbound XRPC calls to the PDS (bsky.social by default; TLS is
 # performed host-side).
 # config_read: read the handle + app password from this channel's config section.

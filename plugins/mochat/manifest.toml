@@ -4,6 +4,11 @@ description = "Mochat customer-service channel plugin for ZeroClaw: message-rece
 author = "JordanTheJet"
 wasm_path = "mochat.wasm"
 capabilities = ["channel"]
+# Withdrawn from the registry until this package is ported to the plugin
+# contract ZeroClaw v0.8.6 ships: it binds wit/unstable, whose
+# configure(config) the v0.8.6 host no longer calls. Its published versions
+# are listed in registry-retirements.json.
+registry = false
 # http_client: outbound calls to the self-hosted Mochat server (TLS is performed
 # host-side).
 # config_read: read the api_url + api_token + settings from this channel's config

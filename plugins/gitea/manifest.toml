@@ -4,6 +4,11 @@ description = "Gitea/Forgejo channel plugin for ZeroClaw: notifications long-pol
 author = "JordanTheJet"
 wasm_path = "gitea.wasm"
 capabilities = ["channel"]
+# Withdrawn from the registry until this package is ported to the plugin
+# contract ZeroClaw v0.8.6 ships: it binds wit/unstable, whose
+# configure(config) the v0.8.6 host no longer calls. Its published versions
+# are listed in registry-retirements.json.
+registry = false
 sender_match = "case_insensitive"
 # http_client: outbound REST calls to the configured Gitea/Forgejo instance
 # (TLS is performed host-side).

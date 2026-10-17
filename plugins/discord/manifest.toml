@@ -1,5 +1,5 @@
 name = "discord"
-version = "0.1.0"
+version = "0.1.1"
 description = "Discord channel plugin for ZeroClaw: the Gateway over the host websocket resource, replies over REST through wasi:http."
 author = "JordanTheJet"
 wasm_path = "discord.wasm"

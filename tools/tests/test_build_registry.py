@@ -14,6 +14,7 @@ BUILD_REGISTRY = REPOSITORY_ROOT / "tools" / "build-registry.py"
 RELEASE_BASE = "https://example.invalid/releases/download/plugins"
 sys.path.insert(0, str(REPOSITORY_ROOT / "tools"))
 
+import registry_contract  # noqa: E402
 from registry_contract import PLUGIN_VERSION_RE  # noqa: E402
 sys.path.insert(0, str(REPOSITORY_ROOT / "tools" / "ci"))
 import plan_matrix  # noqa: E402
@@ -236,7 +237,8 @@ class BuildRegistryTests(unittest.TestCase):
         repository = self.root / "repository"
         for name in ("bridge", "matrix"):
             (repository / "plugins" / name).mkdir(parents=True)
-        with mock.patch.object(plan_matrix, "git_changed_paths", return_value=["wit/CURRENT_REF"]):
+        with mock.patch.object(plan_matrix, "git_changed_paths", return_value=["wit/CURRENT_REF"]), \
+                mock.patch.object(registry_contract, "CURRENT_WIT_CONSUMERS", frozenset({"matrix"})):
             plan = plan_matrix.make_plan(repository, "pull_request", "origin/main")
         matrix = json.dumps(plan["matrix"])
 

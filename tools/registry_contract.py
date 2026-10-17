@@ -10,7 +10,10 @@ PLUGIN_RELEASE_TAG = "plugins"
 # Explicit ownership avoids inferring bindgen dependencies from Rust source.
 CURRENT_WIT_DIRECTORY = "wit/current"
 CURRENT_WIT_PIN = "wit/CURRENT_REF"
-CURRENT_WIT_CONSUMERS = frozenset({"discord", "matrix"})
+# Empty while no wit/current directory exists: wit/v0 is the newest host
+# contract. Name the guests that may publish against a future wit/current here,
+# in the same change that adds it.
+CURRENT_WIT_CONSUMERS: frozenset[str] = frozenset()
 
 
 def current_wit_release_inputs(changed_paths: list[str]) -> set[str]:

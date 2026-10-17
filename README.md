@@ -21,9 +21,9 @@ plugins/<name>/        # published plugins — one wit-bindgen component per dir
   tests/               # host-run tests over the pure core (`cargo test`)
   manifest.toml        # name, version, wasm_path, capabilities, permissions
   README.md
-wit/v0/                # vendored ZeroClaw plugin WIT contract (the ABI plugins build against)
-wit/next/              # the same contract at an unreleased host (pinned by wit/NEXT_REF)
-wit/current/           # the contract first released in ZeroClaw v0.8.6 (pinned by wit/CURRENT_REF)
+wit/v0/                # vendored ZeroClaw plugin WIT contract, as ZeroClaw v0.8.6 ships it (pinned by wit/UPSTREAM_REF)
+wit/next/              # an earlier pre-release snapshot, kept for source-only plugins (pinned by wit/NEXT_REF)
+wit/unstable/          # the pre-v0.8.6 draft tree; plugins built against it do not install on v0.8.6
 registry.json          # GENERATED index — published by CI, do not hand-edit
 registry-retirements.json  # reviewed list of versions withdrawn from the index
 tools/build-registry.py
@@ -36,17 +36,23 @@ host grants only the capabilities a plugin's `manifest.toml` declares.
 
 `wit/v0/` is vendored **unmodified** from
 [zeroclaw `wit/v0`](https://github.com/zeroclaw-labs/zeroclaw/tree/master/wit/v0)
-— it is the contract the host actually implements. Plugins requiring host
-capabilities beyond it (e.g. HTTP egress) are blocked on the upstream host
-capability interface ([zeroclaw#8135](https://github.com/zeroclaw-labs/zeroclaw/issues/8135)).
+— it is the contract the host actually implements. Network access is
+deny-by-default: a plugin reaches only the hosts an operator grants its
+instance, for example with `--egress declared` when binding it.
 
-`wit/next/` is the same directory at a newer ZeroClaw commit that no release
-includes yet, pinned by `wit/NEXT_REF`. It carries interfaces released hosts
-lack, such as durable `state`, so only a `registry = false` plugin may bind it
+`wit/v0/` matches the contract ZeroClaw v0.8.6 ships: typed config through
+`config.get`, schema-designated secrets through `secrets.get`, the host
+`websocket` resource, sockets and durable `state`. Channel packages built
+against an earlier `wit/v0` or `wit/unstable/`, and redact-text before 0.3.0,
+do not install on v0.8.6. Their published versions are withdrawn through
+[`registry-retirements.json`](./registry-retirements.json), and each such
+channel package returns to the registry at a new version once it is ported.
+
+`wit/next/` is an earlier pre-release snapshot of the same contract, pinned by
+`wit/NEXT_REF`. It remains only for source plugins that have not moved to
+`wit/v0/` yet, and CI still withholds it from plugins headed for the registry
 (see [Host-gated source plugins](#host-gated-source-plugins)). CI checks
 `wit/v0/` and `wit/next/` byte for byte against their pins.
-
-`wit/current/` prepares Matrix for the intended next host release without changing the older WIT trees or unrelated package identities. Its pin is an exact host commit, not proof that a plugin-capable release is available. Matrix remains `registry = false` until the matching downloaded host and package pass install, alias-binding and real-host checks. The shared consumer policy admits only Matrix and Discord to publish against this directory; a directory, pin or policy change selects those consumers as changed release inputs. Historical registry entries and assets remain immutable.
 
 ## How install works
 

@@ -4,6 +4,11 @@ description = "Send-only WeCom Bot Webhook channel plugin for ZeroClaw over wasi
 author = "JordanTheJet"
 wasm_path = "wecom.wasm"
 capabilities = ["channel"]
+# Withdrawn from the registry until this package is ported to the plugin
+# contract ZeroClaw v0.8.6 ships: it binds wit/unstable, whose
+# configure(config) the v0.8.6 host no longer calls. Its published versions
+# are listed in registry-retirements.json.
+registry = false
 sender_match = "exact"
 # http_client: post text messages to the configured WeCom Bot Webhook.
 # config_read: read [channels.wecom.*] when loaded as a mirror plugin.

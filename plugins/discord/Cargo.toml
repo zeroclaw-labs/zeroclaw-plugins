@@ -7,7 +7,7 @@
 # the wasm component, so `lib.rs` performs the I/O the core decides on.
 [package]
 name = "discord"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 description = "Discord channel plugin for ZeroClaw: the Gateway over the host websocket resource, replies over REST through wasi:http."
