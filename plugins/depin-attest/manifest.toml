@@ -1,0 +1,12 @@
+name = "depin-attest"
+version = "0.1.0"
+description = "T1 DePIN attestation: reads a device sensor reading and builds an unsigned Solana Memo transaction committing it on-chain, with a replay-guard nonce. Never signs."
+author = "ZeroClaw Labs"
+wasm_path = "depin_attest.wasm"
+capabilities = ["tool"]
+# http_client: fetch a recent blockhash from the configured Solana RPC to embed
+# in the unsigned transaction (TLS is performed host-side). No key material
+# ever crosses this boundary — the plugin only reads public chain state.
+# config_read: the RPC endpoint URL comes from this plugin's own jailed config
+# section; without it the plugin falls back to a public default.
+permissions = ["http_client", "config_read"]

@@ -1,0 +1,33 @@
+# Standalone crate (own [workspace]): cdylib for the wasm32-wasip2 component;
+# rlib so the pure attestation core (nonce derivation, memo/tx building) is
+# testable on the host with a plain `cargo test`. `waki` (blocking wasi:http)
+# is a wasm-only dependency so the host test build never tries to compile it.
+[package]
+name = "depin-attest"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "T1 DePIN attestation plugin: reads a sensor reading and builds an unsigned Solana Memo transaction with a replay guard, no key ever held."
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+wit-bindgen = "0.46"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = { version = "0.10", default-features = false }
+
+# wasi:http client — only compiled for the wasm component, never on the host.
+[target.'cfg(target_family = "wasm")'.dependencies]
+waki = { version = "0.5.1", features = ["json"] }
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true
+codegen-units = 1
+
+# Standalone crate: built for wasm32-wasip2, not part of the host workspace.
+[workspace]
