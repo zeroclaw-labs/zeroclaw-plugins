@@ -1,19 +1,51 @@
 name = "reddit"
-version = "0.3.0"
+version = "0.4.0"
 description = "Reddit channel plugin for ZeroClaw: message/unread long-poll + comment/compose over wasi:http."
 author = "JordanTheJet"
 wasm_path = "reddit.wasm"
 capabilities = ["channel"]
-# Withdrawn from the registry until this package is ported to the plugin
-# contract ZeroClaw v0.8.6 ships: it binds wit/unstable, whose
-# configure(config) the v0.8.6 host no longer calls. Its published versions
-# are listed in registry-retirements.json.
-registry = false
-# http_client: outbound calls to oauth.reddit.com + www.reddit.com (TLS host-side).
-# config_read: read the OAuth2 credentials + settings from this channel's config.
+# Needs ZeroClaw v0.8.6 or later: it binds the plugin contract first released
+# in v0.8.6 (typed config through config.get, credentials through
+# secrets.get), and reads both when the host configures the instance.
+registry = true
+# http_client: inbox polling and replies on oauth.reddit.com, token refresh on
+#   www.reddit.com (TLS is performed host-side).
+# config_read: the typed config below through config.get; client_secret and
+#   refresh_token are x-secret and reach the plugin only through secrets.get.
 permissions = ["http_client", "config_read"]
-# provides: mirror the built-in `reddit` channel — read [channels.reddit.*] and
-# honor native-wins. Inert on hosts without the `provides` feature (they load
-# this as a novel channel named `reddit`, configured from
-# [[plugins.entries.reddit]]).
+# provides: the built-in channel this package can stand in for. Hosts construct
+# this plugin only from an explicit [channels.plugin.<alias>] binding, so it
+# never reads [channels.reddit.*].
 provides = "reddit"
+
+# The hosts this plugin contacts. A declaration grants nothing: an operator
+# grants them with `zeroclaw plugin bind reddit --channel-alias <alias>
+# --egress declared`. oauth.reddit.com serves the API; www.reddit.com serves
+# the OAuth2 token endpoint.
+[egress]
+hosts = ["oauth.reddit.com", "www.reddit.com"]
+
+[config_schema]
+"$schema" = "https://json-schema.org/draft/2020-12/schema"
+type = "object"
+required = ["client_id", "client_secret", "refresh_token", "username"]
+additionalProperties = false
+
+[config_schema.properties.client_id]
+type = "string"
+minLength = 1
+[config_schema.properties.client_secret]
+type = "string"
+x-secret = true
+minLength = 1
+[config_schema.properties.refresh_token]
+type = "string"
+x-secret = true
+minLength = 1
+[config_schema.properties.username]
+type = "string"
+minLength = 1
+[config_schema.properties.subreddits]
+type = "array"
+[config_schema.properties.subreddits.items]
+type = "string"
