@@ -188,3 +188,29 @@ fn config_parses_and_defaults() {
         "x"
     );
 }
+
+#[test]
+fn url_path_drops_host_query_and_fragment() {
+    assert_eq!(
+        mattermost::mattermost::url_path(
+            "https://server.example.org/api/v4/channels/abc/posts?since=1&token=x#f"
+        ),
+        "/api/v4/channels/abc/posts"
+    );
+    assert_eq!(
+        mattermost::mattermost::url_path("https://server.example.org"),
+        "/"
+    );
+    assert_eq!(
+        mattermost::mattermost::url_path("/relative/path?q=1"),
+        "/relative/path"
+    );
+}
+
+#[test]
+fn url_path_ignores_a_slash_in_the_query_of_a_pathless_url() {
+    assert_eq!(
+        mattermost::mattermost::url_path("https://server.example.org?x=/y"),
+        "/"
+    );
+}

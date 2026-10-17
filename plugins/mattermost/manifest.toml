@@ -1,19 +1,42 @@
 name = "mattermost"
-version = "0.3.0"
+version = "0.4.0"
 description = "Mattermost channel plugin for ZeroClaw: v4 REST channel-post polling + createPost over wasi:http."
 author = "JordanTheJet"
 wasm_path = "mattermost.wasm"
 capabilities = ["channel"]
-# Withdrawn from the registry until this package is ported to the plugin
-# contract ZeroClaw v0.8.6 ships: it binds wit/unstable, whose
-# configure(config) the v0.8.6 host no longer calls. Its published versions
-# are listed in registry-retirements.json.
-registry = false
-# http_client: outbound calls to the Mattermost server (TLS is performed host-side).
-# config_read: read the server URL + bot token + channel from this channel's config section.
+# Needs ZeroClaw v0.8.6 or later: it binds the plugin contract first released
+# in v0.8.6 (typed config through config.get, credentials through
+# secrets.get), and reads both when the host configures the instance.
+registry = true
+# http_client: v4 REST channel-post polling and createPost on your Mattermost
+#   server (TLS is performed host-side).
+# config_read: the typed config below through config.get; bot_token is
+#   x-secret and reaches the plugin only through secrets.get.
 permissions = ["http_client", "config_read"]
-# provides: mirror the built-in `mattermost` channel — read [channels.mattermost.*]
-# and honor native-wins. Inert on hosts without the `provides` feature (they
-# load this as a novel channel named `mattermost`, configured from
-# [[plugins.entries.mattermost]]).
+# provides: the built-in channel this package can stand in for. Hosts construct
+# this plugin only from an explicit [channels.plugin.<alias>] binding, so it
+# never reads [channels.mattermost.*].
 provides = "mattermost"
+
+# No [egress] table: the server is the operator's own, so its host cannot be
+# declared here. Grant it in the instance's egress_hosts after binding.
+
+[config_schema]
+"$schema" = "https://json-schema.org/draft/2020-12/schema"
+type = "object"
+required = ["url", "bot_token"]
+additionalProperties = false
+
+[config_schema.properties.url]
+type = "string"
+minLength = 1
+[config_schema.properties.bot_token]
+type = "string"
+x-secret = true
+minLength = 1
+[config_schema.properties.channel_ids]
+type = "array"
+[config_schema.properties.channel_ids.items]
+type = "string"
+[config_schema.properties.thread_replies]
+type = "boolean"

@@ -5,42 +5,94 @@ connects your agent to Mattermost. It polls a channel's posts via the v4 REST
 API and sends the agent's replies back — all from a sandboxed `wasm32-wasip2`
 WIT component, with no native build.
 
+## Host requirement
+
+The plugin binds the host contract first released in ZeroClaw v0.8.6: typed
+config through `config.get`, and its credentials through `secrets.get`. Released
+versions up to ZeroClaw v0.8.5 do not load it. The host also needs the Cranelift
+backend, which compiles `.wasm` components (`--features plugins-wasm-cranelift`
+in a source build).
+
+`zeroclaw plugin install` instantiates the component before it installs
+anything, and `zeroclaw plugin info mattermost` repeats that check, so an
+incompatible host refuses the package with the reason instead of failing at
+startup.
+
+## Install and bind an instance
+
+The plugin runs only as a named channel instance, `plugin.<alias>`. For an
+instance named `main`:
+
 ```bash
-zeroclaw plugin install mattermost \
-  --registry https://raw.githubusercontent.com/JordanTheJet/zeroclaw-plugins/main/registry.json
+zeroclaw plugin install mattermost --channel-alias main
+# The server is your own, so grant its host yourself:
+zeroclaw config set --no-interactive plugins.entries.zpi1_WyJtYXR0ZXJtb3N0IiwiY2hhbm5lbCIsIm1haW4iXQ.egress_hosts 'mattermost.example.com'
 ```
+
+`--channel-alias` writes the `[channels.plugin.main]` binding and creates the
+instance's config entry. The manifest declares no hosts, because the server is
+the operator's own, so the instance has no network reach until its host is
+granted. `zeroclaw plugin bind` binds an already installed package.
+
+The instance key is `zpi1_` followed by the unpadded base64url of the JSON
+array `["mattermost","channel","<alias>"]`; for `main` it is:
+
+`zpi1_WyJtYXR0ZXJtb3N0IiwiY2hhbm5lbCIsIm1haW4iXQ`
+
+Set the credentials and settings, then enable the plugin system:
+
+```bash
+# Each secret prompts without echo and is stored encrypted.
+zeroclaw config set plugins.entries.zpi1_WyJtYXR0ZXJtb3N0IiwiY2hhbm5lbCIsIm1haW4iXQ.config.bot_token
+zeroclaw config set --no-interactive plugins.entries.zpi1_WyJtYXR0ZXJtb3N0IiwiY2hhbm5lbCIsIm1haW4iXQ.config.url https://mattermost.example.com
+zeroclaw config set --no-interactive plugins.entries.zpi1_WyJtYXR0ZXJtb3N0IiwiY2hhbm5lbCIsIm1haW4iXQ.config.channel_ids '["YOUR_CHANNEL_ID"]'
+zeroclaw config set plugins.enabled true
+```
+
+Route the instance to an agent and admit the senders it may answer:
+
+```toml
+[agents.assistant]
+channels = ["plugin.main"]
+
+[peer_groups.mattermost_main]
+channel = "plugin.main"
+external_peers = ["<sender>"]
+```
+
+Restart the daemon. Do not also run the built-in channel with the same
+credentials, or both answer.
+
+Upgrading from an earlier version: this version reads only its instance's config
+entry, never `[channels.mattermost.<alias>]` or an older `[[plugins.entries]]`
+record named `mattermost`. Bind an instance and set the values again under its
+key, the credentials through the secret prompt.
 
 ## Configuration
 
-The server URL, token, and channel come from the plugin's config section
-(requires the `config_read` permission). Field names match the built-in
-`mattermost` channel so a mirror install reads `[channels.mattermost.<alias>]`
-directly. Fields used by this plugin:
+Set each non-secret value with
+`zeroclaw config set --no-interactive plugins.entries.<instance-key>.config.<key> <value>`;
+without `--no-interactive` the command prompts for the value instead. Set a
+credential without a value, so the command prompts for it without echo.
+Strings are written as is; booleans, integers, and lists as JSON text, for
+example `'["a","b"]'`. The schema rejects keys it does not list.
 
-- `url` (required) — the Mattermost server origin, e.g.
-  `https://mattermost.example.com`. A trailing slash is trimmed.
-- `bot_token` (required) — a personal access / bot token, sent as
-  `Authorization: Bearer <token>`. (The native `login_id` + `password` login
-  flow is not implemented here; use a static token.)
-- `channel_ids` — the channel(s) the bot serves. **This release operates on a single
-  channel: the first explicit entry.** An empty list or a `["*"]` wildcard
-  (native auto-discovery) leaves the plugin inert.
-- `thread_replies` — when `true` (default), top-level replies thread on the
-  original post; when `false`, they go to the channel root. Existing threads
-  always stay threaded.
+| Key | Type | Default | Meaning |
+|---|---|---|---|
+| `url` | URL, required |  | The server origin, for example `https://mattermost.example.com`. A trailing slash is trimmed. |
+| `bot_token` | string, secret, required |  | A personal access or bot token, sent as `Authorization: Bearer <token>`. |
+| `channel_ids` | list of strings | none (inert) | The channel the bot serves: this release uses the first explicit entry. An empty list or `["*"]` leaves the plugin inert. |
+| `thread_replies` | boolean | `true` | Thread top-level replies on the original post; `false` replies at the channel root. Existing threads always stay threaded. |
 
-Other native fields (`login_id`, `password`, `team_ids`, `discover_dms`,
-`mention_only`, pacing, …) are accepted and ignored.
-
-On a host with the `provides` feature this plugin **mirrors** the built-in
-`mattermost` channel and reads `[channels.mattermost.<alias>]`; on older hosts
-it loads as a novel channel configured from `[[plugins.entries.mattermost]]`.
+The plugin reads its config and credentials when the host configures the
+instance, so a change takes effect after the instance restarts.
 
 ## Permissions
 
 - `http_client` — outbound calls to the Mattermost REST API (TLS is performed
   host-side).
-- `config_read` — read the server URL, token, and channel above.
+- `config_read` — read the typed config through `config.get`; the credentials
+  arrive only through `secrets.get`.
 
 ## What's covered
 
