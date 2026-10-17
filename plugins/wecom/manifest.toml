@@ -1,18 +1,39 @@
 name = "wecom"
-version = "0.2.0"
+version = "0.3.0"
 description = "Send-only WeCom Bot Webhook channel plugin for ZeroClaw over wasi:http."
 author = "JordanTheJet"
 wasm_path = "wecom.wasm"
 capabilities = ["channel"]
-# Withdrawn from the registry until this package is ported to the plugin
-# contract ZeroClaw v0.8.6 ships: it binds wit/unstable, whose
-# configure(config) the v0.8.6 host no longer calls. Its published versions
-# are listed in registry-retirements.json.
-registry = false
+# Needs ZeroClaw v0.8.6 or later: it binds the plugin contract first released
+# in v0.8.6 (typed config through config.get, credentials through
+# secrets.get), and reads both when the host configures the instance.
+registry = true
 sender_match = "exact"
-# http_client: post text messages to the configured WeCom Bot Webhook.
-# config_read: read [channels.wecom.*] when loaded as a mirror plugin.
+# http_client: text posts to the WeCom Bot Webhook (TLS is performed
+#   host-side).
+# config_read: the typed config below through config.get; webhook_key is
+#   x-secret and reaches the plugin only through secrets.get.
 permissions = ["http_client", "config_read"]
-# provides: mirror the built-in `wecom` channel — read the existing
-# channel config as the single source of truth and honor native-wins.
+# provides: the built-in channel this package can stand in for. Hosts construct
+# this plugin only from an explicit [channels.plugin.<alias>] binding, so it
+# never reads [channels.wecom.*].
 provides = "wecom"
+
+# The hosts this plugin contacts. A declaration grants nothing: an operator
+# grants them with `zeroclaw plugin bind wecom --channel-alias <alias>
+# --egress declared`. qyapi.weixin.qq.com serves the Bot Webhook.
+[egress]
+hosts = ["qyapi.weixin.qq.com"]
+
+[config_schema]
+"$schema" = "https://json-schema.org/draft/2020-12/schema"
+type = "object"
+required = ["webhook_key"]
+additionalProperties = false
+
+[config_schema.properties.enabled]
+type = "boolean"
+[config_schema.properties.webhook_key]
+type = "string"
+x-secret = true
+minLength = 1
