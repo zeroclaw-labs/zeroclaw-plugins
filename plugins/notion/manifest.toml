@@ -1,17 +1,49 @@
 name = "notion"
-version = "0.3.0"
+version = "0.4.0"
 description = "Notion task-queue channel plugin for ZeroClaw: poll a database for pending tasks and write results back over wasi:http."
 author = "JordanTheJet"
 wasm_path = "notion.wasm"
 capabilities = ["channel"]
-# Withdrawn from the registry until this package is ported to the plugin
-# contract ZeroClaw v0.8.6 ships: it binds wit/unstable, whose
-# configure(config) the v0.8.6 host no longer calls. Its published versions
-# are listed in registry-retirements.json.
-registry = false
-# http_client: outbound calls to api.notion.com (TLS is performed host-side).
-# config_read: read the integration token + database id + property names from
-# this channel's config section.
+# Needs ZeroClaw v0.8.6 or later: it binds the plugin contract first released
+# in v0.8.6 (typed config through config.get, credentials through
+# secrets.get), and reads both when the host configures the instance.
+registry = true
+# http_client: database queries and page updates against the Notion API (TLS
+#   is performed host-side).
+# config_read: the typed config below through config.get; api_key is x-secret
+#   and reaches the plugin only through secrets.get.
 permissions = ["http_client", "config_read"]
-# Notion has no canonical built-in channel config family. It is a novel channel
-# configured from the `[[plugins.entries]]` record named `notion`.
+
+# The hosts this plugin contacts. A declaration grants nothing: an operator
+# grants them with `zeroclaw plugin bind notion --channel-alias <alias>
+# --egress declared`. api.notion.com serves the Notion API.
+[egress]
+hosts = ["api.notion.com"]
+
+[config_schema]
+"$schema" = "https://json-schema.org/draft/2020-12/schema"
+type = "object"
+required = ["api_key", "database_id"]
+additionalProperties = false
+
+[config_schema.properties.api_key]
+type = "string"
+x-secret = true
+minLength = 1
+[config_schema.properties.database_id]
+type = "string"
+minLength = 1
+[config_schema.properties.poll_interval_secs]
+type = "integer"
+[config_schema.properties.status_property]
+type = "string"
+[config_schema.properties.input_property]
+type = "string"
+[config_schema.properties.result_property]
+type = "string"
+[config_schema.properties.max_concurrent]
+type = "integer"
+[config_schema.properties.recover_stale]
+type = "boolean"
+[config_schema.properties.api_base_url]
+type = "string"
