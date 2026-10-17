@@ -1,0 +1,13 @@
+name = "solana-account"
+version = "0.1.0"
+description = "Read a Solana address's on-chain state — SOL balance, SPL token holdings, account type, and recent activity — shaped to a short summary. T0: read-only, zero custody."
+author = "Petr Pogoraev"
+wasm_path = "solana_account.wasm"
+capabilities = ["tool"]
+# http_client: JSON-RPC reads against the operator's rpc_url —
+# getAccountInfo (SOL balance + owner), getTokenAccountsByOwner (SPL holdings,
+# both token programs), and getSignaturesForAddress (recent activity); TLS
+# host-side.
+# config_read: optional rpc_url, max_tokens, and known_mints overrides, injected
+# as `__config`. Works against the public mainnet endpoint out of the box.
+permissions = ["http_client", "config_read"]

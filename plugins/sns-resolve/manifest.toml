@@ -1,0 +1,11 @@
+name = "sns-resolve"
+version = "0.1.0"
+description = "Resolve a Solana Name Service (.sol) domain to its on-chain wallet address, so an agent can pay 'lucas.sol' without hallucinating an address. T0: read-only, zero custody."
+author = "Petr Pogoraev"
+wasm_path = "sns_resolve.wasm"
+capabilities = ["tool"]
+# http_client: one JSON-RPC read (getAccountInfo on the derived registry
+# account) against the operator's rpc_url; TLS host-side.
+# config_read: optional rpc_url override — injected as `__config`. Works with
+# the public mainnet endpoint out of the box.
+permissions = ["http_client", "config_read"]

@@ -1,0 +1,11 @@
+name = "solana-pay-request"
+version = "0.1.0"
+description = "Build Solana Pay transfer-request URLs (QR-ready) with a config-pinned recipient, token allowlist, and per-request amount cap enforced in-plugin. T1: holds no keys, signs nothing."
+author = "Petr Pogoraev"
+wasm_path = "solana_pay_request.wasm"
+capabilities = ["tool"]
+# config_read: the host injects this plugin's own config section (recipient,
+# tokens, max_amount, label) into execute args as `__config`. Without it the
+# plugin still works with defaults (USDC/SOL, cap 1000) but cannot pin a
+# recipient. No http_client: requests are built entirely offline.
+permissions = ["config_read"]
