@@ -1,0 +1,12 @@
+name = "durable-tx-build"
+version = "0.1.0"
+description = "Build unsigned Solana transfers anchored to a durable nonce: approval-queue-safe, allowlisted, capped, zero secrets (Aval suite, T1)"
+author = "bryankwandou"
+wasm_path = "durable_tx_build.wasm"
+capabilities = ["tool"]
+# http_client: JSON-RPC calls to the operator's own Solana RPC endpoint
+#   (TLS is performed host-side). No other hosts are contacted.
+# config_read: rpc_url, allowed_mints, max_amount_ui from this plugin's own
+#   jailed config section. No secrets are required; an RPC key, if any, lives
+#   inside the operator's rpc_url.
+permissions = ["http_client", "config_read"]
