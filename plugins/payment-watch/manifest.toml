@@ -1,0 +1,9 @@
+name = "payment-watch"
+version = "0.1.0"
+description = "T0 watch a Solana Pay reference pubkey for settlement signatures (closes the payment loop)"
+author = "Hamet Diallo / DIALLOUBE-RESEARCH"
+wasm_path = "payment_watch.wasm"
+capabilities = ["tool"]
+# http_client: getSignaturesForAddress against allowlisted HTTPS RPC
+# config_read: optional rpc_url
+permissions = ["http_client", "config_read"]
