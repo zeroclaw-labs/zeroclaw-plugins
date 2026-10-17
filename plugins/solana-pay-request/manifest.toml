@@ -1,0 +1,8 @@
+name = "solana-pay-request"
+version = "0.1.0"
+description = "Create a canonical Solana Pay transfer request with strict address, amount, reference, memo, and size validation."
+author = "YoungblutSchilling"
+wasm_path = "solana_pay_request.wasm"
+capabilities = ["tool"]
+# Pure transform: no network, filesystem, config, memory, or signing access.
+permissions = []
