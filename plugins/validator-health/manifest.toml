@@ -1,0 +1,9 @@
+name = "validator-health"
+version = "0.1.0"
+description = "Read-only Solana validator health: delinquency, stake, commission, vote lag, credits, and prior-epoch rewards"
+author = "Community Contributor"
+wasm_path = "validator_health.wasm"
+capabilities = ["tool"]
+# http_client: JSON-RPC reads against the operator-configured Solana endpoint.
+# config_read: reads only rpc_url and local alert thresholds.
+permissions = ["http_client", "config_read"]
