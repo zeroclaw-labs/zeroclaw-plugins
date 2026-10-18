@@ -1,0 +1,39 @@
+[package]
+name = "unsigned-transfer"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "ZeroClaw tool plugin: assemble an UNSIGNED SOL/SPL transfer for a human or Squads to sign. Zero-custody — never holds or uses a key."
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+wit-bindgen = "0.46"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+bs58 = "0.5"
+base64 = "0.22"
+bincode = "1"
+# Modular Solana crates — these DO compile to wasm32-wasip2 (the monolithic
+# solana-sdk / solana-client do not).
+solana-program = "4.0.0"
+solana-message = { version = "4.4.0", features = ["serde"] }
+solana-transaction = { version = "4.1.5", features = ["serde"] }
+solana-signature = { version = "3.4.1", features = ["serde"] }
+solana-system-interface = { version = "3.2.0", features = ["bincode"] }
+spl-token = { version = "9", default-features = false }
+spl-associated-token-account = { version = "8", default-features = false }
+
+# wasi:http client — only compiled for the wasm component, never on the host.
+[target.'cfg(target_family = "wasm")'.dependencies]
+waki = { version = "0.5.1", features = ["json"] }
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true
+codegen-units = 1
+
+[workspace]
