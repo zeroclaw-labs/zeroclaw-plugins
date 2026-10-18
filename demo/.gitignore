@@ -1,0 +1,4 @@
+# Local demo credentials — mainnet RPC endpoint and model provider key.
+# Never commit these; run-demo.sh reads them at runtime only.
+.env.demo
+.env

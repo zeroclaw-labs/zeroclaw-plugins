@@ -1,0 +1,23 @@
+# solana-core: the pure, wasm32-wasip2-friendly substrate that ZeroClaw Solana
+# tool plugins import. No `solana-sdk` / `solana-client` (they do not compile
+# clean for wasm32-wasip2 inside a WIT component); everything here is hand-rolled
+# over bs58 / base64 / serde_json so it builds for both the host (tests) and the
+# component (as a path dependency of each plugin).
+[package]
+name = "solana-core"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Pure, wasm32-wasip2-friendly Solana substrate for ZeroClaw tool plugins: base58, JSON-RPC shaping, SPL Mint + Token-2022 extension decoding, output shaping. No solana-sdk."
+publish = false
+
+[lib]
+# rlib only: this crate is never a wasm component itself. It is imported by
+# plugin crates (which are the cdylib components) via a path dependency.
+crate-type = ["rlib"]
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+bs58 = "0.5"
+base64 = "0.22"
