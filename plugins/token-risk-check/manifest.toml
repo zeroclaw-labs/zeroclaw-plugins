@@ -1,0 +1,10 @@
+name = "token-risk-check"
+version = "0.1.0"
+description = "Analyze a Solana token mint for rug and footgun risk: mint/freeze authorities, Token-2022 extensions (permanent delegate, transfer hook, fees, pausable, non-transferable), and holder concentration, returning a Red/Amber/Green verdict."
+author = "RaYYeR220"
+wasm_path = "token_risk_check.wasm"
+capabilities = ["tool"]
+# http_client: read-only Solana JSON-RPC (getAccountInfo, getTokenLargestAccounts);
+# TLS is performed host-side. config_read: read the optional `rpc_url` override
+# from this plugin's own jailed config section.
+permissions = ["http_client", "config_read"]
