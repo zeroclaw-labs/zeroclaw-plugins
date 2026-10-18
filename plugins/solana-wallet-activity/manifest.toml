@@ -1,0 +1,9 @@
+name = "solana-wallet-activity"
+version = "0.1.0"
+description = "One-call wallet activity report: window, cadence, active days, failure rate with interpretation"
+author = "Ace Zhang"
+wasm_path = "solana_wallet_activity.wasm"
+capabilities = ["tool"]
+# http_client: one outbound POST to the configured Solana RPC per report.
+# config_read: optional rpc_url override (defaults to public mainnet RPC).
+permissions = ["http_client", "config_read"]
