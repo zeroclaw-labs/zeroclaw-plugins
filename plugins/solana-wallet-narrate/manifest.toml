@@ -1,0 +1,10 @@
+name = "solana-wallet-narrate"
+version = "0.1.0"
+description = "Narrate recent Solana wallet transactions in plain English sentences."
+author = "Levrone"
+wasm_path = "solana_wallet_narrate.wasm"
+capabilities = ["tool"]
+permissions = ["http_client", "config_read"]
+
+[config]
+rpc_url = "https://api.mainnet-beta.solana.com"
