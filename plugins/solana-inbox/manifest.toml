@@ -1,0 +1,11 @@
+name = "solana-inbox"
+version = "0.1.0"
+description = "Solana as an inbound channel for a ZeroClaw agent. Polls a watched address, extracts SPL Memo instructions and incoming SOL/SPL transfers, delivers each as an InboundMessage. Read-only, no keys, no signing."
+author = "ZeroClaw community"
+wasm_path = "solana_inbox.wasm"
+capabilities = ["channel"]
+# http_client: outbound JSON-RPC calls to the operator-configured Solana
+# endpoint (TLS is performed host-side).
+# config_read: read the watched address, RPC URL, and polling knobs from
+# the channel's own config section.
+permissions = ["http_client", "config_read"]
