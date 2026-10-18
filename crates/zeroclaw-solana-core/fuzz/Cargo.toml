@@ -1,0 +1,34 @@
+[package]
+name = "zeroclaw-solana-core-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+# Deliberately its own workspace: cargo-fuzz needs nightly + libFuzzer
+# instrumentation flags that must never leak into the main workspace's
+# (stable-toolchain) build graph.
+[workspace]
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+solana-short-vec = "2"
+
+[dependencies.zeroclaw-solana-core]
+path = ".."
+
+[[bin]]
+name = "shortvec_differential"
+path = "fuzz_targets/shortvec_differential.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "token2022_parser_no_panic"
+path = "fuzz_targets/token2022_parser_no_panic.rs"
+test = false
+doc = false
+bench = false
