@@ -1,0 +1,9 @@
+name = "token-risk-check"
+version = "0.1.0"
+description = "Read-only Solana token risk signal: authorities, concentration, liquidity, and Token-2022 extensions"
+author = "pawanrahul370-commits"
+wasm_path = "token_risk_check.wasm"
+capabilities = ["tool"]
+# http_client: operator-selected Solana RPC plus public DexScreener liquidity data.
+# config_read: this plugin's jailed rpc_url and optional dex_url settings only.
+permissions = ["http_client", "config_read"]
