@@ -1,0 +1,29 @@
+# Standalone crate (own [workspace]): built for wasm32-wasip2 as a tool plugin
+# component; the pure `pay` core (rlib) is host-tested with plain `cargo test`.
+# No HTTP client at all — this tool builds Solana Pay URLs offline and holds
+# zero secrets.
+[package]
+name = "solana-pay-request"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "ZeroClaw WIT tool plugin: build Solana Pay transfer-request URLs (QR-ready) with a config-pinned recipient, token allowlist, and amount cap enforced in-plugin."
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+wit-bindgen = "0.46"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+zeroclaw-solana-core = { path = "vendor/zeroclaw-solana-core" }
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true
+codegen-units = 1
+
+# Standalone crate: built for wasm32-wasip2, not part of the host workspace.
+[workspace]
