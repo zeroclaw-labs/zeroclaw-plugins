@@ -1,0 +1,368 @@
+use std::collections::HashMap;
+
+use crate::keys::Pubkey;
+use crate::rpc::{HttpClient, Rpc};
+use crate::shape::assert_budget;
+use crate::tx::{build_durable_memo_tx, to_base64};
+use serde_json::Value;
+use sha2::{Digest, Sha256};
+
+const DEFAULT_MEMO_PREFIX: &str = "ZCDEPIN";
+const DEFAULT_MAX_ABS_READING: f64 = 1_000_000.0;
+const MEMO_MAX_BYTES: usize = 566;
+/// Chat-safe tool output budget. Telegram allows 4096; keep headroom for the
+/// required `unsigned_tx_base64` while remaining LLM-context friendly.
+const SUMMARY_MAX_CHARS: usize = 1200;
+const DEFAULT_ALLOWED_METRICS: [&str; 5] = [
+    "temperature",
+    "humidity",
+    "uptime",
+    "pressure",
+    "air_quality",
+];
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct AttestConfig {
+    pub allowed_metrics: Vec<String>,
+    pub max_abs_reading: f64,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct AttestArgs {
+    pub device_id: String,
+    pub reading: f64,
+    pub unit: String,
+    pub metric: String,
+    pub memo_prefix: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AttestOutput {
+    pub summary: String,
+    pub unsigned_tx_base64: String,
+    pub attestation_hash: String,
+    pub nonce_account: String,
+    pub durability: &'static str,
+}
+
+impl AttestConfig {
+    pub fn from_section(map: &HashMap<String, String>) -> Result<AttestConfig, String> {
+        let allowed_metrics = match map.get("allowed_metrics") {
+            Some(csv) => parse_allowed_metrics(csv)?,
+            None => DEFAULT_ALLOWED_METRICS
+                .iter()
+                .map(|metric| (*metric).to_string())
+                .collect(),
+        };
+
+        let max_abs_reading = match map.get("max_abs_reading") {
+            Some(raw) => raw
+                .parse::<f64>()
+                .map_err(|_| "max_abs_reading must be a number".to_string())?,
+            None => DEFAULT_MAX_ABS_READING,
+        };
+
+        if !max_abs_reading.is_finite() || max_abs_reading < 0.0 {
+            return Err("max_abs_reading must be a finite non-negative number".to_string());
+        }
+
+        Ok(AttestConfig {
+            allowed_metrics,
+            max_abs_reading,
+        })
+    }
+}
+
+pub fn parse_args_strict(json: &str) -> Result<AttestArgs, String> {
+    let value: Value = serde_json::from_str(json).map_err(|e| format!("invalid arguments: {e}"))?;
+    let object = value
+        .as_object()
+        .ok_or_else(|| "arguments must be a JSON object".to_string())?;
+
+    for config_only in ["payer", "nonce_account", "private_key"] {
+        if object.contains_key(config_only) {
+            return Err(format!("{config_only} must come from config"));
+        }
+    }
+
+    for key in object.keys() {
+        if !matches!(
+            key.as_str(),
+            "device_id" | "reading" | "unit" | "metric" | "memo_prefix"
+        ) {
+            return Err(format!("unknown field `{key}`"));
+        }
+    }
+
+    let device_id = required_string(object, "device_id")?;
+    let reading = object
+        .get("reading")
+        .ok_or_else(|| "reading is required".to_string())
+        .and_then(parse_finite_number)?;
+    let unit = required_string(object, "unit")?;
+    let metric = required_string(object, "metric")?;
+    let memo_prefix = match object.get("memo_prefix") {
+        Some(value) => Some(
+            value
+                .as_str()
+                .ok_or_else(|| "memo_prefix must be a string".to_string())?
+                .to_string(),
+        ),
+        None => None,
+    };
+
+    Ok(AttestArgs {
+        device_id,
+        reading,
+        unit,
+        metric,
+        memo_prefix,
+    })
+}
+
+/// Accept JSON numbers or numeric strings (LLMs often stringify tool args).
+fn parse_finite_number(value: &Value) -> Result<f64, String> {
+    let n = match value {
+        Value::Number(num) => num
+            .as_f64()
+            .ok_or_else(|| "reading must be a number".to_string())?,
+        Value::String(s) => s
+            .trim()
+            .parse::<f64>()
+            .map_err(|_| "reading must be a number".to_string())?,
+        _ => return Err("reading must be a number".to_string()),
+    };
+    if !n.is_finite() {
+        return Err("reading must be a number".to_string());
+    }
+    Ok(n)
+}
+
+pub fn execute<H: HttpClient>(
+    args_json: &str,
+    config: &HashMap<String, String>,
+    http: &H,
+    now_unix: u64,
+) -> Result<AttestOutput, String> {
+    let args = parse_args_strict(args_json)?;
+    let cfg = AttestConfig::from_section(config)?;
+    validate_policy(&cfg, &args)?;
+
+    let payer = config_pubkey(config, "payer")?;
+    let nonce_account = config_pubkey(config, "nonce_account")?;
+    let rpc_url = required_config(config, "rpc_url")?;
+    let rpc = Rpc { url: rpc_url, http };
+    let nonce = rpc
+        .get_nonce(&nonce_account)
+        .map_err(|e| format!("🔌 get nonce failed: {e}"))?;
+
+    if nonce.authority != payer {
+        return Err("⚠️ nonce authority must match payer".to_string());
+    }
+
+    let reading_str = format_reading(args.reading);
+    let period = period_bucket(now_unix);
+    let hash = attestation_hash(
+        &args.device_id,
+        &args.metric,
+        &reading_str,
+        &args.unit,
+        period,
+    );
+    let hash12 = &hash[..12];
+    let memo = build_memo(
+        memo_prefix(&args),
+        &args.device_id,
+        &args.metric,
+        &reading_str,
+        &args.unit,
+        period,
+        hash12,
+    )?;
+    let unsigned_tx = build_durable_memo_tx(
+        &payer,
+        &nonce_account,
+        &nonce.authority,
+        &nonce.durable_nonce,
+        &memo,
+    )
+    .map_err(|e| format!("build transaction failed: {e}"))?;
+    let unsigned_tx_base64 = to_base64(&unsigned_tx);
+    let nonce_account_str = nonce_account.to_base58();
+    let nonce_fp = hex_lower(&nonce.durable_nonce[..4]);
+    let summary = format_success_card(
+        &args.device_id,
+        &args.metric,
+        &reading_str,
+        &args.unit,
+        period,
+        hash12,
+        &nonce_account_str,
+        &nonce_fp,
+        &unsigned_tx_base64,
+    );
+    assert_budget(&summary, SUMMARY_MAX_CHARS).map_err(|e| e.to_string())?;
+
+    Ok(AttestOutput {
+        summary,
+        unsigned_tx_base64,
+        attestation_hash: hash,
+        nonce_account: nonce_account_str,
+        durability: "durable-nonce",
+    })
+}
+
+fn format_success_card(
+    device_id: &str,
+    metric: &str,
+    reading_str: &str,
+    unit: &str,
+    period: u64,
+    hash12: &str,
+    nonce_account: &str,
+    nonce_fp: &str,
+    unsigned_tx_base64: &str,
+) -> String {
+    let b64_len = unsigned_tx_base64.chars().count();
+    format!(
+        "✅ DePIN attestation ready (T1)\n\
+📱 Device    {device_id}\n\
+🌡 Reading   {metric} = {reading_str} {unit}\n\
+⏱ Period    {period}\n\
+🔗 Hash      {hash12}…\n\
+🔐 Nonce     {nonce_account}\n\
+   fp        {nonce_fp}\n\
+🛡 Custody   unsigned — sign with payer wallet, then broadcast\n\
+   (this plugin never submits)\n\
+\n\
+📦 unsigned_tx_base64 ({b64_len} chars) — copy all of it:\n\
+{unsigned_tx_base64}"
+    )
+}
+
+pub fn format_reading(v: f64) -> String {
+    let rounded = if v == 0.0 { 0.0 } else { v };
+    let mut rendered = format!("{rounded:.6}");
+    while rendered.contains('.') && rendered.ends_with('0') {
+        rendered.pop();
+    }
+    if rendered.ends_with('.') {
+        rendered.pop();
+    }
+    rendered
+}
+
+pub fn period_bucket(unix_secs: u64) -> u64 {
+    unix_secs / 300
+}
+
+pub fn attestation_hash(
+    device_id: &str,
+    metric: &str,
+    reading_str: &str,
+    unit: &str,
+    period: u64,
+) -> String {
+    let canonical = format!("{device_id}|{metric}|{reading_str}|{unit}|{period}");
+    let digest = Sha256::digest(canonical.as_bytes());
+    hex_lower(&digest)
+}
+
+pub fn build_memo(
+    prefix: &str,
+    device_id: &str,
+    metric: &str,
+    reading_str: &str,
+    unit: &str,
+    period: u64,
+    hash12: &str,
+) -> Result<String, String> {
+    let memo = format!("{prefix}|{device_id}|{metric}|{reading_str}|{unit}|{period}|{hash12}");
+    if memo.len() > MEMO_MAX_BYTES {
+        return Err("memo exceeds 566 bytes".to_string());
+    }
+    Ok(memo)
+}
+
+pub fn validate_policy(cfg: &AttestConfig, args: &AttestArgs) -> Result<(), String> {
+    if !args.reading.is_finite() {
+        return Err("reading must be finite".to_string());
+    }
+    if args.reading.abs() > cfg.max_abs_reading {
+        return Err("reading exceeds max_abs_reading".to_string());
+    }
+    validate_memo_field("device_id", &args.device_id)?;
+    validate_memo_field("metric", &args.metric)?;
+    validate_memo_field("unit", &args.unit)?;
+    validate_memo_field("memo_prefix", memo_prefix(args))?;
+    if !cfg
+        .allowed_metrics
+        .iter()
+        .any(|metric| metric == &args.metric)
+    {
+        return Err("metric is not allowlisted".to_string());
+    }
+    Ok(())
+}
+
+pub fn memo_prefix(args: &AttestArgs) -> &str {
+    args.memo_prefix.as_deref().unwrap_or(DEFAULT_MEMO_PREFIX)
+}
+
+fn parse_allowed_metrics(csv: &str) -> Result<Vec<String>, String> {
+    let metrics = csv
+        .split(',')
+        .map(str::trim)
+        .filter(|metric| !metric.is_empty())
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+
+    if metrics.is_empty() {
+        return Err("allowed_metrics is empty".to_string());
+    }
+
+    Ok(metrics)
+}
+
+fn validate_memo_field(label: &str, value: &str) -> Result<(), String> {
+    if value.contains('|') || value.chars().any(char::is_control) {
+        return Err(format!(
+            "{label} must not contain `|` or control characters"
+        ));
+    }
+
+    Ok(())
+}
+
+fn required_string(object: &serde_json::Map<String, Value>, key: &str) -> Result<String, String> {
+    match object.get(key) {
+        None | Some(Value::Null) => Err(format!(
+            "{key} is required (string). Example metric: \"temperature\""
+        )),
+        Some(Value::String(s)) if !s.trim().is_empty() => Ok(s.clone()),
+        Some(Value::String(_)) => Err(format!("{key} must be a non-empty string")),
+        Some(_) => Err(format!("{key} must be a string")),
+    }
+}
+
+fn required_config<'a>(config: &'a HashMap<String, String>, key: &str) -> Result<&'a str, String> {
+    config
+        .get(key)
+        .map(String::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| format!("{key} must come from config"))
+}
+
+fn config_pubkey(config: &HashMap<String, String>, key: &str) -> Result<Pubkey, String> {
+    Pubkey::from_base58(required_config(config, key)?).map_err(|e| format!("{key}: {e}"))
+}
+
+fn hex_lower(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        out.push(HEX[(byte >> 4) as usize] as char);
+        out.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    out
+}

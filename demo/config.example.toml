@@ -1,0 +1,25 @@
+# ZeroClaw plugin config fragments for the DePIN demo
+
+[plugins.entries.depin-attest]
+enabled = true
+
+[plugins.entries.depin-attest.config]
+rpc_url = "https://api.devnet.solana.com"
+payer = "AEwRQB58maXfKWB8tEFegarFK7RPKwcYa9PQbtuAerAo"
+nonce_account = "BnxcNvZjMUX5pJBtCdyGnAPJ1Dwf8QoboAQ6TkTJShwF"
+allowed_metrics = "temperature,humidity,uptime,pressure,air_quality"
+max_abs_reading = "1000"
+
+[plugins.entries.depin-uptime-watch]
+enabled = true
+
+[plugins.entries.depin-uptime-watch.config]
+rpc_url = "https://api.devnet.solana.com"
+payer = "AEwRQB58maXfKWB8tEFegarFK7RPKwcYa9PQbtuAerAo"
+max_age_secs = "900"
+memo_prefix = "ZCDEPIN"
+scan_limit = "25"
+
+[channels_config.telegram]
+bot_token = "REPLACE_ME"
+allowed_users = ["*"]
