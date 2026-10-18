@@ -1,0 +1,68 @@
+# Standalone crate (own [workspace]): built for wasm32-wasip2 as a WIT tool-plugin
+# component; the pure `depin_rewards` core (rlib) is host-tested with plain
+# `cargo test`. Dependencies grow per TDD slice (PLAN-3); slice A = scaffold +
+# `HttpClient` trait + `MockHttp` + error types (substrate / serde-derive /
+# waki / base64 are added by the slices that need them).
+[package]
+name = "depin-rewards"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Palinurus DePIN rewards watcher: Helium hotspot status + rewards via Relay API, Telegram alerts, unsigned rewards-claim tx. T0/T1 only — no signing key."
+publish = false
+
+# cdylib for the wasm component; rlib so the pure rewards core is testable
+# on the host with a plain `cargo test`.
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# serde (derive) added slice C (Relay JSON → RawHotspotInfo). palinurus-core
+# (Pubkey/versioned_tx/serialize_tx/Instruction) lands in slice G (claim tx).
+wit-bindgen = "0.46"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# wasm-only `HttpClient` impl (`WakiHttp`) used by the WIT component shim.
+# Compiles for host too (harmless) but is #[cfg(target_family="wasm")]-gated so
+# host tests never construct it — same pattern as palinurus_core::WakiRpc.
+waki = { version = "0.5", features = ["json"] }
+# Host-only demo driver (`--features demo`): a reqwest-backed HttpClient + Rpc
+# impl that runs the shipped pure core against live services on camera. NOT
+# part of the wasm component — excluded from `cargo build --target wasm32-wasip2`
+# (no feature) by the `optional` gate + the `demo` feature.
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"], optional = true }
+# Auto-loads a per-repo `.env` (symlinked to ~/Documents/secret/...) so the demo
+# driver runs without manual `source`/`export`. Optional + demo-gated: never
+# part of the wasm component.
+dotenvy = { version = "0.15", optional = true }
+
+[dev-dependencies]
+# Used only by the `--features demo` integration tests (tests/demo_*.rs). Compiles
+# for normal `cargo test` too (unused) — small, doesn't touch the wasm build.
+mockito = "1"
+
+[features]
+# Host-only demo driver + its tests. Off by default so `cargo build --target
+# wasm32-wasip2 --release` and the 49 core tests are unaffected.
+default = []
+demo = ["dep:reqwest", "dep:dotenvy"]
+
+# cdylib for the wasm component; rlib so the pure rewards core is testable
+# on the host with a plain `cargo test`.
+
+[[bin]]
+name = "palinurus-demo"
+path = "src/bin/palinurus-demo.rs"
+required-features = ["demo"]
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true
+codegen-units = 1
+# Panic on overflow in release: rewards math sums HNT bones (10^8) per record;
+# silent overflow in amount math is a real footgun. Defense in depth.
+overflow-checks = true
+
+# Standalone crate: built for wasm32-wasip2, not part of the host workspace.
+[workspace]

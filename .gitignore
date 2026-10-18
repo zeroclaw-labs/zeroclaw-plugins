@@ -5,3 +5,9 @@ __pycache__/
 *.pyc
 target/
 *.wasm
+
+# secrets — never commit env / credential files (per-repo .env lives symlinked
+# to ~/Documents/secret; keep it out of the tree)
+.env
+.env.*
+!.env.example

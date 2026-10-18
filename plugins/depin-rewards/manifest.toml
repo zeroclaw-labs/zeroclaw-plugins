@@ -1,0 +1,9 @@
+name = "depin-rewards"
+version = "0.1.0"
+description = "Watch a Helium hotspot's status + rewards, fire Telegram alerts, draft an unsigned rewards-claim tx. T0/T1 only. Palinurus Track C."
+author = "RECTOR"
+wasm_path = "depin_rewards.wasm"
+capabilities = ["tool"]
+# http_client: Relay API reads (hotspot status/rewards) + Telegram sendMessage (TLS host-side via wasi:http).
+# config_read: read this plugin's jailed config section (Relay key, hotspots, Telegram token/chat, RPC endpoint for claim tx).
+permissions = ["http_client", "config_read"]
