@@ -1,0 +1,6 @@
+name = "token-risk-check"
+version = "0.1.0"
+description = "Evaluates risk of Token-2022 mints by decoding extensions"
+wasm_path = "target/wasm32-wasip2/release/token_risk_check.wasm"
+capabilities = ["tool"]
+permissions = ["config_read", "http_client"]
