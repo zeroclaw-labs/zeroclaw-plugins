@@ -1,0 +1,12 @@
+name = "sol-tx"
+version = "0.1.0"
+description = "Look up a Solana transaction by signature (status, slot, blockTime, fee, accounts) via JSON-RPC getTransaction. Read-only."
+author = "kosmas"
+wasm_path = "sol_tx.wasm"
+capabilities = ["tool"]
+# http_client: the tool POSTs to a Solana JSON-RPC endpoint over wasi:http.
+#   Without it the component has no network surface at all.
+# config_read: the host injects this plugin's own config section (the optional
+#   `rpc_url` override) into execute args as `__config`. Without it the plugin
+#   still works, defaulting to Solana mainnet-beta.
+permissions = ["http_client", "config_read"]
