@@ -1,0 +1,7 @@
+name = "wallet-activity-narrator"
+version = "0.1.0"
+description = "Explain recent Solana wallet activity as concise received, sent, swap, or interaction summaries."
+author = "Tamer Mansour"
+wasm_path = "wallet_activity_narrator.wasm"
+capabilities = ["tool"]
+permissions = ["http_client", "config_read"]
