@@ -1,0 +1,33 @@
+[package]
+name = "kiosk-watch"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "ZeroClaw WIT tool plugin: verify a ProofKiosk Solana Pay payment on-chain (recipient + mint + amount + reference + finality) before actuation, and check device attestation heartbeat. T0. Recipient/mint/RPC are operator config, never the model."
+publish = false
+
+# cdylib for the wasm component; rlib so the pure verification core is testable
+# on the host with a plain `cargo test` (RPC mocked, no live network).
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+kiosk-core = { path = "../../crates/kiosk-core" }
+wit-bindgen = "0.46"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# The real HTTPS transport (waki) only exists inside a wasm component. Activate
+# kiosk-core's `http` feature ONLY when building for wasm, so host `cargo test`
+# never pulls waki and stays zero-network. No --features flag needed.
+[target.'cfg(target_family = "wasm")'.dependencies]
+kiosk-core = { path = "../../crates/kiosk-core", features = ["http"] }
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true
+codegen-units = 1
+
+# Standalone crate: built for wasm32-wasip2, not part of a parent workspace.
+[workspace]

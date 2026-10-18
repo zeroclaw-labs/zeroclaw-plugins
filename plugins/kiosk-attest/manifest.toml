@@ -1,0 +1,11 @@
+name = "kiosk-attest"
+version = "0.1.0"
+description = "Build an unsigned, hash-chained, durable-nonce memo attestation transaction (sensor readings + sale receipts) for the ProofKiosk. T1: holds no key, signs nothing; the transaction contains only the Memo and System (advance-nonce) programs, so it is structurally incapable of moving funds."
+author = "Sushant"
+wasm_path = "kiosk_attest.wasm"
+capabilities = ["tool"]
+# http_client: read-only JSON-RPC to recover the chain seq/prev and read the
+#              durable nonce (getSignaturesForAddress, getAccountInfo). No signing.
+# config_read: the host injects device id, nonce account/authority, RPC URL, and
+#              the metric allowlist as `__config`.
+permissions = ["http_client", "config_read"]

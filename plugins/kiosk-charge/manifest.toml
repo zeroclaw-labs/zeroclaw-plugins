@@ -1,0 +1,11 @@
+name = "kiosk-charge"
+version = "0.1.0"
+description = "Build a Solana Pay charge (URL + QR payload) for a configured item or capped amount. T1: zero secrets, zero network; recipient and prices are operator config."
+author = "Sushant"
+wasm_path = "kiosk_charge.wasm"
+capabilities = ["tool"]
+# config_read: the host injects this plugin's own config section (merchant
+# address, USDC mint, price list, amount cap, label) into execute args as
+# `__config`. This plugin needs no other permission — it never touches the
+# network and holds no secrets.
+permissions = ["config_read"]

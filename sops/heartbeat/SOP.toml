@@ -1,0 +1,32 @@
+# ProofKiosk — heartbeat SOP (EXAMPLE)
+#
+# Confirm the device is still attesting. If the newest attestation on the device
+# address is older than max_silence_s, kiosk_watch (heartbeat mode) returns
+# success == false and we alert the operator.
+#
+# NOTE: the `when:` field path (`$.steps.1.success`) binds to ToolResult.success —
+# same open maintainer question as the payment loop.
+
+name = "proofkiosk-heartbeat"
+description = "Alert the operator if the kiosk's attestation stream goes stale."
+
+[trigger]
+type = "cron"
+schedule = "0 */10 * * * *"        # every 10 minutes
+
+# 1. Check attestation freshness (heartbeat mode — no payment involved).
+[[steps]]
+tool = "kiosk_watch"
+tools = ["kiosk_watch"]
+[steps.args]
+mode           = "heartbeat"
+device_address = "DEVICE_ATTESTATION_PUBKEY"
+max_silence_s  = 1800              # stale if no attestation in 30 min
+
+# 2. Alert ONLY when the heartbeat is NOT live (stale or missing).
+[[steps]]
+when = "$.steps.1.success == false"
+tool = "notify_operator"
+tools = ["notify_operator"]
+[steps.args]
+message = "ProofKiosk heartbeat STALE/MISSING — check device."
