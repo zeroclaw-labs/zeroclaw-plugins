@@ -1,0 +1,6 @@
+name = "depin-attest"
+version = "0.1.0"
+description = "Verify Ed25519 signatures of DePIN sensor readings"
+capabilities = ["tool"]
+permissions = ["config_read", "http_client"]
+wasm_path = "target/wasm32-wasip2/release/depin_attest.wasm"
