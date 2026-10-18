@@ -1,0 +1,33 @@
+# Standalone crate (own [workspace]): built for wasm32-wasip2 as a tool plugin
+# component; the pure `risk` core (rlib) is host-tested with plain `cargo test`.
+# `solana-wasi` carries the chain primitives and is pure Rust on the host, so
+# the test build needs no wasm toolchain and makes no network call.
+[package]
+name = "token-risk-check"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "ZeroClaw WIT plugin: tell an agent who else has power over a Solana token before it accepts one."
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+wit-bindgen = "0.46"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+solana-wasi = "0.1"
+
+[dev-dependencies]
+# Only the tests need to encode fixture bytes; the component never does.
+base64 = "0.22"
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true
+codegen-units = 1
+
+# Standalone crate: built for wasm32-wasip2, not part of the host workspace.
+[workspace]
