@@ -1,0 +1,9 @@
+name = "token-delegate-sentinel"
+version = "0.1.0"
+description = "Audit SPL Token and Token-2022 account delegate permissions without signing or submitting transactions"
+author = "Shubbu03"
+wasm_path = "token_delegate_sentinel.wasm"
+capabilities = ["tool"]
+# http_client: read-only Solana JSON-RPC calls to the operator-configured URL.
+# config_read: read the RPC URL, wallet, expected cluster, and delegate allowlist.
+permissions = ["http_client", "config_read"]
