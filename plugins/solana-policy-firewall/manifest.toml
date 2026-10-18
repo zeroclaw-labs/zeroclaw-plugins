@@ -1,0 +1,8 @@
+name = "solana-policy-firewall"
+version = "0.1.0"
+description = "Fail-closed policy checks over serialized Solana transactions before an agent asks a human or wallet to sign"
+author = "Felix Wong"
+wasm_path = "solana_policy_firewall.wasm"
+capabilities = ["tool"]
+permissions = ["http_client", "config_read"]
+
