@@ -1,0 +1,17 @@
+[package]
+name = "solana-wasip2-core"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Solana wire-format primitives that compile for wasm32-wasip2. Parsing and serialization only — no signing, no keys, no network."
+repository = "https://github.com/zeroclaw-labs/zeroclaw-plugins"
+
+[dependencies]
+bs58 = "0.5"
+base64 = "0.22"
+sha2 = "0.10"
+
+[dev-dependencies]
+
+[lib]
+crate-type = ["rlib"]
