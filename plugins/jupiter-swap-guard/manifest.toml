@@ -1,0 +1,12 @@
+name = "jupiter-swap-guard"
+version = "0.1.0"
+description = "Build an unsigned, provably policy-checked Jupiter swap; binds the fund destination to the payer and never relays the aggregator's bytes"
+author = "JuanMarchetto"
+wasm_path = "jupiter_swap_guard.wasm"
+capabilities = ["tool"]
+# http_client: outbound HTTPS to the user-configured Jupiter endpoint and Solana
+#   RPC (TLS is performed host-side).
+# config_read: the host injects this plugin's own config section (allowlists,
+#   caps, rpc_url, payer_pubkey) into execute args as `__config`. Absent/empty
+#   config ⇒ the plugin refuses to build (fail closed).
+permissions = ["http_client", "config_read"]
