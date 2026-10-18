@@ -1,0 +1,9 @@
+name = "payment-watch"
+version = "0.1.0"
+description = "Watch a Solana address for an expected payment (amount + optional reference/memo). Tier 0: read-only RPC, secrets = RPC key at most."
+author = "nandy-technologies"
+wasm_path = "payment_watch.wasm"
+capabilities = ["tool"]
+# http_client: outbound HTTPS to the configured Solana RPC endpoint via wasi:http.
+# config_read: rpc_url / rpc key / defaults injected as __config.
+permissions = ["http_client", "config_read"]
