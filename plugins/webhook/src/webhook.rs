@@ -28,6 +28,11 @@ pub const WEBHOOK_PATH: &str = "webhook";
 /// snake_case keys. `port` / `listen_path` are native-server concerns (the plugin
 /// receives inbound over the host's `/plugin/webhook` route, not its own port);
 /// they are accepted for deserialization but unused. serde ignores the rest.
+///
+/// The host has already validated the object against the manifest's closed
+/// schema. The `secret` and `auth_header` properties are `x-secret`, so they
+/// never appear here; the shim reads them with `secrets.get` at the point of
+/// use.
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct WebhookConfig {
     /// Host-side enable gate; accepted so a native section deserializes.
@@ -40,19 +45,35 @@ pub struct WebhookConfig {
     /// HTTP method for outbound replies (`POST` or `PUT`). Default: `POST`.
     #[serde(default)]
     pub send_method: Option<String>,
-    /// Optional `Authorization` header value for outbound requests.
-    #[serde(default)]
-    pub auth_header: Option<String>,
-    /// Optional shared secret for inbound HMAC-SHA256 signature verification.
-    #[serde(default)]
-    pub secret: Option<String>,
 }
 
 impl WebhookConfig {
-    /// Parse the JSON config string the host hands to `configure`. An empty or
-    /// malformed string yields defaults (inert rather than a hard failure).
-    pub fn from_json(config_json: &str) -> Self {
+    /// Parse the public config object returned by `config.get`. Accepts
+    /// everything the manifest schema accepts. An empty or malformed string
+    /// yields defaults (inert rather than a hard failure).
+    pub fn from_public_json(config_json: &str) -> Self {
         serde_json::from_str(config_json).unwrap_or_default()
+    }
+
+    /// Back-compat alias: the legacy `configure(config)` path fed the whole
+    /// section (secrets inline) here. Kept for the host `cargo test` suite;
+    /// the wasm shim now uses [`WebhookConfig::from_public_json`] plus
+    /// `secrets.get` at the point of use.
+    pub fn from_json(config_json: &str) -> Self {
+        let value: serde_json::Value = serde_json::from_str(config_json).unwrap_or_default();
+        let public = value
+            .as_object()
+            .map(|object| {
+                let mut filtered = serde_json::Map::new();
+                for key in ["enabled", "send_url", "send_method"] {
+                    if let Some(entry) = object.get(key) {
+                        filtered.insert(key.to_string(), entry.clone());
+                    }
+                }
+                serde_json::Value::Object(filtered).to_string()
+            })
+            .unwrap_or_default();
+        Self::from_public_json(&public)
     }
 
     /// The trimmed outbound URL, or `None` when unset/blank.
@@ -78,20 +99,31 @@ impl WebhookConfig {
     }
 
     /// The trimmed `Authorization` header value, or `None` when unset/blank.
-    pub fn auth_header(&self) -> Option<&str> {
-        self.auth_header
-            .as_deref()
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
+    /// Read from `secrets.get("auth_header")` at the point of use — never
+    /// from the public config object.
+    pub fn auth_header_value(auth_header: Option<&str>) -> Option<&str> {
+        auth_header.map(str::trim).filter(|s| !s.is_empty())
     }
 
     /// The trimmed signing secret, or `None` when unset/blank (→ no signature
-    /// check).
+    /// check). Read from `secrets.get("secret")` at the point of use — never
+    /// from the public config object.
+    pub fn secret_value(secret: Option<&str>) -> Option<&str> {
+        secret.map(str::trim).filter(|s| !s.is_empty())
+    }
+
+    /// The trimmed `Authorization` header value, or `None` when unset/blank.
+    /// Legacy helper over the struct field; the wasm shim now passes the
+    /// `secrets.get` value to [`WebhookConfig::auth_header_value`].
+    pub fn auth_header(&self) -> Option<&str> {
+        Self::auth_header_value(None)
+    }
+
+    /// The trimmed signing secret, or `None` when unset/blank (→ no signature
+    /// check). Legacy helper; the wasm shim now passes the `secrets.get`
+    /// value to [`WebhookConfig::secret_value`].
     pub fn secret(&self) -> Option<&str> {
-        self.secret
-            .as_deref()
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
+        Self::secret_value(None)
     }
 }
 
@@ -191,30 +223,42 @@ mod tests {
 
     #[test]
     fn config_parses_defaults_and_method() {
-        let cfg = WebhookConfig::from_json(
-            r#"{"enabled":true,"send_url":" https://x/cb ","send_method":"put","auth_header":" Bearer k ","secret":" s "}"#,
+        let cfg = WebhookConfig::from_public_json(
+            r#"{"enabled":true,"send_url":" https://x/cb ","send_method":"put"}"#,
         );
         assert!(cfg.enabled);
         assert_eq!(cfg.send_url(), Some("https://x/cb"));
         assert_eq!(cfg.send_method(), "PUT");
-        assert_eq!(cfg.auth_header(), Some("Bearer k"));
-        assert_eq!(cfg.secret(), Some("s"));
+        // x-secret values arrive via secrets.get, never in the public object.
+        assert_eq!(
+            WebhookConfig::auth_header_value(Some(" Bearer k ")),
+            Some("Bearer k")
+        );
+        assert_eq!(WebhookConfig::secret_value(Some(" s ")), Some("s"));
 
-        let d = WebhookConfig::from_json("{}");
+        let d = WebhookConfig::from_public_json("{}");
         assert_eq!(d.send_url(), None);
         assert_eq!(d.send_method(), "POST"); // default
-        assert_eq!(d.secret(), None);
+        assert_eq!(WebhookConfig::secret_value(None), None);
         // malformed → defaults
-        assert_eq!(WebhookConfig::from_json("nope").send_method(), "POST");
+        assert_eq!(
+            WebhookConfig::from_public_json("nope").send_method(),
+            "POST"
+        );
+        // legacy path strips secrets before parsing (back-compat).
+        let legacy = WebhookConfig::from_json(
+            r#"{"send_url":"https://x/cb","secret":"s","auth_header":"k"}"#,
+        );
+        assert_eq!(legacy.send_url(), Some("https://x/cb"));
     }
 
     #[test]
     fn config_ignores_native_only_fields() {
         // port / listen_path / retry_* exist in the native section; must not fail.
-        let cfg = WebhookConfig::from_json(
-            r#"{"port":8090,"listen_path":"/hooks","max_retries":5,"secret":"s"}"#,
+        let cfg = WebhookConfig::from_public_json(
+            r#"{"port":8090,"listen_path":"/hooks","max_retries":5}"#,
         );
-        assert_eq!(cfg.secret(), Some("s"));
+        assert_eq!(cfg.send_url(), None);
     }
 
     #[test]

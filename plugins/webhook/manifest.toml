@@ -4,14 +4,40 @@ description = "Generic inbound Webhook channel plugin for ZeroClaw: signed HTTP 
 author = "JordanTheJet"
 wasm_path = "webhook.wasm"
 capabilities = ["channel"]
-# Source-only until ZeroClaw exposes webhook ingress to channel plugins.
+# Needs ZeroClaw v0.8.6 or later: it binds the plugin contract first released
+# in v0.8.6 (typed config through config.get, credentials through
+# secrets.get), and reads both when the host configures the instance.
 registry = false
 # http_client: outbound reply POST/PUT to the configured send_url (TLS host-side).
-# config_read: read this channel's settings + secret (send_url, send_method,
-# auth_header, secret) from its config section.
+# config_read: the typed config below through config.get; secret and
+#   auth_header are x-secret and reach the plugin only through secrets.get.
 permissions = ["http_client", "config_read"]
-# provides: mirror the built-in `webhook` channel — read [channels.webhook.*] and
-# honor native-wins. The plugin serves inbound over the host webhook route
-# (/plugin/webhook); requires a host with the webhook-ingress capability
-# (zeroclaw#8862).
+# provides: the built-in channel this package can stand in for. Hosts construct
+# this plugin only from an explicit [channels.plugin.<alias>] binding, so it
+# never reads [channels.webhook.*].
 provides = "webhook"
+
+[config_schema]
+"$schema" = "https://json-schema.org/draft/2020-12/schema"
+type = "object"
+additionalProperties = false
+
+[config_schema.properties.send_url]
+type = "string"
+
+[config_schema.properties.send_method]
+type = "string"
+
+# Outbound `Authorization` header value. Kept out of the public object: it is
+# a credential and reaches the plugin only through `secrets.get`.
+[config_schema.properties.auth_header]
+type = "string"
+x-secret = true
+minLength = 1
+
+# Shared secret for inbound HMAC-SHA256 signature verification. Kept out of
+# the public object for the same reason as `auth_header`.
+[config_schema.properties.secret]
+type = "string"
+x-secret = true
+minLength = 1
