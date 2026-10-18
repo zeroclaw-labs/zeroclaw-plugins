@@ -1,0 +1,10 @@
+name = "x402-settle"
+version = "0.1.0"
+description = "Pay HTTP 402 (x402 exact/SVM) API charges in SPL tokens under hard in-plugin caps and allowlists (T2, scoped session key)"
+author = "luongs3"
+wasm_path = "x402_settle.wasm"
+capabilities = ["tool"]
+# http_client: the paywalled resource + Solana RPC.
+# config_read: session key, caps, and allowlists live in the plugin's own
+# jailed config section — never in code, never visible to the LLM.
+permissions = ["http_client", "config_read"]

@@ -1,0 +1,10 @@
+name = "nonce-transfer-build"
+version = "0.1.0"
+description = "Build unsigned durable-nonce SPL transfers with operator-enforced allowlists and caps (T1: never holds a key)"
+author = "luongs3"
+wasm_path = "nonce_transfer_build.wasm"
+capabilities = ["tool"]
+# http_client: JSON-RPC calls (nonce account fetch, mint decimals, ATA checks).
+# config_read: the operator's spend policy (allowlists, caps), nonce account
+# address and RPC URL live in this plugin's own jailed config section.
+permissions = ["http_client", "config_read"]

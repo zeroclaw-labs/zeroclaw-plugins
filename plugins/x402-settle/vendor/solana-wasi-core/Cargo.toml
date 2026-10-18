@@ -1,0 +1,20 @@
+[package]
+name = "solana-wasi-core"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Pure-Rust Solana primitives for wasm32-wasip2 WIT components: base58, compact-u16, instruction encoding, legacy message + durable-nonce transaction construction, JSON-RPC shaping, and a fail-closed spend policy engine. No solana-sdk, no network, no wasm dependency — host-testable with plain `cargo test`."
+publish = false
+
+[lib]
+crate-type = ["rlib"]
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+bs58 = "0.5"
+base64 = "0.22"
+sha2 = "0.10"
+curve25519-dalek = { version = "4", default-features = false, features = ["alloc"] }
+ed25519-dalek = { version = "2", default-features = false, features = ["alloc", "rand_core"] }
+

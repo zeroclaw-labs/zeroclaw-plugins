@@ -1,0 +1,27 @@
+[package]
+name = "payment-watch"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "ZeroClaw WIT tool plugin: watch a Solana address for an expected SPL payment (amount + mint + optional memo reference) and report a compact confirmation. T0 read-only — closes the loop on agent-proposed payments. SOP/cron friendly."
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+solana-wasi-core = { path = "vendor/solana-wasi-core" }
+wit-bindgen = "0.46"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[target.'cfg(target_family = "wasm")'.dependencies]
+waki = { version = "0.5.1", features = ["json"] }
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true
+codegen-units = 1
+
+[workspace]
