@@ -1,0 +1,43 @@
+name = "solana-pay-request"
+version = "0.1.0"
+description = "Build a Solana Pay transfer-request URL and QR-ready payload for a SOL or SPL-token payment (recipient, amount, SPL mint, references, label, message, memo); free text is sanitized and percent-encoded so it can never inject a different recipient"
+author = "belumume"
+wasm_path = "solana_pay_request.wasm"
+capabilities = ["tool"]
+# permissions = []: this plugin needs NOTHING. It holds no secrets, so it never
+# reads config (no config_read); it makes no network calls, so it never opens a
+# socket (no http_client). It is pure computation: validate the request, build
+# the `solana:` URL. Declaring only the permissions actually used (here, none) is
+# the honest minimum: a compromised copy of this plugin has zero I/O surface.
+permissions = []
+
+[custody]
+# Properties of the COMPILED artifact rather than of this comment: a capability
+# absent from the component's import table has no host function to be called
+# through, whatever the source says. Re-derive from this directory with
+#   rustup target add wasm32-wasip2
+#   cargo build --locked --target wasm32-wasip2 --release
+# and read the import table of the resulting component, for example with
+#   wasm-tools component wit target/wasm32-wasip2/release/solana_pay_request.wasm
+# The upstream repository carries the checker that asserts this block against
+# that table; see https://github.com/belumume/zeroclaw-solana.
+tier = "T0"
+network_reachable = false
+filesystem = false
+host_capabilities = [
+    "clock",
+    "environment",
+    "host-logging",
+    "host-types",
+    "io-streams",
+    "process-exit",
+    "stdio",
+]
+# DECLARED, NOT CHECKED, and labelled rather than dropped. Neither is decidable
+# from an import table: signing is pure computation that imports nothing, and
+# operator config would arrive as a `__config` field inside the tool arguments,
+# crossing no import boundary. `config_injected` is cross-checked against
+# `permissions` above, which is a manifest-internal consistency check and not a
+# claim about the binary.
+signs = false
+config_injected = false
