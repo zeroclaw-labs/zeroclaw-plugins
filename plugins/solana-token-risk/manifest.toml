@@ -1,0 +1,9 @@
+name = "solana-token-risk"
+version = "0.1.0"
+description = "Read-only Solana token mint authority and token-account concentration summary"
+author = "LIANG KANG"
+wasm_path = "solana_token_risk.wasm"
+capabilities = ["tool"]
+# `http_client` is used only for two JSON-RPC read calls to the operator's
+# configured HTTPS endpoint. `config_read` exposes only this plugin's section.
+permissions = ["http_client", "config_read"]
