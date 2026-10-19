@@ -3,11 +3,11 @@
 //! Everything here is deterministic: config parsing, gateway frame parsing,
 //! the IDENTIFY/RESUME/HEARTBEAT payload builders, the MESSAGE_CREATE filter,
 //! message chunking, REST response classification, the delivery rules for a
-//! reply, and the [`Gateway`] state machine that decides when to discover,
-//! dial, handshake, heartbeat, back off, or park. The component shim in
-//! `lib.rs` performs the I/O those decisions call for and feeds the results
-//! back, so this module is covered by a plain host `cargo test` without a live
-//! Discord connection.
+//! reply, the [`ChannelChecks`] schedule, and the [`Gateway`] state machine
+//! that decides when to discover, dial, handshake, heartbeat, back off, or
+//! park. The component shim in `lib.rs` performs the I/O those decisions call
+//! for and feeds the results back, so this module is covered by a plain host
+//! `cargo test` without a live Discord connection.
 //!
 //! No type here holds the bot token. The token is an argument of the payload
 //! builders only, so the shim reads it from the host at the point of use and
@@ -767,6 +767,171 @@ pub fn with_progress(reason: String, delivered: usize, total: usize) -> String {
         reason
     } else {
         format!("{reason} (after {delivered} of {total} parts were delivered)")
+    }
+}
+
+// ── Channel checks ───────────────────────────────────────────────────────────
+
+/// Minimum spacing between two channel checks, so a long `channel_ids` list
+/// is checked over several calls rather than in a burst.
+pub const CHANNEL_CHECK_SPACING_MS: u64 = 1_000;
+
+/// A check that gets no response or a 5xx is tried again this many times,
+/// first after this long and then after twice as long.
+pub const CHANNEL_CHECK_RETRIES: u32 = 2;
+pub const CHANNEL_CHECK_RETRY_MS: u64 = 30_000;
+
+/// What `GET /channels/{id}` says about one `channel_ids` entry.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ChannelAccess {
+    /// 200: the bot can view the channel.
+    Visible,
+    /// 403: the bot cannot view the channel, so Discord sends it no events
+    /// from there.
+    Hidden,
+    /// 404, or 400 (expected for an id that is not a Discord id): Discord
+    /// knows no channel with this id.
+    Unknown,
+    /// 429: check again after this long.
+    RateLimited { retry_after_ms: u64 },
+    /// Any other status, or a request that never completed (`status` 0).
+    Failed { status: u16 },
+}
+
+impl ChannelAccess {
+    /// What the operator can do about an entry the bot cannot use. Never
+    /// includes config values.
+    pub fn hint(&self) -> Option<&'static str> {
+        match self {
+            Self::Hidden => Some(
+                "Discord sends no messages from it: grant the bot's role or member View Channel there, or add the bot to the channel's server",
+            ),
+            Self::Unknown => Some(
+                "Discord knows no channel with this id: it was deleted or is not a channel id; fix this entry in channel_ids",
+            ),
+            _ => None,
+        }
+    }
+}
+
+/// Classify a `GET /channels/{id}` response.
+pub fn classify_channel(status: u16, body: &[u8]) -> ChannelAccess {
+    match status {
+        200 => ChannelAccess::Visible,
+        403 => ChannelAccess::Hidden,
+        // A 20-digit id above u64::MAX passes the config schema but is not a
+        // snowflake; Discord is expected to refuse it with a 400.
+        400 | 404 => ChannelAccess::Unknown,
+        429 => ChannelAccess::RateLimited {
+            retry_after_ms: retry_after_ms(body).unwrap_or(BACKOFF_CEILING_MS),
+        },
+        _ => ChannelAccess::Failed { status },
+    }
+}
+
+/// What the shim logs after a check.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CheckReport {
+    /// Nothing: the bot can view the channel, or the check runs again later.
+    Quiet,
+    /// The bot cannot use this entry: warn with the access's hint.
+    Unusable,
+    /// The check kept failing: say the entry is checked again next session.
+    GaveUp,
+}
+
+/// The check, once per session, that the bot can view each `channel_ids`
+/// entry. Discord sends no events from a channel the bot cannot view, so such
+/// an entry is otherwise silent: no message, no error, and a healthy instance.
+///
+/// It keeps which entries this session has checked, not the list: the list is
+/// read from the config on each call, so an entry an edit adds is checked too.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ChannelChecks {
+    checked: Vec<String>,
+    /// The entry whose checks keep failing, and how many times they have.
+    /// Its retry wait holds back every check, on purpose: no response or a
+    /// 5xx almost always means every request would fail.
+    failing: Option<(String, u32)>,
+    /// When the next check may start; `None` before the first session.
+    next_at_ms: Option<u64>,
+}
+
+impl ChannelChecks {
+    /// A session was established. READY starts the checks over, keeping any
+    /// pending wait; a resume continues where the session's checks left off.
+    pub fn on_identified(&mut self, now_ms: u64, resumed: bool) {
+        if !resumed {
+            self.checked.clear();
+            self.failing = None;
+            self.next_at_ms = Some(self.next_at_ms.map_or(now_ms, |at| at.max(now_ms)));
+        }
+    }
+
+    /// The entry to check now: the first one this session has not checked,
+    /// once the spacing or a wait allows. Only while `gateway` has a session
+    /// and `idle` says this call read every queued gateway event and has no
+    /// message waiting for the host. `None` when `channel_ids` is empty, which
+    /// watches every channel.
+    pub fn due<'a>(
+        &self,
+        now_ms: u64,
+        cfg: &'a DiscordConfig,
+        gateway: &Gateway,
+        idle: bool,
+    ) -> Option<&'a str> {
+        if !gateway.identified() || !idle || now_ms < self.next_at_ms? {
+            return None;
+        }
+        cfg.channel_ids
+            .iter()
+            .map(String::as_str)
+            .find(|id| !self.checked.iter().any(|checked| checked == id))
+    }
+
+    /// Record the outcome of checking `id` and say what to log. A rate-limited
+    /// entry is checked again after the wait. One that got no response or a
+    /// 5xx is retried [`CHANNEL_CHECK_RETRIES`] times; any other outcome, or a
+    /// failure past the retries, is final for this session.
+    pub fn on_checked(&mut self, now_ms: u64, id: &str, access: &ChannelAccess) -> CheckReport {
+        let (wait, report) = match access {
+            ChannelAccess::RateLimited { retry_after_ms } => (
+                (*retry_after_ms).max(CHANNEL_CHECK_SPACING_MS),
+                CheckReport::Quiet,
+            ),
+            ChannelAccess::Failed { status } if *status == 0 || (500..600).contains(status) => {
+                let failures = match &self.failing {
+                    Some((failing, failures)) if failing == id => failures + 1,
+                    _ => 1,
+                };
+                if failures <= CHANNEL_CHECK_RETRIES {
+                    self.failing = Some((id.to_string(), failures));
+                    (CHANNEL_CHECK_RETRY_MS << (failures - 1), CheckReport::Quiet)
+                } else {
+                    self.settle(id);
+                    (CHANNEL_CHECK_SPACING_MS, CheckReport::GaveUp)
+                }
+            }
+            ChannelAccess::Failed { .. } => {
+                self.settle(id);
+                (CHANNEL_CHECK_SPACING_MS, CheckReport::GaveUp)
+            }
+            ChannelAccess::Hidden | ChannelAccess::Unknown => {
+                self.settle(id);
+                (CHANNEL_CHECK_SPACING_MS, CheckReport::Unusable)
+            }
+            ChannelAccess::Visible => {
+                self.settle(id);
+                (CHANNEL_CHECK_SPACING_MS, CheckReport::Quiet)
+            }
+        };
+        self.next_at_ms = Some(now_ms.saturating_add(wait));
+        report
+    }
+
+    fn settle(&mut self, id: &str) {
+        self.checked.push(id.to_string());
+        self.failing = None;
     }
 }
 
@@ -2281,6 +2446,289 @@ mod tests {
             .unwrap_err()
             .contains("rate limited"));
         assert_eq!(script.posts.len(), 1);
+    }
+
+    // ── channel checks ──
+
+    fn channels(ids: &[&str]) -> DiscordConfig {
+        DiscordConfig {
+            channel_ids: ids.iter().map(|id| (*id).to_string()).collect(),
+            ..DiscordConfig::default()
+        }
+    }
+
+    /// Checks started by READY on a gateway with a session.
+    fn checking(t: u64) -> (ChannelChecks, Gateway) {
+        let (gw, _) = established(t);
+        let mut checks = ChannelChecks::default();
+        checks.on_identified(t, false);
+        (checks, gw)
+    }
+
+    #[test]
+    fn channel_check_classification() {
+        assert_eq!(
+            classify_channel(200, br#"{"id":"10","type":0}"#),
+            ChannelAccess::Visible
+        );
+        assert_eq!(
+            classify_channel(403, br#"{"code":50001,"message":"Missing Access"}"#),
+            ChannelAccess::Hidden
+        );
+        assert_eq!(
+            classify_channel(404, br#"{"code":10003,"message":"Unknown Channel"}"#),
+            ChannelAccess::Unknown
+        );
+        assert_eq!(
+            classify_channel(400, br#"{"code":50035,"message":"Invalid Form Body"}"#),
+            ChannelAccess::Unknown,
+            "an id that is not a snowflake"
+        );
+        assert_eq!(
+            classify_channel(429, br#"{"retry_after":1.5}"#),
+            ChannelAccess::RateLimited {
+                retry_after_ms: 1500
+            }
+        );
+        assert_eq!(
+            classify_channel(429, b""),
+            ChannelAccess::RateLimited {
+                retry_after_ms: BACKOFF_CEILING_MS
+            }
+        );
+        assert_eq!(
+            classify_channel(401, b""),
+            ChannelAccess::Failed { status: 401 }
+        );
+        assert_eq!(
+            classify_channel(502, b"<html>"),
+            ChannelAccess::Failed { status: 502 }
+        );
+    }
+
+    #[test]
+    fn channel_check_hints_name_the_fix_for_403_and_404_only() {
+        assert!(ChannelAccess::Hidden
+            .hint()
+            .is_some_and(|hint| hint.contains("View Channel")));
+        assert!(ChannelAccess::Unknown
+            .hint()
+            .is_some_and(|hint| hint.contains("channel_ids")));
+        assert_eq!(ChannelAccess::Visible.hint(), None);
+        assert_eq!(ChannelAccess::Failed { status: 0 }.hint(), None);
+    }
+
+    #[test]
+    fn each_entry_is_checked_once_per_session() {
+        let cfg = channels(&["10", "20", "30"]);
+        let answer = |id: &str| match id {
+            "10" => (200, r#"{"id":"10","type":0}"#),
+            "20" => (403, r#"{"code":50001,"message":"Missing Access"}"#),
+            _ => (404, r#"{"code":10003,"message":"Unknown Channel"}"#),
+        };
+        let (gw, _) = established(0);
+        let mut checks = ChannelChecks::default();
+        assert_eq!(checks.due(0, &cfg, &gw, true), None, "nothing before READY");
+        checks.on_identified(0, false);
+        let mut seen = Vec::new();
+        for t in (0..60_000).step_by(250) {
+            if let Some(id) = checks.due(t, &cfg, &gw, true) {
+                let (status, body) = answer(id);
+                let access = classify_channel(status, body.as_bytes());
+                let report = checks.on_checked(t, id, &access);
+                seen.push((id, access, report));
+            }
+        }
+        assert_eq!(
+            seen,
+            vec![
+                ("10", ChannelAccess::Visible, CheckReport::Quiet),
+                ("20", ChannelAccess::Hidden, CheckReport::Unusable),
+                ("30", ChannelAccess::Unknown, CheckReport::Unusable),
+            ],
+            "one check, so at most one warning, per entry"
+        );
+    }
+
+    #[test]
+    fn a_new_session_checks_again_and_a_resume_continues() {
+        let cfg = channels(&["10", "20"]);
+        let (mut checks, gw) = checking(0);
+        assert_eq!(checks.due(0, &cfg, &gw, true), Some("10"));
+        checks.on_checked(0, "10", &ChannelAccess::Hidden);
+        // The connection drops and the session resumes: 10 is not checked
+        // again.
+        checks.on_identified(5_000, true);
+        assert_eq!(checks.due(5_000, &cfg, &gw, true), Some("20"));
+        checks.on_checked(5_000, "20", &ChannelAccess::Visible);
+        assert_eq!(
+            checks.due(60_000, &cfg, &gw, true),
+            None,
+            "every entry is checked"
+        );
+        // READY starts a new session, which checks every entry again.
+        checks.on_identified(60_000, false);
+        assert_eq!(checks.due(60_000, &cfg, &gw, true), Some("10"));
+    }
+
+    #[test]
+    fn nothing_is_checked_between_a_disconnect_and_resumed() {
+        let cfg = channels(&["10"]);
+        let (mut checks, mut gw) = checking(0);
+        gw.on_disconnect(10, Disconnect::Transport);
+        assert_eq!(checks.due(2_000, &cfg, &gw, true), None, "no session");
+        gw.on_connected(2_000, "wss://resume.discord.gg", true);
+        gw.on_frame(2_000, &hello(40_000), &cfg);
+        gw.on_handshake_sent(2_000);
+        assert_eq!(
+            checks.due(2_000, &cfg, &gw, true),
+            None,
+            "the resume has not completed"
+        );
+        assert_eq!(
+            gw.on_frame(2_100, r#"{"op":0,"t":"RESUMED","s":2,"d":{}}"#, &cfg),
+            FrameAction::Identified { resumed: true }
+        );
+        checks.on_identified(2_100, true);
+        assert_eq!(checks.due(2_100, &cfg, &gw, true), Some("10"));
+    }
+
+    #[test]
+    fn nothing_is_checked_while_gateway_events_or_messages_wait() {
+        let cfg = channels(&["10"]);
+        let (checks, gw) = checking(0);
+        assert_eq!(checks.due(0, &cfg, &gw, false), None);
+        assert_eq!(checks.due(0, &cfg, &gw, true), Some("10"));
+    }
+
+    #[test]
+    fn channel_checks_are_spaced_and_wait_out_a_rate_limit() {
+        let cfg = channels(&["10", "20"]);
+        let (mut checks, gw) = checking(0);
+        assert_eq!(checks.due(0, &cfg, &gw, true), Some("10"));
+        assert_eq!(
+            checks.on_checked(0, "10", &classify_channel(429, br#"{"retry_after":3}"#)),
+            CheckReport::Quiet
+        );
+        assert_eq!(checks.due(2_999, &cfg, &gw, true), None);
+        assert_eq!(
+            checks.due(3_000, &cfg, &gw, true),
+            Some("10"),
+            "the same entry again"
+        );
+        checks.on_checked(3_000, "10", &ChannelAccess::Visible);
+        assert_eq!(
+            checks.due(3_000 + CHANNEL_CHECK_SPACING_MS - 1, &cfg, &gw, true),
+            None
+        );
+        assert_eq!(
+            checks.due(3_000 + CHANNEL_CHECK_SPACING_MS, &cfg, &gw, true),
+            Some("20")
+        );
+        // A rate limit shorter than the spacing still waits the spacing.
+        checks.on_checked(
+            4_000,
+            "20",
+            &ChannelAccess::RateLimited { retry_after_ms: 1 },
+        );
+        assert_eq!(
+            checks.due(4_000 + CHANNEL_CHECK_SPACING_MS - 1, &cfg, &gw, true),
+            None
+        );
+        assert_eq!(
+            checks.due(4_000 + CHANNEL_CHECK_SPACING_MS, &cfg, &gw, true),
+            Some("20")
+        );
+    }
+
+    #[test]
+    fn a_ready_keeps_a_pending_rate_limit_wait() {
+        let cfg = channels(&["10"]);
+        let (mut checks, gw) = checking(0);
+        checks.on_checked(
+            0,
+            "10",
+            &ChannelAccess::RateLimited {
+                retry_after_ms: 30_000,
+            },
+        );
+        // The session is invalidated and a new one starts 8 s in.
+        checks.on_identified(8_000, false);
+        assert_eq!(checks.due(29_999, &cfg, &gw, true), None);
+        assert_eq!(checks.due(30_000, &cfg, &gw, true), Some("10"));
+    }
+
+    #[test]
+    fn a_check_without_a_response_is_retried_twice_then_reported() {
+        let cfg = channels(&["10", "20"]);
+        let (mut checks, gw) = checking(0);
+        let failed = ChannelAccess::Failed { status: 0 };
+        assert_eq!(checks.on_checked(0, "10", &failed), CheckReport::Quiet);
+        assert_eq!(
+            checks.due(CHANNEL_CHECK_RETRY_MS - 1, &cfg, &gw, true),
+            None
+        );
+        let t = CHANNEL_CHECK_RETRY_MS;
+        assert_eq!(checks.due(t, &cfg, &gw, true), Some("10"));
+        let bad_gateway = ChannelAccess::Failed { status: 502 };
+        assert_eq!(checks.on_checked(t, "10", &bad_gateway), CheckReport::Quiet);
+        let t = t + 2 * CHANNEL_CHECK_RETRY_MS;
+        assert_eq!(checks.due(t - 1, &cfg, &gw, true), None, "twice as long");
+        assert_eq!(checks.due(t, &cfg, &gw, true), Some("10"));
+        assert_eq!(checks.on_checked(t, "10", &failed), CheckReport::GaveUp);
+        // Given up for this session; the next entry follows.
+        let t = t + CHANNEL_CHECK_SPACING_MS;
+        assert_eq!(checks.due(t, &cfg, &gw, true), Some("20"));
+        checks.on_checked(t, "20", &ChannelAccess::Visible);
+        assert_eq!(checks.due(t + 60_000, &cfg, &gw, true), None);
+    }
+
+    #[test]
+    fn a_new_session_gives_a_failing_entry_its_retries_back() {
+        let (mut checks, _) = checking(0);
+        let failed = ChannelAccess::Failed { status: 0 };
+        assert_eq!(checks.on_checked(0, "10", &failed), CheckReport::Quiet);
+        checks.on_identified(1_000, false);
+        assert_eq!(checks.on_checked(30_000, "10", &failed), CheckReport::Quiet);
+        assert_eq!(checks.on_checked(90_000, "10", &failed), CheckReport::Quiet);
+        assert_eq!(
+            checks.on_checked(150_000, "10", &failed),
+            CheckReport::GaveUp
+        );
+    }
+
+    #[test]
+    fn any_other_failure_is_reported_at_once() {
+        let cfg = channels(&["10"]);
+        let (mut checks, gw) = checking(0);
+        assert_eq!(
+            checks.on_checked(0, "10", &ChannelAccess::Failed { status: 401 }),
+            CheckReport::GaveUp
+        );
+        assert_eq!(checks.due(60_000, &cfg, &gw, true), None);
+    }
+
+    #[test]
+    fn channel_checks_follow_the_current_config() {
+        let (mut checks, gw) = checking(0);
+        assert_eq!(
+            checks.due(0, &DiscordConfig::default(), &gw, true),
+            None,
+            "an empty list watches every channel"
+        );
+        let cfg = channels(&["10", "10"]);
+        assert_eq!(checks.due(0, &cfg, &gw, true), Some("10"));
+        checks.on_checked(0, "10", &ChannelAccess::Visible);
+        assert_eq!(
+            checks.due(60_000, &cfg, &gw, true),
+            None,
+            "a duplicate entry is checked once"
+        );
+        // An entry an edit adds is checked on a later call.
+        assert_eq!(
+            checks.due(60_000, &channels(&["10", "30"]), &gw, true),
+            Some("30")
+        );
     }
 
     // ── close codes ──
