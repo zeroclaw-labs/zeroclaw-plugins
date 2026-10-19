@@ -1,5 +1,5 @@
 name = "discord"
-version = "0.1.1"
+version = "0.1.2"
 description = "Discord channel plugin for ZeroClaw: the Gateway over the host websocket resource, replies over REST through wasi:http."
 author = "JordanTheJet"
 wasm_path = "discord.wasm"
@@ -10,7 +10,8 @@ registry = true
 # websocket_client: the Discord Gateway, a persistent WebSocket the host dials
 #   and pumps; the plugin speaks the Gateway protocol over it.
 # http_client: gateway discovery (GET /gateway/bot), replies
-#   (POST /channels/{id}/messages), and the health check (GET /users/@me).
+#   (POST /channels/{id}/messages), the health check (GET /users/@me), and
+#   the channel_ids check (GET /channels/{id}).
 # config_read: the typed config below through config.get; bot_token is
 #   x-secret and reaches the plugin only through secrets.get.
 permissions = ["websocket_client", "http_client", "config_read"]
