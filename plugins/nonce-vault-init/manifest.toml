@@ -1,0 +1,10 @@
+name = "nonce-vault-init"
+version = "0.1.0"
+description = "Build the one-time unsigned setup transaction for a durable nonce account, seed-derived from the human wallet (Aval suite, T1)"
+author = "bryankwandou"
+wasm_path = "nonce_vault_init.wasm"
+capabilities = ["tool"]
+# http_client: JSON-RPC calls to the operator's own Solana RPC endpoint
+#   (TLS is performed host-side). No other hosts are contacted.
+# config_read: rpc_url from this plugin's own jailed config section.
+permissions = ["http_client", "config_read"]

@@ -1,0 +1,29 @@
+# Aval suite: turns a charge into a Solana Pay transfer request and the
+# reference key that identifies it on-chain. Pure logic in `pay.rs`
+# (host-tested), wasm shim in `lib.rs`.
+#
+# This exists because both halves of the job were originally SOP steps for the
+# model to perform, and a model can do neither: a reference key is 32 bytes of
+# entropy and a transfer request has exact encoding rules. Asked anyway, it
+# invented HTTP endpoints. See src/pay.rs.
+[package]
+name = "solana-pay-build"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "ZeroClaw WIT plugin: build a Solana Pay transfer request and its reference key — allowlisted, capped, zero secrets."
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+sha2 = { version = "0.10", default-features = false }
+wit-bindgen = "0.46"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.release]
+# Money code: abort on arithmetic overflow rather than wrap, even in release.
+overflow-checks = true
+opt-level = "s"

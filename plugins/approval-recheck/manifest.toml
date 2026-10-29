@@ -1,0 +1,10 @@
+name = "approval-recheck"
+version = "0.1.0"
+description = "Read-only approval-time verification of pending durable transactions: nonce freshness, balance drift, decoded intent (Aval suite, T0)"
+author = "bryankwandou"
+wasm_path = "approval_recheck.wasm"
+capabilities = ["tool"]
+# http_client: JSON-RPC calls to the operator's own Solana RPC endpoint
+#   (TLS is performed host-side). No other hosts are contacted.
+# config_read: rpc_url from this plugin's own jailed config section.
+permissions = ["http_client", "config_read"]

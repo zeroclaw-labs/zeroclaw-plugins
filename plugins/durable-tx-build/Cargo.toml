@@ -1,0 +1,36 @@
+# Aval flagship: builds unsigned SOL/SPL transfers anchored to a durable nonce
+# so they survive an approval queue indefinitely. Pure logic in `build.rs`
+# (host-tested), wasm shim in `lib.rs`.
+[package]
+name = "durable-tx-build"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "ZeroClaw WIT plugin: build unsigned Solana transfers on durable nonces — approval-queue-safe, allowlisted, capped, zero secrets."
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# Vendored core (src/core/) uses the same two crypto deps as aval-core:
+# sha2 + curve25519-dalek are the minimum for PDA/ATA derivation.
+sha2 = { version = "0.10", default-features = false }
+curve25519-dalek = { version = "4", default-features = false, features = ["alloc"] }
+wit-bindgen = "0.46"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[target.'cfg(target_family = "wasm")'.dependencies]
+waki = { version = "0.5.1" }
+
+[profile.release]
+# Money code: abort on arithmetic overflow rather than wrap, even in release.
+overflow-checks = true
+opt-level = "s"
+lto = true
+strip = true
+codegen-units = 1
+
+# Standalone crate: built for wasm32-wasip2, not part of the host workspace.
+[workspace]
