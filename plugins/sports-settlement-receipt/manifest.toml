@@ -1,0 +1,9 @@
+name = "sports-settlement-receipt"
+version = "0.1.0"
+description = "Bind an authenticated TxLINE final-score proof to a finalized Solana attestation through 2-of-3 RPC quorum"
+author = "Guoqiang Liu"
+wasm_path = "sports_settlement_receipt.wasm"
+capabilities = ["tool"]
+# http_client: one authenticated TxLINE stat-validation GET plus fixed finalized
+# status/transaction reads. config_read: operator-owned endpoints and tokens.
+permissions = ["http_client", "config_read"]
