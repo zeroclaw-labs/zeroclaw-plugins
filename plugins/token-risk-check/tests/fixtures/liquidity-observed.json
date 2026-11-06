@@ -1,0 +1,28 @@
+[
+  {
+    "chainId": "solana",
+    "pairAddress": "11111111111111111111111111111111",
+    "baseToken": {
+      "address": "So11111111111111111111111111111111111111112"
+    },
+    "quoteToken": {
+      "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+    },
+    "liquidity": {
+      "usd": 125000.5
+    }
+  },
+  {
+    "chainId": "solana",
+    "pairAddress": "Stake11111111111111111111111111111111111111",
+    "baseToken": {
+      "address": "So11111111111111111111111111111111111111112"
+    },
+    "quoteToken": {
+      "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+    },
+    "liquidity": {
+      "usd": 2400
+    }
+  }
+]
