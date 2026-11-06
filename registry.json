@@ -120,6 +120,17 @@
       "sha256": "503ef9bd46d6ce81cee3cab5faeae9f617d4812a0b9ecadcb980b663ef01e34c"
     },
     {
+      "name": "redact-text",
+      "version": "0.4.1",
+      "description": "Redact secrets and PII from text: emails, bearer/API tokens, and configured patterns",
+      "author": "ZeroClaw Labs",
+      "capabilities": [
+        "tool"
+      ],
+      "url": "https://github.com/zeroclaw-labs/zeroclaw-plugins/releases/download/plugins/redact-text-0.4.1.zip",
+      "sha256": "1302aff40ec8c71d6ec182454cbc375815ad52ba3b185dc9ca166a524f38353e"
+    },
+    {
       "name": "reddit",
       "version": "0.4.0",
       "description": "Reddit channel plugin for ZeroClaw: message/unread long-poll + comment/compose over wasi:http.",
