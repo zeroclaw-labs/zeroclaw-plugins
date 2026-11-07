@@ -1,0 +1,14 @@
+name = "solana-pay-build"
+version = "0.1.0"
+description = "Turn a charge into a Solana Pay transfer request plus the reference key that identifies it on-chain: allowlisted, capped, zero secrets (Aval suite, T0)"
+author = "bryankwandou"
+wasm_path = "solana_pay_build.wasm"
+capabilities = ["tool"]
+# config_read only: the shop's receiving address, its token allowlist and its
+# per-charge ceiling, read from this plugin's own jailed config section.
+#
+# Deliberately no http_client. Building a transfer request contacts nothing —
+# it is a string and a hash. The absence of this permission is the point: the
+# model previously tried to reach https://example.com/generate-reference-key
+# for this job, and a plugin without network access cannot be talked into it.
+permissions = ["config_read"]
