@@ -1,0 +1,7 @@
+name = "solana-sns-resolve"
+version = "0.1.0"
+description = "Resolve Solana Name Service (.sol) domains to wallet addresses."
+author = "Levrone"
+wasm_path = "solana_sns_resolve.wasm"
+capabilities = ["tool"]
+permissions = ["http_client"]
