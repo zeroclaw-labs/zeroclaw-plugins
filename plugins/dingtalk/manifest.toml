@@ -1,17 +1,31 @@
 name = "dingtalk"
-version = "0.1.0"
+version = "0.2.0"
 description = "DingTalk Stream Mode channel plugin for ZeroClaw: gateway WebSocket + session-webhook replies."
 author = "JordanTheJet"
 wasm_path = "dingtalk.wasm"
 capabilities = ["channel"]
 sender_match = "exact"
-# Real implementation, kept source-only until ZeroClaw's websocket-client host
-# capability reaches upstream master.
 registry = false
-# http_client: gateway registration and per-message session-webhook replies.
-# websocket_client: DingTalk Stream Mode callback frames.
-# config_read: read [channels.dingtalk.*] when loaded as a mirror plugin.
 permissions = ["http_client", "websocket_client", "config_read"]
-# provides: mirror the built-in `dingtalk` channel — read the existing
-# channel config as the single source of truth and honor native-wins.
 provides = "dingtalk"
+
+[egress]
+hosts = ["api.dingtalk.com"]
+
+[config_schema]
+"$schema" = "https://json-schema.org/draft/2020-12/schema"
+type = "object"
+additionalProperties = false
+required = ["client_id", "client_secret"]
+
+[config_schema.properties.client_id]
+type = "string"
+minLength = 1
+
+[config_schema.properties.client_secret]
+type = "string"
+minLength = 1
+x-secret = true
+
+[config_schema.properties.enabled]
+type = "boolean"
