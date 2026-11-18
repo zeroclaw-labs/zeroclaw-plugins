@@ -1,39 +1,18 @@
-//! A ZeroClaw WIT **channel** plugin: Lark / Feishu (webhook ingress).
-//!
-//! The host runs the network-facing listener: it serves `GET`/`POST` on
-//! `/plugin/lark`, and hands each request to the plugin's exported
-//! `parse-webhook` (with the request line surfaced via the reserved
-//! `x-webhook-method` / `x-webhook-query` headers). The plugin owns the payload
-//! shape and the authenticity check: it verifies the Lark **verification token**
-//! over the body and returns a typed unauthorized or bad-request rejection so
-//! the gateway replies 401 or 400 and enqueues nothing. The URL-verification
-//! handshake is answered inline by
-//! returning a single reserved `__webhook_reply__` message whose `content` the
-//! host echoes back verbatim (Lark expects the `{"challenge": …}` JSON).
-//!
-//! Because a webhook channel does not poll, `poll-message` always returns
-//! `none`. Outbound replies go through Lark's `im/v1/messages` API: the plugin
-//! exchanges its `app_id`/`app_secret` for a short-lived `tenant_access_token`
-//! (cached, refreshed on the `99991663` expiry code) and `POST`s a text message,
-//! all via the host's `wasi:http` (`waki`) client — TLS is performed host-side.
-//!
-//! The pure Lark logic lives in [`lark`] (no wasm/http deps) and is covered by a
-//! host `cargo test`; this file is the thin component shim.
-//!
-//! Build:  rustup target add wasm32-wasip2
-//!         cargo build --target wasm32-wasip2 --release
+//! Lark/Feishu Open Platform channel. The plugin verifies the configured token
+//! on plaintext challenges and events. URL verification returns a typed HTTP
+//! reply; authenticated text events go to the channel's sender policy.
+//! Outbound text uses an app-scoped tenant token obtained for the current send.
 
 pub mod lark;
 
 #[cfg(target_family = "wasm")]
 mod component {
     wit_bindgen::generate!({
-        path: "../../wit/unstable",
+        path: "../../wit/v0",
         world: "channel-plugin",
         features: ["plugins-wit-v0"],
     });
 
-    use std::cell::RefCell;
     use std::time::Duration;
 
     use serde_json::Value;
@@ -42,33 +21,54 @@ mod component {
         authenticate_webhook, build_send_body, build_token_request_body, decode_webhook,
         extract_tenant_token, is_invalid_token, parse_webhook_body, response_code,
         split_text_chunks, Inbound, LarkConfig, WebhookOutcome, LARK_TEXT_MAX_BYTES,
-        WEBHOOK_REPLY_CHANNEL,
     };
 
     use exports::zeroclaw::plugin::channel::{
         ApprovalRequest, ApprovalResponse, ChannelCapabilities, Guest as Channel, InboundMessage,
-        SendMessage, WebhookRejection,
+        SendMessage, WebhookRejection, WebhookRequest, WebhookResponse,
     };
     use exports::zeroclaw::plugin::plugin_info::Guest as PluginInfo;
 
+    use zeroclaw::plugin::{config, secrets};
+
+    fn public_config() -> Result<LarkConfig, String> {
+        let public = config::get().map_err(|_| "lark: public configuration unavailable")?;
+        serde_json::from_str(&public).map_err(|_| "lark: invalid public configuration".to_string())
+    }
+
+    fn optional_secret(key: &str) -> Result<Option<String>, String> {
+        match secrets::get(key) {
+            Ok(value) => Ok(Some(value)),
+            Err(secrets::SecretError::NotFound) => Ok(None),
+            Err(_) => Err(format!("lark: cannot read {key}")),
+        }
+    }
+
+    fn send_config() -> Result<LarkConfig, String> {
+        let mut cfg = public_config()?;
+        cfg.app_secret = optional_secret("app_secret")?.unwrap_or_default();
+        Ok(cfg)
+    }
+
+    fn inbound_config() -> Result<LarkConfig, String> {
+        let mut cfg = public_config()?;
+        cfg.verification_token = optional_secret("verification_token")?;
+        cfg.encrypt_key = optional_secret("encrypt_key")?;
+        if cfg.verification_token().is_none() {
+            return Err("lark: verification_token required for webhook ingress".into());
+        }
+        Ok(cfg)
+    }
+
     const PLUGIN_NAME: &str = "lark";
-    const PLUGIN_VERSION: &str = "0.1.0";
+    const PLUGIN_VERSION: &str = env!("CARGO_PKG_VERSION");
     /// URL path segment the host mounts this channel's webhook under
     /// (`/plugin/lark`).
     const WEBHOOK_SEGMENT: &str = "lark";
-    /// Reserved header names the host uses to pass the webhook request line.
-    const HEADER_METHOD: &str = "x-webhook-method";
-    const HEADER_QUERY: &str = "x-webhook-query";
     /// Connect-phase timeout for every API call. `waki` can only bound the
     /// connect (not the response body), which is enough to fail fast on a dead
     /// endpoint.
     const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
-
-    thread_local! {
-        static CONFIG: RefCell<LarkConfig> = RefCell::new(LarkConfig::default());
-        /// Cached tenant access token; `None` == must be (re)fetched.
-        static TENANT_TOKEN: RefCell<Option<String>> = const { RefCell::new(None) };
-    }
 
     /// `POST` a JSON body to a Lark endpoint with a `Bearer` token →
     /// `(status, parsed-body)`. The body is parsed even on error responses (Lark
@@ -102,35 +102,24 @@ mod component {
         extract_tenant_token(&val)
     }
 
-    /// The cached tenant token, fetching + caching one on a miss.
-    fn ensure_tenant_token(cfg: &LarkConfig) -> Result<String, String> {
-        if let Some(tok) = TENANT_TOKEN.with(|t| t.borrow().clone()) {
-            return Ok(tok);
-        }
-        let tok = fetch_tenant_token(cfg)?;
-        TENANT_TOKEN.with(|t| *t.borrow_mut() = Some(tok.clone()));
-        Ok(tok)
-    }
-
-    fn clear_tenant_token() {
-        TENANT_TOKEN.with(|t| *t.borrow_mut() = None);
-    }
-
     /// Send one already-chunked text message, refreshing the tenant token once
     /// on an expiry code.
-    fn send_text_once(cfg: &LarkConfig, recipient: &str, text: &str) -> Result<(), String> {
+    fn send_text_once(
+        cfg: &LarkConfig,
+        token: &mut String,
+        recipient: &str,
+        text: &str,
+    ) -> Result<(), String> {
         let url = cfg.send_url();
         let body = build_send_body(recipient, text);
 
-        let mut token = ensure_tenant_token(cfg)?;
-        let (status, resp) = post_json(&url, &token, &body)?;
+        let (status, resp) = post_json(&url, token, &body)?;
         let code = response_code(&resp);
 
         if status == 401 || is_invalid_token(code) {
             // Token expired mid-flight: drop it, fetch a fresh one, retry once.
-            clear_tenant_token();
-            token = ensure_tenant_token(cfg)?;
-            let (status2, resp2) = post_json(&url, &token, &body)?;
+            *token = fetch_tenant_token(cfg)?;
+            let (status2, resp2) = post_json(&url, token, &body)?;
             let code2 = response_code(&resp2);
             if status2 >= 400 || code2 != 0 {
                 return Err(format!(
@@ -164,32 +153,6 @@ mod component {
         }
     }
 
-    /// Build the reserved `__webhook_reply__` inbound message the host echoes as
-    /// the HTTP 200 response body (enqueuing nothing).
-    fn reply_message(body: String) -> InboundMessage {
-        InboundMessage {
-            id: String::new(),
-            sender: String::new(),
-            reply_target: String::new(),
-            content: body,
-            channel: WEBHOOK_REPLY_CHANNEL.to_string(),
-            channel_alias: None,
-            timestamp: 0,
-            thread_ts: None,
-            interruption_scope_id: None,
-            attachments: Vec::new(),
-            subject: None,
-        }
-    }
-
-    /// Case-insensitive lookup of a lower-cased reserved header.
-    fn header<'a>(headers: &'a [(String, String)], name: &str) -> Option<&'a str> {
-        headers
-            .iter()
-            .find(|(k, _)| k.eq_ignore_ascii_case(name))
-            .map(|(_, v)| v.as_str())
-    }
-
     struct LarkChannel;
 
     impl PluginInfo for LarkChannel {
@@ -206,17 +169,12 @@ mod component {
             PLUGIN_NAME.to_string()
         }
 
-        fn configure(config: String) -> Result<(), String> {
-            let cfg = LarkConfig::from_json(&config);
-            // A new config invalidates any cached tenant token (credentials or
-            // endpoint may have changed).
-            clear_tenant_token();
-            CONFIG.with(|c| *c.borrow_mut() = cfg);
-            Ok(())
+        fn configure() -> Result<(), String> {
+            public_config().map(|_| ())
         }
 
         fn send(message: SendMessage) -> Result<(), String> {
-            let cfg = CONFIG.with(|c| c.borrow().clone());
+            let cfg = send_config()?;
             if !cfg.has_credentials() {
                 return Err(
                     "lark: app_id/app_secret not configured — set them in this channel's config \
@@ -229,8 +187,12 @@ mod component {
             // channel uses interactive cards for that; see README). Chunk long
             // turns into an ordered sequence of text messages.
             let chunks = split_text_chunks(&message.content, LARK_TEXT_MAX_BYTES);
+            if chunks.is_empty() {
+                return Ok(());
+            }
+            let mut token = fetch_tenant_token(&cfg)?;
             for chunk in &chunks {
-                send_text_once(&cfg, &recipient, chunk)?;
+                send_text_once(&cfg, &mut token, &recipient, chunk)?;
             }
             Ok(())
         }
@@ -246,43 +208,34 @@ mod component {
         }
 
         fn health_check() -> bool {
-            let cfg = CONFIG.with(|c| c.borrow().clone());
+            let Ok(cfg) = send_config() else { return false };
             if !cfg.has_credentials() {
                 return false;
             }
             // Reachable + credentials valid iff we can mint a tenant token.
-            match ensure_tenant_token(&cfg) {
-                Ok(_) => true,
-                Err(_) => {
-                    clear_tenant_token();
-                    false
-                }
-            }
+            fetch_tenant_token(&cfg).is_ok()
         }
 
         fn webhook_path() -> Option<String> {
             Some(WEBHOOK_SEGMENT.to_string())
         }
 
-        fn parse_webhook(
-            headers: Vec<(String, String)>,
-            body: Vec<u8>,
-        ) -> Result<Vec<InboundMessage>, WebhookRejection> {
-            let cfg = CONFIG.with(|c| c.borrow().clone());
-            // The host passes the request line via reserved lower-cased headers.
-            // Default to POST (Lark's event delivery method) when absent.
-            let method = header(&headers, HEADER_METHOD).unwrap_or("POST");
-            let _query = header(&headers, HEADER_QUERY).unwrap_or("");
+        fn parse_webhook(request: WebhookRequest) -> Result<WebhookResponse, WebhookRejection> {
+            let body = request.body;
+            let cfg = inbound_config().map_err(WebhookRejection::Unauthorized)?;
+            let method = &request.method;
             let Some(payload) =
                 parse_webhook_body(method, &body).map_err(WebhookRejection::BadRequest)?
             else {
-                return Ok(vec![reply_message("ok".to_string())]);
+                return Ok(WebhookResponse::Reply("ok".to_string()));
             };
             authenticate_webhook(&cfg, &payload).map_err(WebhookRejection::Unauthorized)?;
 
             match decode_webhook(&cfg, &payload) {
-                WebhookOutcome::Reply(reply) => Ok(vec![reply_message(reply)]),
-                WebhookOutcome::Events(events) => Ok(events.into_iter().map(to_wit).collect()),
+                WebhookOutcome::Reply(reply) => Ok(WebhookResponse::Reply(reply)),
+                WebhookOutcome::Events(events) => Ok(WebhookResponse::Messages(
+                    events.into_iter().map(to_wit).collect(),
+                )),
             }
         }
 
