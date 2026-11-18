@@ -1,32 +1,32 @@
-# amqp - ZeroClaw channel plugin
+# AMQP
 
 AMQP 0-9-1 channel for RabbitMQ-compatible brokers. The guest implements the
 application protocol; the ZeroClaw host owns TCP, DNS, and optional TLS through
-the `zeroclaw:plugin/socket` WIT import.
+the `zeroclaw:plugin/sockets` WIT import.
 
-The manifest declares `provides = "amqp"`. Each instance receives its canonical
-`[channels.amqp.<alias>]` object from the host; there is no plugin-specific
-configuration copy.
+## Install and configure
 
-## Configuration
+Build the source-only package from its directory and bind the channel on ZeroClaw v0.9.0.
 
-```toml
-[channels.amqp.events]
-enabled = true
-amqp_url = "amqp://agent:replace-me@broker.internal:5672/%2F"
-exchange = "amq.topic"
-routing_keys = ["build.completed", "release.#"]
-queue = "zeroclaw-events" # omit for a broker-named exclusive auto-delete queue
-sender_label = "release-bus"
-content_template = "Release {project.name} {version}"
-thread_id_field = "project.name"
-durable_ack = true
-dispatch = "agent_loop"
+```sh
+cargo build --locked --release --target wasm32-wasip2
+cp target/wasm32-wasip2/release/amqp.wasm .
+zeroclaw plugin install "$PWD"
+zeroclaw plugin bind amqp --channel-alias events --egress none
+zeroclaw plugin info amqp
 ```
 
-`amqp_url` supplies the host/port, virtual host, and PLAIN credentials. Missing
-credentials default to `guest` / `guest`; missing ports default to 5672 or 5671.
-Virtual hosts and credentials use URI percent encoding.
+Copy the config entry key printed by `plugin info` into the shell variable `key`. The commands for secrets prompt without echo. Grant the hostname in the broker URL. Supply the full AMQP URI (including any credentials) at the secret prompt.
+
+```sh
+zeroclaw config set "plugins.entries.$key.egress_hosts" 'broker.example.com'
+zeroclaw config set "plugins.entries.$key.config.amqp_url"
+zeroclaw config set "plugins.entries.$key.config.exchange" 'events.topic'
+zeroclaw config set "plugins.entries.$key.config.routing_keys" '["release.#"]'
+zeroclaw config set "plugins.entries.$key.config.sender_label" 'release-bus'
+```
+
+Enable `plugins.enabled`, route `plugin.events` to an enabled agent, and authorize senders in the alias’s peer group.
 
 The configured exchange must already exist. The plugin declares the configured
 queue (or an anonymous exclusive auto-delete queue), binds every routing key,
@@ -70,17 +70,11 @@ confirms are not enabled, so it does not prove broker acceptance.
 
 ## Explicit limits
 
-- `registry = false` remains required because `socket_client` is not available
-  on upstream ZeroClaw master.
 - Only AMQP 0-9-1 and SASL PLAIN are implemented. AMQP 1.0, challenge-response
   SASL mechanisms, and URI query parameters are unsupported.
 - `dispatch = "sop"` and `"sop_and_agent_loop"` are rejected because the
   channel WIT cannot call the host SOP engine.
-- The socket ABI validates TLS with host WebPKI roots. The native-required
-  `ca_cert` field is accepted for configuration compatibility but its file is
-  not readable by the guest; private/custom CA roots are unsupported.
-- `client_cert` / `client_key` are rejected because the socket ABI cannot pass a
-  client identity, so Fedora Messaging-style mutual TLS is not supported.
+- `amqps://` uses the host trust roots by default. Select a host-managed TLS profile with `tls_profile` for a private CA or mutual TLS. Reference the instance secrets for the CA, client certificate and private key (tls_ca_pem, tls_client_certificate_pem and tls_client_key_pem) in that profile.
 - The plugin does not create or redeclare exchanges and cannot configure queue
   arguments, quorum queues, dead-lettering, priorities, or consumer arguments.
 - Publisher confirms, transactions, mandatory returns, alternate exchanges,

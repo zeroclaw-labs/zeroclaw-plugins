@@ -5,10 +5,24 @@ connects your agent to **Lark** (International) or **Feishu** (China) through th
 Open Platform **event webhook** + `im/v1/messages` API — all from a sandboxed
 `wasm32-wasip2` WIT component, with no native build.
 
-```bash
-zeroclaw plugin install lark \
-  --registry https://raw.githubusercontent.com/JordanTheJet/zeroclaw-plugins/main/registry.json
+
+## Install locally on ZeroClaw v0.9.0
+
+From this plugin directory, build and bind the source-only package:
+
+```sh
+cargo build --release --locked --target wasm32-wasip2
+mkdir -p target/package
+cp manifest.toml target/wasm32-wasip2/release/lark.wasm target/package/
+zeroclaw plugin install ./target/package --channel-alias lark --egress declared
+zeroclaw plugin info lark
 ```
+
+Use the channel instance key printed by `zeroclaw plugin info lark`. Store each setting under `plugins.entries.<instance-key>.config`. Set secret fields using `zeroclaw config set plugins.entries.<instance-key>.config.verification_token` and enter the value at the prompt.
+
+Enable plugins, route `plugin.lark` to an agent and configure the permitted senders in its peer group. Restart or reload the daemon. Each binding claims the fixed callback path `/plugin/lark`, so use one active binding for that path.
+
+The default API hostname is declared in the manifest. If you change the API origin, grant the new trusted hostname in `plugins.entries.<instance-key>.egress_hosts`.
 
 ## How it works
 
@@ -22,14 +36,13 @@ each request to the plugin's `parse-webhook`. The plugin:
   mismatch returns the typed unauthorized rejection (HTTP 401, nothing queued).
 - **Answers the verification handshake inline.** On the first
   `{"type":"url_verification","challenge":X,"token":T}` POST it echoes the
-  `{"challenge":X}` JSON Lark expects — via the host's reserved
-  `__webhook_reply__` convention (200 with that exact body, nothing enqueued).
+  `{"challenge":X}` JSON Lark expects as an HTTP response body.
 - **Decodes text messages.** `im.message.receive_v1` text events become inbound
   messages (`reply_target` = `chat_id`; `sender` = `chat_id`, or the sender's
   `open_id` when `per_user_session` is set).
 
 Replies go out through `im/v1/messages`: the plugin exchanges its
-`app_id`/`app_secret` for a short-lived `tenant_access_token` (cached, refreshed
+`app_id`/`app_secret` for a short-lived `tenant_access_token` (reused for that send, refreshed
 automatically on the `99991663` expiry code) and `POST`s a plain **text**
 message, chunking long turns. All HTTP goes through the host's `wasi:http`
 client (TLS host-side).
@@ -39,16 +52,14 @@ capabilities are `HEALTH_CHECK | WEBHOOK_INGRESS`.
 
 ## Configuration
 
-Settings come from the plugin's config section (requires the `config_read`
-permission). Field names mirror the native `LarkConfig`, so a
-`[channels.lark.<alias>]` section is fed to the plugin verbatim.
+The binding accepts these settings.
 
 - `app_id` / `app_secret` — from the Lark/Feishu developer console. Required to
   **send** (the `tenant_access_token` exchange); inbound decode works without
   them.
 - `verification_token` — webhook verification token. Set it so inbound payloads
-  are authenticated; a mismatch is rejected. (Optional, but recommended.)
-- `encrypt_key` — **plaintext mode only in v0.1.0.** If encryption is enabled in
+  are authenticated; a mismatch is rejected. Required for inbound events and challenges.
+- `encrypt_key` — **plaintext webhook mode only.** If encryption is enabled in
   the Lark event-subscription settings, Lark sends `{"encrypt":"…"}` (AES-256-CBC)
   bodies; the plugin detects and cleanly rejects those. Turn encryption **off**
   in the console to use this plugin. Encrypted transport is a planned follow-up.
@@ -59,14 +70,6 @@ permission). Field names mirror the native `LarkConfig`, so a
   field; ignored when `api_base_url` is set.
 - `per_user_session` — key group-chat sessions on the sender's `open_id` instead
   of the shared `chat_id`. Mirrors the native field.
-- `enabled` and the other native keys (`mention_only`, `receive_mode`, `port`,
-  proxy/streaming/reaction tuning, …) are accepted for native-section parity;
-  the sandboxed plugin does not act on them.
-
-On a host with the `provides` feature this plugin **mirrors** the built-in
-`lark` channel and reads `[channels.lark.<alias>]`; on older hosts it loads as a
-novel channel configured from `[[plugins.entries.lark]].config`.
-
 ### Webhook setup
 
 Point the bot's **Event Subscription** request URL at your host's

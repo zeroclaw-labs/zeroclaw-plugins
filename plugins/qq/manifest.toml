@@ -1,17 +1,31 @@
 name = "qq"
-version = "0.1.0"
+version = "0.2.0"
 description = "QQ Official Bot channel plugin for ZeroClaw: OAuth, gateway WebSocket, and text send."
 author = "JordanTheJet"
 wasm_path = "qq.wasm"
 capabilities = ["channel"]
 sender_match = "exact"
-# Real text implementation, kept source-only until ZeroClaw's websocket-client
-# host capability reaches upstream master.
 registry = false
-# http_client: OAuth, gateway discovery, and v2 text sends.
-# websocket_client: QQ gateway identify/resume, heartbeat, and dispatch frames.
-# config_read: read [channels.qq.*] when loaded as a mirror plugin.
 permissions = ["http_client", "websocket_client", "config_read"]
-# provides: mirror the built-in `qq` channel — read the existing
-# channel config as the single source of truth and honor native-wins.
 provides = "qq"
+
+[egress]
+hosts = ["api.sgroup.qq.com", "bots.qq.com"]
+
+[config_schema]
+"$schema" = "https://json-schema.org/draft/2020-12/schema"
+type = "object"
+additionalProperties = false
+required = ["app_id", "app_secret"]
+
+[config_schema.properties.app_id]
+type = "string"
+minLength = 1
+
+[config_schema.properties.app_secret]
+type = "string"
+minLength = 1
+x-secret = true
+
+[config_schema.properties.enabled]
+type = "boolean"
