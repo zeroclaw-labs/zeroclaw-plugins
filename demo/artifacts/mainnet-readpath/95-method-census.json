@@ -1,0 +1,16 @@
+{
+  "the_components": {
+    "getAccountInfo": 3,
+    "getLatestBlockhash": 2,
+    "getSignaturesForAddress": 1
+  },
+  "this_script": {
+    "getAccountInfo": 1,
+    "getGenesisHash": 1,
+    "getSlot": 1,
+    "getVersion": 1,
+    "simulateTransaction": 3
+  },
+  "total_calls": 13,
+  "write_methods_seen": []
+}

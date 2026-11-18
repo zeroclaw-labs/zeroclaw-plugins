@@ -1,0 +1,24 @@
+{
+  "args": {
+    "__config": {
+      "allow_recipients": "2PQcNtSophRAG7ZsHaDT87Zx8MNkCu3GPKsmrR2qthty",
+      "caps": "SOL:0.01:9,EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v:25:6",
+      "rpc_url": "https://api.mainnet-beta.solana.com"
+    },
+    "amount": "0.01",
+    "memo": "zeroclaw mainnet simulation only",
+    "recipient": "2PQcNtSophRAG7ZsHaDT87Zx8MNkCu3GPKsmrR2qthty",
+    "reference": "FPPZ8UK5r9BiNQ7N9DhGumcQkQJE9JXXvkCRvFG4d5X5",
+    "sender": "9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM"
+  },
+  "component_output": {
+    "ok": true,
+    "result": {
+      "durable_nonce": false,
+      "summary": "UNSIGNED transfer: 0.01 SOL from 9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM to 2PQcNtSophRAG7ZsHaDT87Zx8MNkCu3GPKsmrR2qthty, memo \"zeroclaw mainnet simulation only\", with payment reference. Fresh blockhash: sign within ~60s or it expires. This tool holds no keys; nothing moves until the owner signs.",
+      "unsigned_transaction_base64": "AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABAAMFfowIh2C/3h3dzzLBfyCbgkLuUqrxMfrNiNDqLG0LBvIUmSkcNWZ2gERQawdBskY0Fv4mWyOg5MI+flmvIRb4fgVKU1qZKSEGTSTocWDaOHx8NbXdvJK7geQfqEBBBUSN1b/lh0fSx0zzkBdpuTmicivN7lkqToVOitb4bJZ5ApAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAGZ53ZkMllMdejG8Dm4dVVFcJ6p/07bVjHEVZbnb5e/2AgIAIHplcm9jbGF3IG1haW5uZXQgc2ltdWxhdGlvbiBvbmx5BAMAAQMMAgAAAICWmAAAAAAA",
+      "unsigned_transaction_bytes": 315
+    },
+    "rpc_calls": 1
+  }
+}

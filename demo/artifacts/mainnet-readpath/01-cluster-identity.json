@@ -1,0 +1,44 @@
+{
+  "getGenesisHash": {
+    "request": {
+      "id": 1,
+      "jsonrpc": "2.0",
+      "method": "getGenesisHash",
+      "params": []
+    },
+    "response": {
+      "id": 1,
+      "jsonrpc": "2.0",
+      "result": "5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d"
+    }
+  },
+  "getSlot": {
+    "request": {
+      "id": 1,
+      "jsonrpc": "2.0",
+      "method": "getSlot",
+      "params": []
+    },
+    "response": {
+      "id": 1,
+      "jsonrpc": "2.0",
+      "result": 436186907
+    }
+  },
+  "getVersion": {
+    "request": {
+      "id": 1,
+      "jsonrpc": "2.0",
+      "method": "getVersion",
+      "params": []
+    },
+    "response": {
+      "id": 1,
+      "jsonrpc": "2.0",
+      "result": {
+        "feature-set": 3345198602,
+        "solana-core": "4.1.0"
+      }
+    }
+  }
+}

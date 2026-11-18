@@ -1,0 +1,20 @@
+{
+  "args": {
+    "__config": {
+      "rpc_url": "https://api.mainnet-beta.solana.com"
+    },
+    "expected_amount": "1",
+    "mint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+    "recipient": "2PQcNtSophRAG7ZsHaDT87Zx8MNkCu3GPKsmrR2qthty",
+    "reference": "CxaaW7Fd6LfZAT3gVDEs5pxK2PT9T9nd7JfuAyYWHyFq"
+  },
+  "component_output": {
+    "ok": true,
+    "result": {
+      "paid": false,
+      "signature": null,
+      "summary": "NOT SEEN: no transaction under this reference yet"
+    },
+    "rpc_calls": 1
+  }
+}
