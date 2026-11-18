@@ -1,0 +1,39 @@
+# solana-core — the shared substrate every ZeroClaw Solana plugin imports.
+#
+# Pure Rust, no `solana-sdk` / `solana-client` (they do not compile to a
+# wasm32-wasip2 WIT component). Everything the plugins need is hand-rolled and
+# host-testable: base58, base64, shortvec, borsh-style account decoders,
+# v0-message construction, and a JSON-RPC client behind a mockable transport
+# trait. `waki` (the blocking wasi:http client) is the ONLY wasm-only dep, so
+# `cargo test` on the host never tries to compile it and never touches the
+# network.
+[package]
+name = "solana-core"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "wasm32-wasip2-friendly Solana core for ZeroClaw plugins: JSON-RPC, base58/base64, shortvec, Token-2022 decoding, and unsigned v0 transaction construction. No solana-sdk."
+repository = "https://github.com/zeroclaw-labs/zeroclaw-plugins"
+publish = false
+
+[lib]
+crate-type = ["rlib"]
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# The wasi:http transport is compiled ONLY into the wasm component (never the
+# host) AND only when a plugin opts into the `http` feature. A pure plugin
+# (e.g. solana-pay-request) leaves it off, so its component imports no
+# `wasi:http` and can declare zero permissions — the manifest and the wasm
+# imports stay in lockstep, which is what the host linker checks.
+[target.'cfg(target_family = "wasm")'.dependencies]
+waki = { version = "0.5.1", features = ["json"], optional = true }
+
+[features]
+# Pull in the waki-backed WakiTransport. Enable in plugins that call the RPC.
+http = ["dep:waki"]
+
+# Standalone crate: host-testable on its own, imported by plugins via path dep.
+[workspace]

@@ -1,0 +1,30 @@
+# Standalone crate (own [workspace]): built for wasm32-wasip2 as a tool plugin.
+# Proves the solana-core transaction builder end to end: fetches a blockhash (or
+# a durable nonce) over the RPC and returns an UNSIGNED base64 v0 transaction.
+# It holds no key — a wallet, the ZeroClaw approval gate, or a Squads proposal
+# signs. Needs the `http` feature of solana-core for the RPC transport.
+[package]
+name = "sol-transfer-build"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "ZeroClaw tool plugin (T1): build an unsigned SOL transfer transaction (base64 v0), with an optional durable nonce so it survives an approval queue."
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+wit-bindgen = "0.46"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+solana-core = { path = "../../crates/solana-core", features = ["http"] }
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true
+codegen-units = 1
+
+# Standalone crate: built for wasm32-wasip2, not part of the host workspace.
+[workspace]

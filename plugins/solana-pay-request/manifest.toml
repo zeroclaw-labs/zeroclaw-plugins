@@ -1,0 +1,14 @@
+# ZeroClaw plugin manifest — solana-pay-request.
+name = "solana-pay-request"
+version = "0.1.0"
+description = "T1 Solana Pay request builder: 'charge 25 USDC' → a solana: URL / QR the payer signs. Holds no keys, moves no funds, touches no network."
+author = "zeroclaw-solana-plugins contributors"
+
+wasm_path = "solana_pay_request.wasm"
+
+capabilities = ["tool"]
+
+# Zero permissions. This tool is pure string construction: it reaches no host
+# service at all. The empty list is the strongest possible custody statement —
+# there is no network to exfiltrate to and no config to leak.
+permissions = []
