@@ -139,12 +139,26 @@ pub struct PubSubMessage {
     pub publish_time: String,
 }
 
+// Pub/Sub examples encode historyId numerically; the Gmail REST API returns a decimal string.
+fn deserialize_history_id<'de, D: serde::Deserializer<'de>>(de: D) -> Result<u64, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Id {
+        Number(u64),
+        Decimal(String),
+    }
+    match Id::deserialize(de)? {
+        Id::Number(n) => Ok(n),
+        Id::Decimal(n) => n.parse().map_err(serde::de::Error::custom),
+    }
+}
+
 /// The decoded payload inside `PubSubMessage.data`.
 #[derive(Debug, Deserialize, PartialEq, Eq)]
 pub struct GmailNotification {
     #[serde(rename = "emailAddress")]
     pub email_address: String,
-    #[serde(rename = "historyId")]
+    #[serde(rename = "historyId", deserialize_with = "deserialize_history_id")]
     pub history_id: u64,
 }
 
@@ -162,12 +176,64 @@ pub fn parse_envelope(body: &[u8]) -> Result<PubSubEnvelope, String> {
     serde_json::from_slice(body).map_err(|e| format!("gmail_push: invalid Pub/Sub envelope: {e}"))
 }
 
+/// Gmail can return JSON error envelopes on failure. Only a successful response
+/// may be decoded as a history page or counted as a successful send or watch.
+pub fn check_api_status(status: u16) -> Result<(), String> {
+    if (200..300).contains(&status) {
+        Ok(())
+    } else {
+        Err(format!("gmail_push: Gmail API returned HTTP {status}"))
+    }
+}
+
+/// The last two notification tips for a binding. A repeated delivery of the
+/// latest tip replays the same window; the host deduplicates Gmail message IDs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, Deserialize)]
+pub struct HistoryCursor {
+    prior: u64,
+    latest: u64,
+}
+
+pub struct HistoryWindow {
+    pub start: u64,
+    pub next: Option<HistoryCursor>,
+}
+
+impl HistoryCursor {
+    pub fn seed(tip: u64) -> Self {
+        Self {
+            prior: tip,
+            latest: tip,
+        }
+    }
+
+    pub fn window(self, tip: u64) -> Option<HistoryWindow> {
+        if tip > self.latest {
+            return Some(HistoryWindow {
+                start: self.latest,
+                next: Some(Self {
+                    prior: self.latest,
+                    latest: tip,
+                }),
+            });
+        }
+        (tip == self.latest && self.prior != self.latest).then_some(HistoryWindow {
+            start: self.prior,
+            next: None,
+        })
+    }
+}
+
 // ── Gmail API response types ──────────────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
 pub struct HistoryResponse {
     pub history: Option<Vec<HistoryRecord>>,
-    #[serde(default, rename = "historyId")]
+    #[serde(
+        default,
+        rename = "historyId",
+        deserialize_with = "deserialize_history_id"
+    )]
     pub history_id: u64,
     #[serde(default, rename = "nextPageToken")]
     pub next_page_token: Option<String>,
@@ -440,6 +506,45 @@ mod tests {
             .replace('+', "-")
             .replace('/', "_")
             .replace('=', "")
+    }
+
+    #[test]
+    fn unsuccessful_responses_are_rejected_before_history_processing() {
+        assert!(check_api_status(200).is_ok());
+        assert!(check_api_status(204).is_ok());
+        for status in [301, 401, 403, 404, 429, 500] {
+            assert!(check_api_status(status).is_err());
+        }
+    }
+
+    #[test]
+    fn a_fresh_webhook_guest_resumes_and_replays_the_committed_window() {
+        let seed = HistoryCursor::seed(10);
+        assert!(seed.window(10).is_none());
+        let first = seed.window(20).unwrap();
+        assert_eq!(first.start, 10);
+        let saved = serde_json::to_vec(&first.next.unwrap()).unwrap();
+
+        let restored: HistoryCursor = serde_json::from_slice(&saved).unwrap();
+        let retry = restored.window(20).unwrap();
+        assert_eq!(retry.start, 10);
+        assert!(retry.next.is_none());
+        assert!(restored.window(9).is_none());
+        let later = restored.window(30).unwrap();
+        assert_eq!(later.start, 20);
+        assert!(later.next.is_some());
+    }
+
+    #[test]
+    fn rest_history_ids_accept_decimal_strings_and_pubsub_numbers() {
+        let rest: HistoryResponse =
+            serde_json::from_str(r#"{"historyId":"18446744073709551615"}"#).unwrap();
+        assert_eq!(rest.history_id, u64::MAX);
+        let push: GmailNotification =
+            serde_json::from_str(r#"{"emailAddress":"fixture@example.com","historyId":42}"#)
+                .unwrap();
+        assert_eq!(push.history_id, 42);
+        assert!(serde_json::from_str::<HistoryResponse>(r#"{"historyId":"invalid"}"#).is_err());
     }
 
     #[test]
