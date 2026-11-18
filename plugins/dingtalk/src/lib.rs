@@ -1,20 +1,21 @@
 //! A ZeroClaw WIT channel plugin for DingTalk Stream Mode.
 //!
 //! DingTalk gateway registration and session-webhook replies use `wasi:http`;
-//! callback frames use the host-mediated `ws-client` import.
+//! callback frames use the host-mediated `websocket` import.
 
 pub mod dingtalk;
 
 #[cfg(target_family = "wasm")]
 mod component {
     wit_bindgen::generate!({
-        path: "../../wit/unstable",
+        path: "../../wit/v0",
         world: "channel-plugin",
         features: ["plugins-wit-v0", "plugins-wit-v0-websocket"],
     });
 
     use std::cell::{Cell, RefCell};
     use std::collections::{HashMap, VecDeque};
+    use std::rc::Rc;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use serde_json::Value;
@@ -25,17 +26,20 @@ mod component {
     };
     use exports::zeroclaw::plugin::channel::{
         ApprovalRequest, ApprovalResponse, ChannelCapabilities, Guest as Channel, InboundMessage,
-        SendMessage, WebhookRejection,
+        SendMessage, WebhookRejection, WebhookRequest, WebhookResponse,
     };
     use exports::zeroclaw::plugin::plugin_info::Guest as PluginInfo;
-    use zeroclaw::plugin::ws_client::{self, WsEvent};
+    use zeroclaw::plugin::websocket::{
+        self, ConnectOptions, Connection as WsConnection, Event, Message,
+    };
+    use zeroclaw::plugin::{config, secrets};
 
-    const PLUGIN_VERSION: &str = "0.1.0";
+    const PLUGIN_VERSION: &str = env!("CARGO_PKG_VERSION");
     const MAX_DRAIN_PER_POLL: usize = 200;
 
     thread_local! {
         static CONFIG: RefCell<DingTalkConfig> = RefCell::new(DingTalkConfig::default());
-        static CONNECTION: Cell<u64> = const { Cell::new(0) };
+        static CONNECTION: RefCell<Option<Rc<WsConnection>>> = const { RefCell::new(None) };
         static BUFFER: RefCell<VecDeque<Inbound>> = const { RefCell::new(VecDeque::new()) };
         static SESSION_WEBHOOKS: RefCell<HashMap<String, String>> = RefCell::new(HashMap::new());
         static NEXT_ID: Cell<u64> = const { Cell::new(1) };
@@ -107,16 +111,24 @@ mod component {
             .map_err(|error| format!("dingtalk gateway response failed: {error}"))
     }
 
-    fn connect(cfg: &DingTalkConfig) -> Result<u64, String> {
+    fn connect(cfg: &DingTalkConfig) -> Result<Rc<WsConnection>, String> {
         let gateway = register(cfg)?;
         let url = connection_url(&gateway)
             .ok_or_else(|| "dingtalk gateway returned an empty endpoint or ticket".to_string())?;
-        ws_client::ws_connect(&url, &[])
+        let handle = websocket::connect(&ConnectOptions {
+            url,
+            headers: vec![],
+            subprotocols: vec![],
+            tls_profile: None,
+        })
+        .map(Rc::new)
+        .map_err(|error| format!("WebSocket connect: {error:?}"))?;
+        CONNECTION.with(|state| *state.borrow_mut() = Some(handle.clone()));
+        Ok(handle)
     }
 
-    fn drop_connection(handle: u64) {
-        ws_client::ws_close(handle);
-        CONNECTION.with(|state| state.set(0));
+    fn drop_connection() {
+        CONNECTION.with(|state| *state.borrow_mut() = None);
     }
 
     fn remember_webhook(chat_id: String, sender_id: String, url: String) {
@@ -160,13 +172,13 @@ mod component {
             CHANNEL.to_string()
         }
 
-        fn configure(config: String) -> Result<(), String> {
-            let cfg = DingTalkConfig::from_json(&config);
-            let handle = CONNECTION.with(Cell::get);
-            if handle != 0 {
-                ws_client::ws_close(handle);
-            }
-            CONNECTION.with(|state| state.set(0));
+        fn configure() -> Result<(), String> {
+            let public = config::get().map_err(|error| format!("dingtalk: config: {error:?}"))?;
+            let mut cfg: DingTalkConfig = serde_json::from_str(&public)
+                .map_err(|_| "dingtalk: invalid public configuration")?;
+            cfg.client_secret = secrets::get("client_secret")
+                .map_err(|error| format!("dingtalk: client_secret: {error:?}"))?;
+            CONNECTION.with(|state| *state.borrow_mut() = None);
             BUFFER.with(|state| state.borrow_mut().clear());
             SESSION_WEBHOOKS.with(|state| state.borrow_mut().clear());
             NEXT_ID.with(|state| state.set(1));
@@ -200,18 +212,17 @@ mod component {
             if !cfg.is_configured() {
                 return None;
             }
-            let mut handle = CONNECTION.with(Cell::get);
-            if handle == 0 {
-                handle = connect(&cfg).ok()?;
-                CONNECTION.with(|state| state.set(handle));
-            }
+            let handle = match CONNECTION.with(|state| state.borrow().clone()) {
+                Some(handle) => handle,
+                None => connect(&cfg).ok()?,
+            };
             for _ in 0..MAX_DRAIN_PER_POLL {
-                match ws_client::ws_receive(handle) {
-                    Ok(WsEvent::Text(frame)) => {
+                match handle.receive() {
+                    Ok(Some(Event::Message(Message::Text(frame)))) => {
                         let outcome = decode_frame(&frame);
                         if let Some(response) = outcome.response {
-                            if ws_client::ws_send_text(handle, &response).is_err() {
-                                drop_connection(handle);
+                            if handle.send(&Message::Text(response)).is_err() {
+                                drop_connection();
                                 break;
                             }
                         }
@@ -222,9 +233,10 @@ mod component {
                             BUFFER.with(|state| state.borrow_mut().push_back(message));
                         }
                     }
-                    Ok(WsEvent::Idle) => break,
-                    Ok(WsEvent::Closed(_)) | Err(_) => {
-                        drop_connection(handle);
+                    Ok(Some(Event::Message(Message::Binary(_)))) => continue,
+                    Ok(None) => break,
+                    Ok(Some(Event::Closed(_) | Event::Failed(_))) | Err(_) => {
+                        drop_connection();
                         break;
                     }
                 }
@@ -239,8 +251,7 @@ mod component {
         }
 
         fn health_check() -> bool {
-            let cfg = CONFIG.with(|state| state.borrow().clone());
-            register(&cfg).is_ok()
+            CONNECTION.with(|connection| connection.borrow().is_some())
         }
 
         fn self_handle() -> Option<String> {
@@ -316,10 +327,7 @@ mod component {
         fn webhook_path() -> Option<String> {
             None
         }
-        fn parse_webhook(
-            _headers: Vec<(String, String)>,
-            _body: Vec<u8>,
-        ) -> Result<Vec<InboundMessage>, WebhookRejection> {
+        fn parse_webhook(_request: WebhookRequest) -> Result<WebhookResponse, WebhookRejection> {
             Err(WebhookRejection::BadRequest(
                 "dingtalk does not serve webhooks".to_string(),
             ))
