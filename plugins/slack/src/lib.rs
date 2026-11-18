@@ -1,59 +1,61 @@
-//! A ZeroClaw WIT **channel** plugin: Slack (Events API webhook).
-//!
-//! This is a webhook-ingress channel, not a poller. The host serves
-//! `GET`+`POST` on `/plugin/slack`; each inbound request is handed to
-//! [`parse_webhook`] (in the pure [`slack`] core), which:
-//!   - verifies the Slack request signature (`X-Slack-Signature` HMAC-SHA256
-//!     over the raw body, with the 5-minute replay window) using the app
-//!     `signing_secret` from config — authentication failures return the typed
-//!     unauthorized rejection and enqueue nothing;
-//!   - answers the `url_verification` handshake by echoing the `challenge`
-//!     back in the HTTP response body (the `__webhook_reply__` convention);
-//!   - decodes `event_callback` message events into inbound messages.
-//!
-//! Outbound replies go through `POST {api_base}/chat.postMessage` with a static
-//! `Authorization: Bearer <bot_token>`; long text is chunked. All HTTP uses the
-//! host's `wasi:http` (`http_client`) with TLS performed host-side.
-//!
-//! The interesting logic (config, signature check, payload decode, send-body
-//! build, chunking) lives in [`slack`] with no wasm/http deps and is covered by
-//! a host `cargo test`; this file is the thin component shim.
-//!
-//! Build:  rustup target add wasm32-wasip2
-//!         cargo build --target wasm32-wasip2 --release
+//! Slack Events API channel. The plugin verifies the signing-secret HMAC and
+//! replay window on each POST before answering a URL challenge or delivering
+//! message events. Outbound text uses chat.postMessage.
 
 pub mod slack;
 
 #[cfg(target_family = "wasm")]
 mod component {
     wit_bindgen::generate!({
-        path: "../../wit/unstable",
+        path: "../../wit/v0",
         world: "channel-plugin",
         features: ["plugins-wit-v0"],
     });
 
-    use std::cell::RefCell;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use serde_json::Value;
 
     use crate::slack::{
         authenticate_webhook, build_send_body, chunk_text, decode_webhook, Inbound, SlackConfig,
-        WebhookOutcome, CHANNEL, MAX_TEXT_CHARS, WEBHOOK_REPLY_CHANNEL,
+        WebhookOutcome, CHANNEL, MAX_TEXT_CHARS,
     };
 
     use exports::zeroclaw::plugin::channel::{
         ApprovalRequest, ApprovalResponse, ChannelCapabilities, Guest as Channel, InboundMessage,
-        SendMessage, WebhookRejection,
+        SendMessage, WebhookRejection, WebhookRequest, WebhookResponse,
     };
     use exports::zeroclaw::plugin::plugin_info::Guest as PluginInfo;
 
-    const PLUGIN_NAME: &str = "slack";
-    const PLUGIN_VERSION: &str = "0.1.0";
+    use zeroclaw::plugin::{config, secrets};
 
-    thread_local! {
-        static CONFIG: RefCell<SlackConfig> = RefCell::new(SlackConfig::default());
+    fn public_config() -> Result<SlackConfig, String> {
+        let public = config::get().map_err(|_| "slack: public configuration unavailable")?;
+        serde_json::from_str(&public).map_err(|_| "slack: invalid public configuration".to_string())
     }
+
+    fn optional_secret(key: &str) -> Result<Option<String>, String> {
+        match secrets::get(key) {
+            Ok(value) => Ok(Some(value)),
+            Err(secrets::SecretError::NotFound) => Ok(None),
+            Err(_) => Err(format!("slack: cannot read {key}")),
+        }
+    }
+
+    fn send_config() -> Result<SlackConfig, String> {
+        let mut cfg = public_config()?;
+        cfg.bot_token = optional_secret("bot_token")?;
+        Ok(cfg)
+    }
+
+    fn inbound_config() -> Result<SlackConfig, String> {
+        let mut cfg = public_config()?;
+        cfg.signing_secret = optional_secret("signing_secret")?;
+        Ok(cfg)
+    }
+
+    const PLUGIN_NAME: &str = "slack";
+    const PLUGIN_VERSION: &str = env!("CARGO_PKG_VERSION");
 
     /// Current Unix time in seconds — the unit the signature replay-window check
     /// expects. `0` on a broken clock, which just makes every request read as
@@ -75,24 +77,6 @@ mod component {
             channel: CHANNEL.to_string(),
             channel_alias: None,
             timestamp: inb.timestamp,
-            thread_ts: None,
-            interruption_scope_id: None,
-            attachments: Vec::new(),
-            subject: None,
-        }
-    }
-
-    /// The single-message `__webhook_reply__` envelope: the host replies 200
-    /// with `content` as the body and enqueues nothing.
-    fn webhook_reply(content: String) -> InboundMessage {
-        InboundMessage {
-            id: String::new(),
-            sender: String::new(),
-            reply_target: String::new(),
-            content,
-            channel: WEBHOOK_REPLY_CHANNEL.to_string(),
-            channel_alias: None,
-            timestamp: 0,
             thread_ts: None,
             interruption_scope_id: None,
             attachments: Vec::new(),
@@ -147,14 +131,12 @@ mod component {
             PLUGIN_NAME.to_string()
         }
 
-        fn configure(config: String) -> Result<(), String> {
-            let cfg = SlackConfig::from_json(&config);
-            CONFIG.with(|c| *c.borrow_mut() = cfg);
-            Ok(())
+        fn configure() -> Result<(), String> {
+            public_config().map(|_| ())
         }
 
         fn send(message: SendMessage) -> Result<(), String> {
-            let cfg = CONFIG.with(|c| c.borrow().clone());
+            let cfg = send_config()?;
             if cfg.bot_token().is_empty() {
                 return Err("slack: no bot_token configured".to_string());
             }
@@ -176,27 +158,34 @@ mod component {
         }
 
         fn health_check() -> bool {
-            let cfg = CONFIG.with(|c| c.borrow().clone());
-            !cfg.bot_token().is_empty() && !cfg.signing_secret().is_empty()
+            send_config().is_ok_and(|cfg| !cfg.bot_token().is_empty())
+                && inbound_config().is_ok_and(|cfg| !cfg.signing_secret().is_empty())
         }
 
         fn webhook_path() -> Option<String> {
             Some(PLUGIN_NAME.to_string())
         }
 
-        fn parse_webhook(
-            headers: Vec<(String, String)>,
-            body: Vec<u8>,
-        ) -> Result<Vec<InboundMessage>, WebhookRejection> {
-            let secret = CONFIG.with(|c| c.borrow().signing_secret().to_string());
-            if !authenticate_webhook(&secret, &headers, &body, now_secs())
-                .map_err(WebhookRejection::Unauthorized)?
+        fn parse_webhook(request: WebhookRequest) -> Result<WebhookResponse, WebhookRejection> {
+            let headers = request.headers;
+            let body = request.body;
+            let cfg = inbound_config().map_err(WebhookRejection::Unauthorized)?;
+            if !authenticate_webhook(
+                cfg.signing_secret(),
+                &request.method,
+                &headers,
+                &body,
+                now_secs(),
+            )
+            .map_err(WebhookRejection::Unauthorized)?
             {
-                return Ok(Vec::new());
+                return Ok(WebhookResponse::Messages(Vec::new()));
             }
             match decode_webhook(&body).map_err(WebhookRejection::BadRequest)? {
-                WebhookOutcome::Challenge(challenge) => Ok(vec![webhook_reply(challenge)]),
-                WebhookOutcome::Messages(msgs) => Ok(msgs.into_iter().map(to_wit).collect()),
+                WebhookOutcome::Challenge(challenge) => Ok(WebhookResponse::Reply(challenge)),
+                WebhookOutcome::Messages(msgs) => Ok(WebhookResponse::Messages(
+                    msgs.into_iter().map(to_wit).collect(),
+                )),
             }
         }
 
