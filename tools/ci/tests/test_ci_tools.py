@@ -14,6 +14,7 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(CI_ROOT))
 
 import manifest_field  # noqa: E402
+import registry_contract  # noqa: E402
 import plan_matrix  # noqa: E402
 import report_schema  # noqa: E402
 import summary  # noqa: E402
@@ -45,6 +46,22 @@ def valid_row(**overrides: str) -> dict[str, str]:
     }
     row.update(overrides)
     return row
+
+
+def vendored_wit_files(*, without_next: bool = False, without_current: bool = False) -> list[str]:
+    """List the committed wit/ tree the way the fake cargo lists a snapshot."""
+    wit_root = REPOSITORY_ROOT / "wit"
+    files = (
+        path.relative_to(wit_root).as_posix()
+        for path in wit_root.rglob("*")
+        if path.is_file()
+    )
+    return sorted(
+        f"./{path}"
+        for path in files
+        if not (without_next and path.startswith("next/"))
+        and not (without_current and path.startswith("current/"))
+    )
 
 
 class ReportSchemaTests(unittest.TestCase):
@@ -79,6 +96,83 @@ class ReportSchemaTests(unittest.TestCase):
 
 
 class ManifestFieldTests(unittest.TestCase):
+    def test_no_current_wit_directory_means_no_current_wit_consumers(self) -> None:
+        if not (REPOSITORY_ROOT / registry_contract.CURRENT_WIT_DIRECTORY).exists():
+            self.assertEqual(registry_contract.CURRENT_WIT_CONSUMERS, frozenset())
+
+    def test_snapshot_admission_retains_current_wit_only_for_consumers(self) -> None:
+        def snapshot(plugin: str, registry: bool) -> set[str]:
+            with tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                manifest = root / "manifest.toml"
+                manifest.write_text(f'name = "{plugin}"\nregistry = {str(registry).lower()}\n')
+                wit = root / "wit"
+                for directory in ("v0", "unstable", "next", "current"):
+                    (wit / directory).mkdir(parents=True)
+                manifest_field.prepare_wit_snapshot(manifest, wit, plugin)
+                return {path.name for path in wit.iterdir()}
+
+        everything = {"v0", "unstable", "next", "current"}
+        with mock.patch.object(registry_contract, "CURRENT_WIT_CONSUMERS", frozenset({"matrix"})):
+            self.assertEqual(snapshot("matrix", True), everything - {"next"})
+            self.assertEqual(snapshot("redact-text", True), everything - {"next", "current"})
+            self.assertEqual(snapshot("matrix", False), everything)
+
+    def test_snapshot_admission_uses_the_shared_current_wit_consumers(self) -> None:
+        # The checked-in policy, through the CLI the validator calls.
+        for plugin, registry, withheld in (
+            ("matrix", True, {"next", "current"}),
+            ("discord", True, {"next", "current"}),
+            ("redact-text", True, {"next", "current"}),
+            ("matrix", False, set()),
+            ("amqp", False, set()),
+        ):
+            with self.subTest(plugin=plugin, registry=registry), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                manifest = root / "manifest.toml"
+                manifest.write_text(f'name = "{plugin}"\nregistry = {str(registry).lower()}\n')
+                wit = root / "wit"
+                for directory in ("v0", "unstable", "next", "current"):
+                    (wit / directory).mkdir(parents=True)
+                result = subprocess.run(
+                    [sys.executable, str(CI_ROOT / "manifest_field.py"), "--prepare-wit-snapshot", str(manifest), str(wit), plugin],
+                    capture_output=True, text=True, check=False,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(
+                    {path.name for path in wit.iterdir()},
+                    {"v0", "unstable", "next", "current"} - withheld,
+                )
+
+    def test_snapshot_refuses_identity_or_registry_errors_before_removing_wit(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            manifest = root / "manifest.toml"
+            (root / "next").mkdir()
+            for contents in ('name = "matrix"\nregistry = "false"\n', 'name = "other"\n'):
+                manifest.write_text(contents)
+                with self.assertRaises(manifest_field.ManifestFieldError):
+                    manifest_field.prepare_wit_snapshot(manifest, root, "matrix")
+                self.assertTrue((root / "next").is_dir())
+
+    def test_wit_pin_requires_a_pair_and_one_exact_sha(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            pin = root / "CURRENT_REF"
+            vendored = root / "current"
+            pin.write_text("# candidate\n" + "a" * 40 + " # exact object\n")
+            with self.assertRaises(manifest_field.ManifestFieldError):
+                manifest_field.read_wit_pin(pin, vendored)
+            vendored.mkdir()
+            self.assertEqual(manifest_field.read_wit_pin(pin, vendored), "a" * 40)
+            for contents in ("", "A" * 40, "a" * 40 + "\n" + "b" * 40):
+                pin.write_text(contents)
+                with self.assertRaises(manifest_field.ManifestFieldError):
+                    manifest_field.read_wit_pin(pin, vendored)
+            pin.unlink()
+            with self.assertRaises(OSError):
+                manifest_field.read_wit_pin(pin, vendored)
+
     def test_normalizes_missing_boolean_and_array_fields(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             manifest = Path(temp) / "manifest.toml"
@@ -201,11 +295,48 @@ class MatrixPlanTests(unittest.TestCase):
             plan = plan_matrix.make_plan(root, "pull_request", "origin/main")
         self.assertEqual(plan["matrix"]["include"][0]["release_plugins"], [])
 
+    def test_next_wit_forces_full_validation_without_release_inputs(self) -> None:
+        temp, root = self.make_repository(2)
+        self.addCleanup(temp.cleanup)
+        for changed in ("wit/next/state.wit", "wit/NEXT_REF"):
+            with self.subTest(changed=changed):
+                with mock.patch.object(
+                    plan_matrix, "git_changed_paths", return_value=[changed]
+                ):
+                    plan = plan_matrix.make_plan(root, "pull_request", "origin/main")
+                self.assertEqual(plan["mode"], "full")
+                self.assertEqual(plan["matrix"]["include"][0]["release_plugins"], [])
+
+    def test_current_wit_and_policy_changes_select_only_their_consumers(self) -> None:
+        temp, root = self.make_repository(2)
+        self.addCleanup(temp.cleanup)
+        (root / "plugins" / "matrix").mkdir()
+        consumers = mock.patch.object(registry_contract, "CURRENT_WIT_CONSUMERS", frozenset({"matrix"}))
+        consumers.start()
+        self.addCleanup(consumers.stop)
+        for changed in ("wit/current/channel.wit", "wit/current/README.md", "wit/CURRENT_REF", "tools/registry_contract.py"):
+            with self.subTest(changed=changed):
+                with mock.patch.object(plan_matrix, "git_changed_paths", return_value=[changed]):
+                    plan = plan_matrix.make_plan(root, "pull_request", "origin/main")
+                self.assertEqual(plan["mode"], "full")
+                self.assertEqual(plan["count"], 3)
+                shard = plan["matrix"]["include"][0]
+                self.assertEqual(shard["release_plugins"], ["matrix"])
+                self.assertEqual(shard["strict_plugins"], [])
+        with mock.patch.object(
+            plan_matrix, "git_changed_paths", return_value=["wit/CURRENT_REF", "plugins/plugin-01/src/lib.rs"]
+        ):
+            plan = plan_matrix.make_plan(root, "pull_request", "origin/main")
+        shard = plan["matrix"]["include"][0]
+        self.assertEqual(shard["release_plugins"], ["matrix", "plugin-01"])
+        self.assertEqual(shard["strict_plugins"], ["plugin-01"])
+
     def test_workflow_tools_registry_and_wit_changes_force_full(self) -> None:
         for changed in (
             ".github/workflows/validate.yml",
             "tools/ci/summary.py",
             "registry.json",
+            "registry-retirements.json",
             "wit/v0/channel.wit",
         ):
             with self.subTest(changed=changed):
@@ -506,6 +637,9 @@ fi
 if [[ "$1" == "build" && "${FAKE_MUTATE_SOURCE:-0}" == "1" ]]; then
   printf '%s\n' '# mutation' >> manifest.toml
 fi
+if [[ "$1" == "build" && "${FAKE_LIST_WIT:-0}" == "1" ]]; then
+  (cd ../../wit && find . -type f | LC_ALL=C sort) > "$FAKE_CARGO_LOG.wit"
+fi
 exit 0
 """
         )
@@ -598,6 +732,23 @@ exit 0
         self.assertEqual(row["build_rc"], "125")
         self.assertEqual(row["artifact"], "")
         self.assertFalse((staged / "redact-text").exists())
+
+    def snapshot_wit_files(self, plugin: str) -> list[str]:
+        temp, root, report, staged, cargo_log, result = self.run_validator(
+            plugin, FAKE_LIST_WIT="1"
+        )
+        self.addCleanup(temp.cleanup)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return (root / "cargo.log.wit").read_text().splitlines()
+
+    def test_host_gated_plugin_snapshot_carries_the_whole_wit_tree(self) -> None:
+        self.assertEqual(self.snapshot_wit_files("amqp"), vendored_wit_files())
+
+    def test_registry_bound_plugin_snapshot_withholds_wit_next(self) -> None:
+        self.assertEqual(
+            self.snapshot_wit_files("redact-text"),
+            vendored_wit_files(without_next=True, without_current=True),
+        )
 
     def test_source_mutation_is_rejected_and_canonical_inputs_are_not_staged(self) -> None:
         temp, root, report, staged, cargo_log, result = self.run_validator(

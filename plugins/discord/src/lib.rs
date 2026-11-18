@@ -1,18 +1,19 @@
-//! A ZeroClaw WIT **channel** plugin: Discord (Gateway over host `ws-client`).
+//! A ZeroClaw channel plugin for Discord: the Gateway over the host's
+//! `websocket` resource, replies over REST through `wasi:http`.
 //!
-//! Discord delivers messages over a persistent WebSocket (the Gateway), which a
-//! sandboxed plugin cannot open itself. This plugin drives the host's
-//! `ws-client` import: the host owns the socket + TLS, and the plugin runs the
-//! full Gateway protocol — IDENTIFY, heartbeats, RESUME, and MESSAGE_CREATE
-//! dispatch — synchronously from `poll-message`, one non-blocking `ws-receive`
-//! drain per poll. Replies go out over the REST API (`POST /channels/{id}/
-//! messages`) through the host's `wasi:http` (`waki`). The bot token + settings
-//! come from the plugin's config section (`config_read`).
+//! A sandboxed component cannot open a socket, so the host owns the Gateway
+//! connection: it checks the destination against the instance's egress grant,
+//! resolves and dials it, completes the upgrade, and queues frames both ways.
+//! This shim speaks the Discord protocol over that connection from
+//! `poll-message`, one bounded step per call, and posts replies with
+//! `POST /channels/{id}/messages`.
 //!
-//! The protocol decisions live in [`discord::Session`] (a pure, host-tested
-//! state machine driven by [`discord::Session::on_frame`]); this file is the
-//! component shim that owns the socket handle, timers, and reconnect backoff,
-//! and translates the machine's [`discord::FrameAction`]s into `ws-client` I/O.
+//! The protocol and delivery decisions live in [`discord`], a pure module
+//! covered by host tests; this file performs the I/O they ask for. Only
+//! protocol state survives between calls. The public config is read with
+//! `config.get`, and the bot token with `secrets.get`, inside each call that
+//! needs them, and neither is kept: the host serves both only during a call,
+//! so an edited setting or a rotated token applies on the next call.
 //!
 //! Build:  rustup target add wasm32-wasip2
 //!         cargo build --target wasm32-wasip2 --release
@@ -22,7 +23,7 @@ pub mod discord;
 #[cfg(target_family = "wasm")]
 mod component {
     wit_bindgen::generate!({
-        path: "../../wit/unstable",
+        path: "../../wit/v0",
         world: "channel-plugin",
         features: ["plugins-wit-v0", "plugins-wit-v0-websocket"],
     });
@@ -31,216 +32,815 @@ mod component {
     use std::collections::VecDeque;
     use std::time::{Duration, Instant};
 
-    use serde_json::Value;
+    use serde_json::{json, Value};
 
     use crate::discord::{
-        bot_user_id_from_token, build_heartbeat, build_send_body, chunk_text,
-        close_code_from_reason, is_fatal_close_code, requires_new_session, DiscordConfig,
-        FrameAction, Inbound, Session, MAX_MESSAGE_CHARS,
+        bot_user_id_from_token, chunk_text, deliver, effective_recipient, gateway_ws_url,
+        parse_gateway_bot, url_host, Beat, ConnectFailure, Disconnect, DiscordConfig, Discovery,
+        FrameAction, Gateway, Handshake, Health, Inbound, Phase, ReplyTransport, Step,
+        MAX_MESSAGE_CHARS,
     };
 
     use exports::zeroclaw::plugin::channel::{
         ApprovalRequest, ApprovalResponse, ChannelCapabilities, Guest as Channel, InboundMessage,
-        SendMessage, WebhookRejection,
+        SendMessage, WebhookRejection, WebhookRequest, WebhookResponse,
     };
     use exports::zeroclaw::plugin::plugin_info::Guest as PluginInfo;
-    use zeroclaw::plugin::ws_client::{self, WsEvent};
+    use zeroclaw::plugin::config;
+    use zeroclaw::plugin::logging::{self, LogLevel, PluginAction, PluginEvent, PluginOutcome};
+    use zeroclaw::plugin::secrets::{self, SecretError};
+    use zeroclaw::plugin::websocket::{
+        self, CloseCode, ConnectOptions, Connection, Event, Message, WebsocketError,
+    };
 
     const PLUGIN_NAME: &str = "discord";
-    const PLUGIN_VERSION: &str = "0.1.0";
+    const TOKEN_PROPERTY: &str = "bot_token";
 
-    /// Reconnect backoff bounds. A successful Hello handshake resets to the floor.
-    const INITIAL_BACKOFF: Duration = Duration::from_secs(1);
-    const MAX_BACKOFF: Duration = Duration::from_secs(60);
-    /// Frames drained per `poll-message` before yielding back to the host loop.
-    const DRAIN_BATCH: usize = 64;
+    /// Events read per `poll-message` call. Each read is one host call, out of
+    /// the host's 1,000 per call; the rest is left for logging and sends.
+    const MAX_EVENTS_PER_POLL: usize = 400;
+    /// Messages held for the host. Reading pauses at this many, which leaves
+    /// later frames queued in the host and the socket.
+    const MAX_QUEUED_MESSAGES: usize = 64;
+    /// The host queues four frames. While frames are flowing, an empty read
+    /// waits a millisecond and reads again, at most this many times per call.
+    const MAX_FLOW_WAITS: u32 = 20;
+    const FLOW_WAIT: Duration = Duration::from_millis(1);
+    /// Reads spent looking for the close event after a send found the socket
+    /// closed.
+    const MAX_DRAIN_ON_CLOSE: usize = 64;
 
-    /// Connection-scoped shim state: the pure session machine plus the socket
-    /// handle, timers, and backoff the machine deliberately does not own.
-    struct GatewayState {
-        /// The pure protocol state machine (identity + resume coordinates).
-        session: Session,
-        /// Open `ws-client` handle, or `None` when disconnected.
-        handle: Option<u64>,
-        /// This connection intends to RESUME (vs a fresh IDENTIFY) at Hello.
-        pending_resume: bool,
-        last_hb: Option<Instant>,
-        /// Earliest instant a reconnect may be attempted (backoff gate).
-        next_connect_at: Option<Instant>,
-        backoff: Duration,
-        /// A fatal close (bad token/intents) was seen — stop reconnecting.
-        fatal: bool,
-        /// Token-derived `<@id>` mention form, available before the first READY.
-        self_mention: Option<String>,
-    }
+    const USER_AGENT: &str = concat!(
+        "DiscordBot (https://github.com/zeroclaw-labs/zeroclaw-plugins, ",
+        env!("CARGO_PKG_VERSION"),
+        ")"
+    );
 
-    impl Default for GatewayState {
-        fn default() -> Self {
-            Self {
-                session: Session::default(),
-                handle: None,
-                pending_resume: false,
-                last_hb: None,
-                next_connect_at: None,
-                backoff: INITIAL_BACKOFF,
-                fatal: false,
-                self_mention: None,
-            }
-        }
+    /// Everything one instance keeps between calls.
+    struct Instance {
+        gateway: Gateway,
+        /// The open gateway connection. Dropping it closes the socket and
+        /// releases the host's egress lease.
+        connection: Option<Connection>,
+        /// Messages read from the gateway and not yet handed to the host.
+        inbox: VecDeque<Inbound>,
+        /// The bot's user id, decoded from the token in `configure`. The host
+        /// reads the self handle and mention in calls where config and secrets
+        /// are unavailable, and a rebuilt instance must report the same ones,
+        /// so this one config-derived value is kept. It is public: it appears
+        /// in every mention of the bot.
+        self_id: String,
+        /// `config.get` failed on the last poll; the gateway is paused.
+        config_unavailable: bool,
+        binary_frame_logged: bool,
     }
 
     thread_local! {
-        static CONFIG: RefCell<DiscordConfig> = RefCell::new(DiscordConfig::default());
-        static STATE: RefCell<GatewayState> = RefCell::new(GatewayState::default());
-        static BUFFER: RefCell<VecDeque<Inbound>> = const { RefCell::new(VecDeque::new()) };
+        // The component model does not re-enter a guest during a host call, so
+        // holding this borrow across one cannot be observed.
+        static INSTANCE: RefCell<Option<Instance>> = const { RefCell::new(None) };
+        static CLOCK: Instant = Instant::now();
     }
 
-    // ── HTTP (wasi:http via waki) ─────────────────────────────────────────────
-
-    fn get_json_auth(url: &str, token: &str) -> Result<(u16, Value), String> {
-        let resp = waki::Client::new()
-            .get(url)
-            .header("Authorization", format!("Bot {token}"))
-            .send()
-            .map_err(|e| e.to_string())?;
-        let status = resp.status_code();
-        let val = resp.json::<Value>().unwrap_or(Value::Null);
-        Ok((status, val))
+    fn with_instance<R>(f: impl FnOnce(&mut Instance) -> R) -> Option<R> {
+        INSTANCE.with(|cell| cell.borrow_mut().as_mut().map(f))
     }
 
-    fn post_json_auth(url: &str, token: &str, body: &Value) -> Result<(u16, Value), String> {
-        let resp = waki::Client::new()
-            .post(url)
-            .header("Authorization", format!("Bot {token}"))
-            .json(body)
-            .send()
-            .map_err(|e| e.to_string())?;
-        let status = resp.status_code();
-        let val = resp.json::<Value>().unwrap_or(Value::Null);
-        Ok((status, val))
+    fn now_ms() -> u64 {
+        CLOCK.with(|origin| u64::try_from(origin.elapsed().as_millis()).unwrap_or(u64::MAX))
     }
 
-    /// Fetch a fresh Gateway WSS base via `GET /gateway/bot`. Returns `None` on
-    /// any error or when the session-start limit is exhausted (the bot must wait
-    /// — a fresh connect would just be rejected).
-    fn fetch_fresh_gateway_url(cfg: &DiscordConfig) -> Option<String> {
-        let (status, v) =
-            get_json_auth(&format!("{}/gateway/bot", cfg.api_base), &cfg.bot_token).ok()?;
-        if status != 200 {
-            return None;
-        }
-        let remaining = v
-            .get("session_start_limit")
-            .and_then(|s| s.get("remaining"))
-            .and_then(Value::as_u64);
-        if remaining == Some(0) {
-            return None;
-        }
-        v.get("url").and_then(Value::as_str).map(String::from)
+    fn seed() -> u64 {
+        use std::hash::{BuildHasher, Hasher};
+        let mut hasher = std::collections::hash_map::RandomState::new().build_hasher();
+        hasher.write_u64(now_ms());
+        hasher.finish()
     }
 
-    // ── Connection lifecycle (shim side: sockets, timers, backoff) ────────────
+    // ── host services, read at the point of use ──────────────────────────────
 
-    fn schedule_backoff(st: &mut GatewayState) {
-        st.next_connect_at = Some(Instant::now() + st.backoff);
-        st.backoff = (st.backoff * 2).min(MAX_BACKOFF);
+    fn public_config() -> Result<DiscordConfig, String> {
+        let json = config::get()
+            .map_err(|error| format!("discord: config unavailable ({})", error.name()))?;
+        DiscordConfig::from_public_json(&json)
     }
 
-    /// Open (or resume) a Gateway connection when disconnected and past the
-    /// backoff gate. Resumes to `resume_gateway_url` when a session is live,
-    /// else fetches a fresh Gateway URL and IDENTIFYs.
-    fn ensure_connected(st: &mut GatewayState, cfg: &DiscordConfig) {
-        if let Some(at) = st.next_connect_at {
-            if Instant::now() < at {
-                return;
-            }
-        }
-        st.next_connect_at = None;
+    fn bot_token() -> Result<String, SecretError> {
+        secrets::get(TOKEN_PROPERTY)
+    }
 
-        let can_resume = st.session.can_resume();
-        // Resume URL (on a resume) wins, then a configured `gateway_url`
-        // override, then live discovery via GET /gateway/bot.
-        let base = if can_resume {
-            st.session
-                .resume_url
-                .clone()
-                .or_else(|| cfg.gateway_url.clone())
-                .or_else(|| fetch_fresh_gateway_url(cfg))
-        } else {
-            cfg.gateway_url
-                .clone()
-                .or_else(|| fetch_fresh_gateway_url(cfg))
-        };
-        let Some(base) = base else {
-            schedule_backoff(st);
-            return;
+    fn log(
+        level: LogLevel,
+        action: PluginAction,
+        outcome: Option<PluginOutcome>,
+        message: &str,
+        attrs: Value,
+    ) {
+        logging::log_record(
+            level,
+            &PluginEvent {
+                function_name: "discord::gateway".to_string(),
+                action,
+                outcome,
+                duration_ms: None,
+                attrs: Some(attrs.to_string()),
+                message: message.to_string(),
+            },
+        );
+    }
+
+    // ── REST over wasi:http ──────────────────────────────────────────────────
+
+    mod http {
+        use std::time::{Duration, Instant};
+
+        use wasip2::http::outgoing_handler;
+        use wasip2::http::types::{
+            ErrorCode, Fields, Method, OutgoingBody, OutgoingRequest, RequestOptions, Scheme,
         };
 
-        let ws_url = format!("{base}/?v=10&encoding=json");
-        match ws_client::ws_connect(&ws_url, &[]) {
-            Ok(handle) => {
-                st.handle = Some(handle);
-                st.pending_resume = can_resume;
-                st.last_hb = None;
+        use crate::discord::split_http_url;
+
+        /// Per-request bounds. `wasi:http` applies the three timeouts; the
+        /// body read stops at `body` or `max_body`, whichever comes first.
+        pub struct Limits {
+            pub connect: Duration,
+            pub first_byte: Duration,
+            pub between_bytes: Duration,
+            pub body: Duration,
+            pub max_body: usize,
+        }
+
+        /// Discovery and replies: at most about 12 s per request.
+        pub const REQUEST: Limits = Limits {
+            connect: Duration::from_secs(3),
+            first_byte: Duration::from_secs(5),
+            between_bytes: Duration::from_secs(2),
+            body: Duration::from_secs(2),
+            max_body: 64 * 1024,
+        };
+
+        /// The health probe: inside `channel doctor`'s 10 s limit.
+        pub const PROBE: Limits = Limits {
+            connect: Duration::from_secs(2),
+            first_byte: Duration::from_secs(3),
+            between_bytes: Duration::from_secs(1),
+            body: Duration::from_secs(1),
+            max_body: 16 * 1024,
+        };
+
+        pub enum Verb {
+            Get,
+            Post,
+        }
+
+        fn nanos(duration: Duration) -> u64 {
+            u64::try_from(duration.as_nanos()).unwrap_or(u64::MAX)
+        }
+
+        /// The `wasi:http` error variant's name, without its type or payload.
+        fn error_name(code: &ErrorCode) -> String {
+            let text = format!("{code:?}");
+            let name = text.split(['(', ' ', '{']).next().unwrap_or("error");
+            name.trim_start_matches("ErrorCode::").to_string()
+        }
+
+        /// One request with `headers` and an optional JSON body. Returns the
+        /// status and up to `limits.max_body` bytes of the body.
+        pub fn request(
+            verb: Verb,
+            url: &str,
+            headers: &[(&str, &str)],
+            body: Option<&[u8]>,
+            limits: &Limits,
+        ) -> Result<(u16, Vec<u8>), String> {
+            let target = split_http_url(url).ok_or("not an http or https URL")?;
+            let list: Vec<(String, Vec<u8>)> = headers
+                .iter()
+                .map(|(name, value)| ((*name).to_string(), value.as_bytes().to_vec()))
+                .collect();
+            let fields =
+                Fields::from_list(&list).map_err(|error| format!("invalid header ({error:?})"))?;
+            let request = OutgoingRequest::new(fields);
+            let method = match verb {
+                Verb::Get => Method::Get,
+                Verb::Post => Method::Post,
+            };
+            let scheme = if target.https {
+                Scheme::Https
+            } else {
+                Scheme::Http
+            };
+            request
+                .set_method(&method)
+                .and_then(|()| request.set_scheme(Some(&scheme)))
+                .and_then(|()| request.set_authority(Some(&target.authority)))
+                .and_then(|()| request.set_path_with_query(Some(&target.path_with_query)))
+                .map_err(|()| "the request target was refused".to_string())?;
+            let options = RequestOptions::new();
+            // A host that does not support a timeout keeps its own default.
+            let _ = options.set_connect_timeout(Some(nanos(limits.connect)));
+            let _ = options.set_first_byte_timeout(Some(nanos(limits.first_byte)));
+            let _ = options.set_between_bytes_timeout(Some(nanos(limits.between_bytes)));
+            let outgoing = request
+                .body()
+                .map_err(|()| "the request body is unavailable".to_string())?;
+            let future = outgoing_handler::handle(request, Some(options))
+                .map_err(|error| error_name(&error))?;
+            if let Some(bytes) = body {
+                let stream = outgoing
+                    .write()
+                    .map_err(|()| "the request body stream is unavailable".to_string())?;
+                for chunk in bytes.chunks(4096) {
+                    stream
+                        .blocking_write_and_flush(chunk)
+                        .map_err(|error| format!("writing the request failed ({error:?})"))?;
+                }
             }
-            Err(_) => schedule_backoff(st),
+            OutgoingBody::finish(outgoing, None).map_err(|error| error_name(&error))?;
+            let response = loop {
+                match future.get() {
+                    Some(result) => break result,
+                    None => future.subscribe().block(),
+                }
+            };
+            let response = response
+                .map_err(|()| "the response was already taken".to_string())?
+                .map_err(|error| error_name(&error))?;
+            let status = response.status();
+            let incoming = response
+                .consume()
+                .map_err(|()| "the response body is unavailable".to_string())?;
+            let stream = incoming
+                .stream()
+                .map_err(|()| "the response body stream is unavailable".to_string())?;
+            let deadline = Instant::now() + limits.body;
+            let mut bytes = Vec::new();
+            while bytes.len() < limits.max_body && Instant::now() < deadline {
+                // The status already decides the outcome: a body that ends
+                // early or stalls keeps what arrived. A 2xx whose body stalls
+                // was still accepted, and reporting it as a failure would
+                // invite a duplicate post.
+                match stream.blocking_read(16 * 1024) {
+                    Ok(chunk) => bytes.extend_from_slice(&chunk),
+                    Err(_) => break,
+                }
+            }
+            // The stream is a child of the body and must go first.
+            drop(stream);
+            drop(incoming);
+            bytes.truncate(limits.max_body);
+            Ok((status, bytes))
         }
     }
 
-    /// Tear down for an op-7/op-9 reconnect. `keep_session` resumes vs a fresh
-    /// IDENTIFY. Reconnects promptly (server-directed, no backoff).
-    fn reconnect(st: &mut GatewayState, handle: u64, keep_session: bool) {
-        ws_client::ws_close(handle);
-        st.handle = None;
-        if keep_session {
-            st.session.mark_disconnected();
-        } else {
-            st.session.wipe();
+    fn authorized_get(
+        url: &str,
+        token: &str,
+        limits: &http::Limits,
+    ) -> Result<(u16, Vec<u8>), String> {
+        let authorization = format!("Bot {token}");
+        http::request(
+            http::Verb::Get,
+            url,
+            &[
+                ("authorization", &authorization),
+                ("user-agent", USER_AGENT),
+            ],
+            None,
+            limits,
+        )
+    }
+
+    /// Posts the parts of one reply.
+    struct RestReply<'a> {
+        url: &'a str,
+        token: &'a str,
+    }
+
+    impl ReplyTransport for RestReply<'_> {
+        fn now_ms(&self) -> u64 {
+            now_ms()
         }
-        st.next_connect_at = None;
+
+        fn sleep_ms(&mut self, ms: u64) {
+            std::thread::sleep(Duration::from_millis(ms));
+        }
+
+        fn post(&mut self, body: &Value) -> Result<(u16, Vec<u8>), String> {
+            let authorization = format!("Bot {}", self.token);
+            http::request(
+                http::Verb::Post,
+                self.url,
+                &[
+                    ("authorization", &authorization),
+                    ("user-agent", USER_AGENT),
+                    ("content-type", "application/json"),
+                ],
+                Some(body.to_string().as_bytes()),
+                &http::REQUEST,
+            )
+        }
     }
 
-    /// Tear down after a transport error and reconnect with backoff.
-    fn teardown_error(st: &mut GatewayState, handle: u64) {
-        ws_client::ws_close(handle);
-        st.handle = None;
-        st.session.mark_disconnected();
-        schedule_backoff(st);
+    // ── gateway I/O ──────────────────────────────────────────────────────────
+
+    fn close_code(code: &CloseCode) -> u16 {
+        match code {
+            CloseCode::Normal => 1000,
+            CloseCode::GoingAway => 1001,
+            CloseCode::ProtocolError => 1002,
+            CloseCode::UnsupportedData => 1003,
+            CloseCode::InvalidPayload => 1007,
+            CloseCode::PolicyViolation => 1008,
+            CloseCode::MessageTooBig => 1009,
+            CloseCode::MandatoryExtension => 1010,
+            CloseCode::InternalError => 1011,
+            CloseCode::ServiceRestart => 1012,
+            CloseCode::TryAgainLater => 1013,
+            CloseCode::Other(code) => *code,
+        }
     }
 
-    /// Handle a `Closed` event. A fatal Discord close code (bad token/intents)
-    /// stops reconnection; a new-session code wipes the session; otherwise
-    /// reconnect with backoff. Absent a numeric code the close is transient.
-    fn handle_close(st: &mut GatewayState, handle: u64, reason: &str) {
-        ws_client::ws_close(handle);
-        st.handle = None;
-        st.session.mark_disconnected();
-        if let Some(code) = close_code_from_reason(reason) {
-            if is_fatal_close_code(code) {
-                st.fatal = true;
+    fn connect_failure(error: WebsocketError) -> ConnectFailure {
+        match error {
+            WebsocketError::DestinationDenied => ConnectFailure::DestinationDenied,
+            WebsocketError::AccessDenied => ConnectFailure::AccessDenied,
+            WebsocketError::InvalidOptions
+            | WebsocketError::ReservedHeader
+            | WebsocketError::InvalidSubprotocol => ConnectFailure::InvalidUrl,
+            _ => ConnectFailure::Transient,
+        }
+    }
+
+    /// The outcome of one frame sent on the gateway.
+    enum Sent {
+        Done,
+        /// A full queue or spent host calls: try again on a later call.
+        Later,
+        Failed(WebsocketError),
+    }
+
+    impl Instance {
+        /// Take the one step the gateway allows this call.
+        fn step(&mut self, cfg: &DiscordConfig) {
+            let before = self.gateway.phase().clone();
+            match self.gateway.next_step(now_ms(), cfg) {
+                Step::Wait => {}
+                Step::Discover => self.discover(cfg),
+                Step::Connect { url, resume } => {
+                    if self.connect(&url, resume) {
+                        self.pump(cfg);
+                    }
+                }
+                Step::Pump => self.pump(cfg),
+            }
+            self.report_stop(&before, cfg);
+        }
+
+        /// Log entering a state that needs the operator.
+        fn report_stop(&self, before: &Phase, cfg: &DiscordConfig) {
+            match (before, self.gateway.phase()) {
+                (Phase::Parked { reason: was, .. }, Phase::Parked { reason, .. })
+                    if was == reason => {}
+                (
+                    _,
+                    Phase::Parked {
+                        reason,
+                        probe_at_ms,
+                    },
+                ) => log(
+                    LogLevel::Error,
+                    PluginAction::Fail,
+                    Some(PluginOutcome::Failure),
+                    "discord: gateway stopped until the next probe",
+                    json!({
+                        "reason": reason.as_str(),
+                        "hint": reason.hint(cfg.intents()),
+                        "probe_in_secs": probe_at_ms.saturating_sub(now_ms()) / 1000,
+                    }),
+                ),
+                (Phase::Misconfigured { reason: was, .. }, Phase::Misconfigured { reason, .. })
+                    if was == reason => {}
+                (_, Phase::Misconfigured { reason, .. }) => log(
+                    LogLevel::Error,
+                    PluginAction::Fail,
+                    Some(PluginOutcome::Failure),
+                    "discord: gateway connection refused by the host; retrying every minute",
+                    json!({ "reason": reason.as_str() }),
+                ),
+                _ => {}
+            }
+        }
+
+        fn discover(&mut self, cfg: &DiscordConfig) {
+            let url = format!("{}/gateway/bot", cfg.api_base);
+            let outcome = match bot_token() {
+                Ok(token) => match authorized_get(&url, &token, &http::REQUEST) {
+                    Ok((status, body)) => {
+                        parse_gateway_bot(status, &body, cfg.api_base.starts_with("http://"))
+                    }
+                    Err(error) => {
+                        log(
+                            LogLevel::Warn,
+                            PluginAction::Query,
+                            Some(PluginOutcome::Failure),
+                            "discord: gateway discovery failed",
+                            json!({ "host": url_host(&url), "error": error }),
+                        );
+                        Discovery::Failed { status: 0 }
+                    }
+                },
+                Err(error) => {
+                    log(
+                        LogLevel::Warn,
+                        PluginAction::Query,
+                        Some(PluginOutcome::Failure),
+                        "discord: bot_token unavailable for gateway discovery",
+                        json!({ "error": error.name() }),
+                    );
+                    Discovery::Failed { status: 0 }
+                }
+            };
+            match &outcome {
+                Discovery::Ready { remaining, .. } => log(
+                    LogLevel::Info,
+                    PluginAction::Query,
+                    Some(PluginOutcome::Success),
+                    "discord: gateway discovered",
+                    json!({ "sessions_left": remaining }),
+                ),
+                Discovery::RateLimited { retry_after_ms } => log(
+                    LogLevel::Warn,
+                    PluginAction::Query,
+                    Some(PluginOutcome::Failure),
+                    "discord: gateway discovery rate limited",
+                    json!({ "retry_after_ms": retry_after_ms }),
+                ),
+                Discovery::Failed { status } if *status != 0 => log(
+                    LogLevel::Warn,
+                    PluginAction::Query,
+                    Some(PluginOutcome::Failure),
+                    "discord: gateway discovery failed",
+                    json!({ "host": url_host(&url), "status": status }),
+                ),
+                Discovery::Unauthorized | Discovery::Failed { .. } => {}
+            }
+            self.gateway.on_discovery(now_ms(), outcome);
+        }
+
+        fn connect(&mut self, url: &str, resume: bool) -> bool {
+            let options = ConnectOptions {
+                url: gateway_ws_url(url),
+                headers: Vec::new(),
+                subprotocols: Vec::new(),
+                tls_profile: None,
+            };
+            match websocket::connect(&options) {
+                Ok(connection) => {
+                    self.connection = Some(connection);
+                    self.gateway.on_connected(now_ms(), url, resume);
+                    log(
+                        LogLevel::Info,
+                        PluginAction::Connect,
+                        Some(PluginOutcome::Success),
+                        "discord: gateway connected",
+                        json!({ "host": url_host(url), "resume": resume }),
+                    );
+                    true
+                }
+                Err(error) => {
+                    log(
+                        LogLevel::Warn,
+                        PluginAction::Connect,
+                        Some(PluginOutcome::Failure),
+                        "discord: gateway connect failed",
+                        json!({ "host": url_host(url), "resume": resume, "error": error.name() }),
+                    );
+                    self.gateway
+                        .on_connect_failed(now_ms(), connect_failure(error), resume);
+                    false
+                }
+            }
+        }
+
+        /// Read queued events, send any owed handshake, and heartbeat.
+        fn pump(&mut self, cfg: &DiscordConfig) {
+            if self.connection.is_none() {
+                self.disconnect(Disconnect::Transport);
                 return;
             }
-            if requires_new_session(code) {
-                st.session.wipe();
+            let mut events = 0;
+            let mut waits = 0;
+            let mut caught_up = false;
+            while events < MAX_EVENTS_PER_POLL && self.inbox.len() < MAX_QUEUED_MESSAGES {
+                let Some(connection) = self.connection.as_ref() else {
+                    return;
+                };
+                match connection.receive() {
+                    Ok(Some(Event::Message(Message::Text(text)))) => {
+                        events += 1;
+                        self.on_text(&text, cfg);
+                    }
+                    Ok(Some(Event::Message(Message::Binary(_)))) => {
+                        events += 1;
+                        self.binary_frame();
+                    }
+                    Ok(Some(event @ (Event::Closed(_) | Event::Failed(_)))) => {
+                        self.terminal(event);
+                        return;
+                    }
+                    Ok(None) if events > 0 && waits < MAX_FLOW_WAITS => {
+                        waits += 1;
+                        std::thread::sleep(FLOW_WAIT);
+                    }
+                    Ok(None) => {
+                        caught_up = true;
+                        break;
+                    }
+                    // This call's host calls are spent; the connection is fine.
+                    Err(WebsocketError::Unavailable) => break,
+                    Err(_) => {
+                        self.disconnect(Disconnect::Transport);
+                        return;
+                    }
+                }
+                if self.connection.is_none() {
+                    return;
+                }
+            }
+            if let Some(handshake) = self.gateway.owed_handshake().cloned() {
+                self.send_handshake(&handshake, cfg);
+            }
+            if self.connection.is_none() {
+                return;
+            }
+            if self.gateway.handshake_overdue(now_ms()) {
+                log(
+                    LogLevel::Warn,
+                    PluginAction::Timeout,
+                    None,
+                    "discord: gateway handshake did not complete in time; reconnecting",
+                    json!({}),
+                );
+                self.disconnect(Disconnect::HandshakeTimeout);
+                return;
+            }
+            match self.gateway.heartbeat_step(now_ms(), caught_up) {
+                Beat::Idle => {}
+                Beat::Send(payload) => {
+                    if let Sent::Failed(error) = self.send_heartbeat(payload) {
+                        self.send_failed(error, cfg);
+                    }
+                }
+                Beat::Zombie => {
+                    log(
+                        LogLevel::Warn,
+                        PluginAction::Reconnect,
+                        None,
+                        "discord: heartbeat not acknowledged; reconnecting",
+                        json!({}),
+                    );
+                    self.disconnect(Disconnect::Zombie);
+                }
             }
         }
-        schedule_backoff(st);
+
+        fn on_text(&mut self, text: &str, cfg: &DiscordConfig) {
+            match self.gateway.on_frame(now_ms(), text, cfg) {
+                FrameAction::None => {}
+                FrameAction::Handshake(handshake) => self.send_handshake(&handshake, cfg),
+                FrameAction::Send(payload) => {
+                    if let Sent::Failed(error) = self.send_heartbeat(payload) {
+                        self.send_failed(error, cfg);
+                    }
+                }
+                FrameAction::Emit(message) => self.inbox.push_back(message),
+                FrameAction::Identified { resumed } => self.identified(resumed),
+                FrameAction::Reconnect { keep_session } => self.server_reconnect(keep_session),
+            }
+        }
+
+        fn identified(&self, resumed: bool) {
+            log(
+                LogLevel::Info,
+                PluginAction::Connect,
+                Some(PluginOutcome::Success),
+                if resumed {
+                    "discord: gateway session resumed"
+                } else {
+                    "discord: gateway session ready"
+                },
+                json!({ "resumed": resumed }),
+            );
+            if self.gateway.bot_user_id() != self.self_id {
+                log(
+                    LogLevel::Warn,
+                    PluginAction::Validate,
+                    None,
+                    "discord: the gateway reports a different bot id than the token",
+                    json!({}),
+                );
+            }
+        }
+
+        fn server_reconnect(&mut self, keep_session: bool) {
+            log(
+                LogLevel::Info,
+                PluginAction::Reconnect,
+                None,
+                "discord: gateway asked for a reconnect",
+                json!({ "resume": keep_session }),
+            );
+            self.disconnect(Disconnect::ServerReconnect { keep_session });
+        }
+
+        fn binary_frame(&mut self) {
+            if !self.binary_frame_logged {
+                self.binary_frame_logged = true;
+                log(
+                    LogLevel::Warn,
+                    PluginAction::Skip,
+                    None,
+                    "discord: ignored a binary gateway frame",
+                    json!({}),
+                );
+            }
+        }
+
+        /// A terminal event ends the connection with its cause.
+        fn terminal(&mut self, event: Event) {
+            match event {
+                Event::Closed(frame) => {
+                    let code = frame.as_ref().map(|frame| close_code(&frame.code));
+                    self.disconnect(Disconnect::Closed(code));
+                }
+                Event::Failed(WebsocketError::PayloadTooLarge) => {
+                    self.disconnect(Disconnect::Oversize);
+                }
+                Event::Failed(error) => {
+                    log(
+                        LogLevel::Warn,
+                        PluginAction::Receive,
+                        Some(PluginOutcome::Failure),
+                        "discord: gateway connection failed",
+                        json!({ "error": error.name() }),
+                    );
+                    self.disconnect(Disconnect::Transport);
+                }
+                Event::Message(_) => {}
+            }
+        }
+
+        /// A send failed. When the socket has closed, the close event with its
+        /// code is still queued behind any unread frames: read up to it, so a
+        /// 4004 or 4014 is not mistaken for a dropped connection.
+        fn send_failed(&mut self, error: WebsocketError, cfg: &DiscordConfig) {
+            if error != WebsocketError::Closed {
+                self.disconnect(Disconnect::Transport);
+                return;
+            }
+            let mut reads = 0;
+            let mut waits = 0;
+            while reads < MAX_DRAIN_ON_CLOSE {
+                let Some(connection) = self.connection.as_ref() else {
+                    return;
+                };
+                match connection.receive() {
+                    Ok(Some(Event::Message(Message::Text(text)))) => {
+                        reads += 1;
+                        // Messages before the close still count; nothing is
+                        // sent on a closed socket.
+                        match self.gateway.on_frame(now_ms(), &text, cfg) {
+                            FrameAction::Emit(message) => self.inbox.push_back(message),
+                            FrameAction::Identified { resumed } => self.identified(resumed),
+                            _ => {}
+                        }
+                    }
+                    Ok(Some(Event::Message(Message::Binary(_)))) => {
+                        reads += 1;
+                        self.binary_frame();
+                    }
+                    Ok(Some(event)) => {
+                        self.terminal(event);
+                        return;
+                    }
+                    // The host can report the socket closed a moment before it
+                    // queues the close event.
+                    Ok(None) if waits < MAX_FLOW_WAITS => {
+                        waits += 1;
+                        std::thread::sleep(FLOW_WAIT);
+                    }
+                    Ok(None) | Err(_) => break,
+                }
+            }
+            self.disconnect(Disconnect::Transport);
+        }
+
+        /// Build the handshake with the token read now, send it, and drop both.
+        fn send_handshake(&mut self, handshake: &Handshake, cfg: &DiscordConfig) {
+            let token = match bot_token() {
+                Ok(token) => token,
+                // Retried on a later call.
+                Err(SecretError::Unavailable) => return,
+                Err(error) => {
+                    log(
+                        LogLevel::Error,
+                        PluginAction::Send,
+                        Some(PluginOutcome::Failure),
+                        "discord: cannot read bot_token for the gateway handshake",
+                        json!({ "error": error.name() }),
+                    );
+                    self.disconnect(Disconnect::Transport);
+                    return;
+                }
+            };
+            let sent = self.send_text(handshake.payload(&token));
+            drop(token);
+            match sent {
+                Sent::Done => {
+                    self.gateway.on_handshake_sent(now_ms());
+                    log(
+                        LogLevel::Info,
+                        PluginAction::Send,
+                        Some(PluginOutcome::Success),
+                        "discord: gateway handshake sent",
+                        json!({ "kind": handshake.kind() }),
+                    );
+                }
+                // Still owed; sent on a later call.
+                Sent::Later => {}
+                Sent::Failed(error) => self.send_failed(error, cfg),
+            }
+        }
+
+        fn send_heartbeat(&mut self, payload: String) -> Sent {
+            let sent = self.send_text(payload);
+            if let Sent::Done = sent {
+                self.gateway.on_heartbeat_sent(now_ms());
+            }
+            sent
+        }
+
+        fn send_text(&self, text: String) -> Sent {
+            let Some(connection) = self.connection.as_ref() else {
+                return Sent::Failed(WebsocketError::Closed);
+            };
+            match connection.send(&Message::Text(text)) {
+                Ok(()) => Sent::Done,
+                Err(WebsocketError::QueueFull | WebsocketError::Unavailable) => Sent::Later,
+                Err(error) => Sent::Failed(error),
+            }
+        }
+
+        fn disconnect(&mut self, cause: Disconnect) {
+            self.connection = None;
+            self.gateway.on_disconnect(now_ms(), cause);
+            let close_code = match cause {
+                Disconnect::Closed(code) => code,
+                _ => None,
+            };
+            log(
+                LogLevel::Warn,
+                PluginAction::Disconnect,
+                None,
+                "discord: gateway disconnected",
+                json!({
+                    "cause": cause.as_str(),
+                    "close_code": close_code,
+                    "resumable": self.gateway.can_resume(),
+                }),
+            );
+        }
     }
 
-    fn to_wit(inb: Inbound) -> InboundMessage {
+    fn to_wit(message: Inbound) -> InboundMessage {
         InboundMessage {
-            id: inb.id,
-            sender: inb.sender,
-            reply_target: inb.reply_target,
-            content: inb.content,
+            id: message.id,
+            sender: message.sender,
+            reply_target: message.reply_target,
+            content: message.content,
             channel: PLUGIN_NAME.to_string(),
             channel_alias: None,
-            timestamp: 0,
+            timestamp: message.timestamp_ms,
             thread_ts: None,
             interruption_scope_id: None,
             attachments: Vec::new(),
             subject: None,
         }
+    }
+
+    /// Before a session is established, ask Discord whether the token works:
+    /// `GET /users/@me`, as the built-in channel's health check does.
+    fn token_accepted() -> bool {
+        let Ok(cfg) = public_config() else {
+            return false;
+        };
+        let Ok(token) = bot_token() else {
+            return false;
+        };
+        let url = format!("{}/users/@me", cfg.api_base);
+        matches!(authorized_get(&url, &token, &http::PROBE), Ok((200, _)))
     }
 
     struct DiscordChannel;
@@ -250,7 +850,7 @@ mod component {
             PLUGIN_NAME.to_string()
         }
         fn plugin_version() -> String {
-            PLUGIN_VERSION.to_string()
+            env!("CARGO_PKG_VERSION").to_string()
         }
     }
 
@@ -259,136 +859,141 @@ mod component {
             PLUGIN_NAME.to_string()
         }
 
-        fn configure(config: String) -> Result<(), String> {
-            let cfg = DiscordConfig::from_json(&config);
-            // Derive the bot id from the token so self-filtering + the mention
-            // form work before the first READY (READY later confirms both).
-            let bot_id = bot_user_id_from_token(&cfg.bot_token).unwrap_or_default();
-            let mention = (!bot_id.is_empty()).then(|| format!("<@{bot_id}>"));
-            STATE.with(|s| {
-                let mut st = s.borrow_mut();
-                *st = GatewayState::default();
-                st.session.bot_user_id = bot_id;
-                st.self_mention = mention;
-            });
-            CONFIG.with(|c| *c.borrow_mut() = cfg);
-            BUFFER.with(|b| b.borrow_mut().clear());
+        /// Validate the config and token, and start over without a
+        /// connection. No network here: the first `poll-message` dials.
+        fn configure() -> Result<(), String> {
+            let cfg = public_config()?;
+            let self_id = {
+                let token = bot_token().map_err(|error| {
+                    format!("discord: cannot read bot_token ({})", error.name())
+                })?;
+                bot_user_id_from_token(&token)
+                    .ok_or_else(|| "discord: bot_token is not a Discord bot token".to_string())?
+            };
+            let instance = Instance {
+                gateway: Gateway::new(now_ms(), self_id.clone(), seed()),
+                connection: None,
+                inbox: VecDeque::new(),
+                self_id,
+                config_unavailable: false,
+                binary_frame_logged: false,
+            };
+            INSTANCE.with(|cell| *cell.borrow_mut() = Some(instance));
+            log(
+                LogLevel::Info,
+                PluginAction::Start,
+                Some(PluginOutcome::Success),
+                "discord: configured",
+                json!({
+                    "intents": cfg.intents(),
+                    "guild_filter": cfg.guild_ids.len(),
+                    "channel_filter": cfg.channel_ids.len(),
+                    "gateway_url_set": cfg.gateway_url.is_some(),
+                }),
+            );
             Ok(())
         }
 
         fn send(message: SendMessage) -> Result<(), String> {
-            let cfg = CONFIG.with(|c| c.borrow().clone());
-            if cfg.bot_token.is_empty() {
-                return Err("discord: no bot_token configured".to_string());
+            let cfg = public_config()?;
+            let recipient = effective_recipient(&message.recipient, &cfg.channel_ids)?;
+            let chunks = chunk_text(&message.content, MAX_MESSAGE_CHARS);
+            if chunks.is_empty() {
+                return Err("discord: the message is empty".to_string());
             }
-            // The recipient is a raw Discord channel ID; a thread is targeted by
-            // its own channel ID, so no special reply/thread handling is needed.
-            let url = format!("{}/channels/{}/messages", cfg.api_base, message.recipient);
-            for chunk in chunk_text(&message.content, MAX_MESSAGE_CHARS) {
-                let (status, resp) =
-                    post_json_auth(&url, &cfg.bot_token, &build_send_body(&chunk))?;
-                if !(200..300).contains(&status) {
-                    return Err(format!("discord send failed ({status}): {resp}"));
-                }
+            let url = format!("{}/channels/{recipient}/messages", cfg.api_base);
+            let token = bot_token()
+                .map_err(|error| format!("discord: cannot read bot_token ({})", error.name()))?;
+            let result = deliver(
+                &mut RestReply {
+                    url: &url,
+                    token: &token,
+                },
+                &chunks,
+            );
+            drop(token);
+            if let Err(reason) = &result {
+                log(
+                    LogLevel::Warn,
+                    PluginAction::Send,
+                    Some(PluginOutcome::Failure),
+                    "discord: send failed",
+                    json!({ "reason": reason, "parts": chunks.len() }),
+                );
             }
-            Ok(())
+            result
         }
 
         fn poll_message() -> Option<InboundMessage> {
-            if let Some(inb) = BUFFER.with(|b| b.borrow_mut().pop_front()) {
-                return Some(to_wit(inb));
-            }
-            let cfg = CONFIG.with(|c| c.borrow().clone());
-            if cfg.bot_token.is_empty() {
-                return None;
-            }
-
-            STATE.with(|s| {
-                let mut guard = s.borrow_mut();
-                let st: &mut GatewayState = &mut guard;
-                if st.fatal {
-                    return;
+            with_instance(|instance| {
+                if let Some(message) = instance.inbox.pop_front() {
+                    return Some(to_wit(message));
                 }
-                let Some(handle) = st.handle else {
-                    ensure_connected(st, &cfg);
-                    return;
-                };
-                // Heartbeat once the interval has elapsed (only after Hello, i.e.
-                // once the session has adopted an interval).
-                if st.session.hello_seen() {
-                    let interval = Duration::from_millis(st.session.hb_interval_ms);
-                    let due = st.last_hb.is_none_or(|t| t.elapsed() >= interval);
-                    if due {
-                        if ws_client::ws_send_text(handle, &build_heartbeat(st.session.seq))
-                            .is_err()
-                        {
-                            teardown_error(st, handle);
-                            return;
+                match public_config() {
+                    Ok(cfg) => {
+                        if std::mem::take(&mut instance.config_unavailable) {
+                            log(
+                                LogLevel::Info,
+                                PluginAction::Resolve,
+                                Some(PluginOutcome::Success),
+                                "discord: config readable again",
+                                json!({}),
+                            );
                         }
-                        st.last_hb = Some(Instant::now());
+                        instance.step(&cfg);
                     }
-                }
-                // Drain a bounded batch of frames, applying each machine action.
-                for _ in 0..DRAIN_BATCH {
-                    match ws_client::ws_receive(handle) {
-                        Ok(WsEvent::Text(t)) => {
-                            match st.session.on_frame(&cfg, &t, st.pending_resume) {
-                                FrameAction::None => {}
-                                FrameAction::Handshake(payload) => {
-                                    let _ = ws_client::ws_send_text(handle, &payload);
-                                    st.last_hb = Some(Instant::now());
-                                    st.backoff = INITIAL_BACKOFF;
-                                }
-                                FrameAction::Send(payload) => {
-                                    let _ = ws_client::ws_send_text(handle, &payload);
-                                    st.last_hb = Some(Instant::now());
-                                }
-                                FrameAction::Emit(inb) => {
-                                    BUFFER.with(|b| b.borrow_mut().push_back(inb));
-                                }
-                                FrameAction::Reconnect { keep_session } => {
-                                    reconnect(st, handle, keep_session);
-                                    break;
-                                }
-                            }
-                        }
-                        Ok(WsEvent::Idle) => break,
-                        Ok(WsEvent::Closed(r)) => {
-                            handle_close(st, handle, &r);
-                            break;
-                        }
-                        Err(_) => {
-                            teardown_error(st, handle);
-                            break;
+                    // Without the config there is nothing to filter messages
+                    // by: pause, and pick up where the gateway is when the
+                    // config is readable again.
+                    Err(reason) => {
+                        if !instance.config_unavailable {
+                            instance.config_unavailable = true;
+                            log(
+                                LogLevel::Error,
+                                PluginAction::Resolve,
+                                Some(PluginOutcome::Failure),
+                                "discord: cannot read config; paused until it is readable",
+                                json!({ "reason": reason }),
+                            );
                         }
                     }
                 }
-            });
-
-            BUFFER.with(|b| b.borrow_mut().pop_front()).map(to_wit)
+                instance.inbox.pop_front().map(to_wit)
+            })
+            .flatten()
         }
 
         fn get_channel_capabilities() -> ChannelCapabilities {
-            ChannelCapabilities::HEALTH_CHECK | ChannelCapabilities::SELF_ADDRESSED_MENTION
+            ChannelCapabilities::HEALTH_CHECK
+                | ChannelCapabilities::SELF_HANDLE
+                | ChannelCapabilities::SELF_ADDRESSED_MENTION
         }
 
+        /// False while stopped, refused, or unable to read config; true while
+        /// a session is established; otherwise whatever Discord says about the
+        /// token.
         fn health_check() -> bool {
-            // A live-connection check would need a blocking REST round-trip on
-            // every call; report configured-ness instead (token present).
-            !CONFIG.with(|c| c.borrow().bot_token.is_empty())
+            let health =
+                with_instance(|instance| instance.gateway.health(!instance.config_unavailable));
+            match health {
+                None | Some(Health::Unhealthy) => false,
+                Some(Health::Healthy) => true,
+                Some(Health::AskDiscord) => token_accepted(),
+            }
         }
 
+        /// The bot's user id, which is what inbound messages carry as their
+        /// sender, so the host's self-loop guard can match it.
         fn self_handle() -> Option<String> {
-            STATE.with(|s| s.borrow().session.self_handle.clone())
+            with_instance(|instance| instance.self_id.clone())
         }
 
         fn self_addressed_mention() -> Option<String> {
-            STATE.with(|s| s.borrow().self_mention.clone())
+            with_instance(|instance| format!("<@{}>", instance.self_id))
         }
 
         // ── capability-gated stubs (documented WIT defaults) ──
         fn drop_self_message(_msg: InboundMessage) -> bool {
-            // Self messages are already filtered in `message_create_to_inbound`.
             false
         }
         fn start_typing(_recipient: String) -> Result<(), String> {
@@ -455,12 +1060,9 @@ mod component {
         fn webhook_path() -> Option<String> {
             None
         }
-        fn parse_webhook(
-            _headers: Vec<(String, String)>,
-            _body: Vec<u8>,
-        ) -> Result<Vec<InboundMessage>, WebhookRejection> {
+        fn parse_webhook(_request: WebhookRequest) -> Result<WebhookResponse, WebhookRejection> {
             Err(WebhookRejection::BadRequest(
-                "this channel does not serve webhooks".to_string(),
+                "discord: webhook ingress is unsupported".to_string(),
             ))
         }
     }

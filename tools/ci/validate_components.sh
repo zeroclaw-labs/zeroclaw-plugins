@@ -153,15 +153,13 @@ for plugin in "$@"; do
     echo "error: checkout is not clean before validating $plugin" \
       | tee -a "$metadata_log" >&2
     manifest_valid=0
-  elif ! mkdir -p \
-    "$canonical_root/plugins" "$canonical_root/wit" \
-    "$build_root/plugins" "$build_root/wit" \
+  # Snapshot the whole committed wit/ tree: a plugin binds a vendored directory
+  # (wit/v0, wit/next, wit/unstable) through a relative path.
+  elif ! mkdir -p "$canonical_root/plugins" "$build_root/plugins" \
     || ! cp -R "$checkout_plugin_dir" "$canonical_root/plugins/" \
-    || ! cp -R "$REPOSITORY_ROOT/wit/v0" "$canonical_root/wit/" \
-    || ! cp -R "$REPOSITORY_ROOT/wit/unstable" "$canonical_root/wit/" \
+    || ! cp -R "$REPOSITORY_ROOT/wit" "$canonical_root/" \
     || ! cp -R "$checkout_plugin_dir" "$build_root/plugins/" \
-    || ! cp -R "$REPOSITORY_ROOT/wit/v0" "$build_root/wit/" \
-    || ! cp -R "$REPOSITORY_ROOT/wit/unstable" "$build_root/wit/"; then
+    || ! cp -R "$REPOSITORY_ROOT/wit" "$build_root/"; then
     echo "error: could not snapshot committed inputs for $plugin" \
       | tee -a "$metadata_log" >&2
     manifest_valid=0
@@ -187,6 +185,14 @@ for plugin in "$@"; do
       registry=$registry_raw
     else
       echo "error: registry must be true or false" >>"$metadata_log"
+      manifest_valid=0
+    fi
+    # The planner and snapshot admission share explicit current-WIT consumers.
+    if ! python3 "$SCRIPT_DIR/manifest_field.py" --prepare-wit-snapshot \
+        "$manifest" "$canonical_root/wit" "$plugin" \
+      || ! python3 "$SCRIPT_DIR/manifest_field.py" --prepare-wit-snapshot \
+        "$manifest" "$build_root/wit" "$plugin"; then
+      echo "error: could not prepare admitted WIT snapshot for $plugin" >>"$metadata_log"
       manifest_valid=0
     fi
     if [[ $name != "$plugin" ]]; then

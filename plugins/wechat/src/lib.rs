@@ -26,7 +26,7 @@ pub mod wechat;
 #[cfg(target_family = "wasm")]
 mod component {
     wit_bindgen::generate!({
-        path: "../../wit/unstable",
+        path: "../../wit/v0",
         world: "channel-plugin",
         features: ["plugins-wit-v0"],
     });
@@ -45,9 +45,11 @@ mod component {
 
     use exports::zeroclaw::plugin::channel::{
         ApprovalRequest, ApprovalResponse, ChannelCapabilities, Guest as Channel, InboundMessage,
-        SendMessage, WebhookRejection,
+        SendMessage, WebhookRejection, WebhookRequest, WebhookResponse,
     };
     use exports::zeroclaw::plugin::plugin_info::Guest as PluginInfo;
+    use zeroclaw::plugin::logging::{self, LogLevel, PluginAction, PluginEvent, PluginOutcome};
+    use zeroclaw::plugin::{config, secrets};
 
     const PLUGIN_NAME: &str = "wechat";
     const PLUGIN_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -133,6 +135,56 @@ mod component {
         }
     }
 
+    /// Report a config or secret read the host refused or could not serve,
+    /// naming the key and the error kind, never a value.
+    fn report_read_failure(key: &str, kind: &str) {
+        logging::log_record(
+            LogLevel::Warn,
+            &PluginEvent {
+                function_name: "wechat::configure".to_string(),
+                action: PluginAction::Fail,
+                outcome: Some(PluginOutcome::Failure),
+                duration_ms: None,
+                attrs: None,
+                message: format!("wechat: could not read {key}: {kind}"),
+            },
+        );
+    }
+
+    /// The fixed name of a `config.get` failure; the variants carry no payload.
+    fn config_error_kind(error: config::ConfigError) -> &'static str {
+        match error {
+            config::ConfigError::AccessDenied => "access denied",
+            config::ConfigError::Unavailable => "unavailable",
+        }
+    }
+
+    /// The fixed name of a `secrets.get` failure; the variants carry no payload.
+    fn secret_error_kind(error: secrets::SecretError) -> &'static str {
+        match error {
+            secrets::SecretError::AccessDenied => "access denied",
+            secrets::SecretError::NotFound => "not found",
+            secrets::SecretError::Unavailable => "unavailable",
+        }
+    }
+
+    /// The instance's typed config, read when the host configures the
+    /// instance. `config.get` serves the public settings; the schema's
+    /// `x-secret` values reach the plugin only through `secrets.get`. A read
+    /// the host refuses is logged and leaves its field at the default, so a
+    /// misconfigured instance stays inert rather than half-configured.
+    fn load_config() -> WeChatConfig {
+        let public = config::get().unwrap_or_else(|error| {
+            report_read_failure("config", config_error_kind(error));
+            String::new()
+        });
+        let mut cfg = WeChatConfig::from_json(&public);
+        cfg.bot_token = secrets::get("bot_token")
+            .map_err(|error| report_read_failure("bot_token", secret_error_kind(error)))
+            .unwrap_or_default();
+        cfg
+    }
+
     struct WeChatChannel;
 
     impl PluginInfo for WeChatChannel {
@@ -149,8 +201,8 @@ mod component {
             PLUGIN_NAME.to_string()
         }
 
-        fn configure(config: String) -> Result<(), String> {
-            let cfg = WeChatConfig::from_json(&config);
+        fn configure() -> Result<(), String> {
+            let cfg = load_config();
             // Best-effort session bootstrap: the interactive QR login can't run
             // in-sandbox, so the "session" is the token the operator supplied.
             // A missing token never fails load — it is surfaced at `send` time
@@ -339,10 +391,7 @@ mod component {
             None
         }
 
-        fn parse_webhook(
-            _headers: Vec<(String, String)>,
-            _body: Vec<u8>,
-        ) -> Result<Vec<InboundMessage>, WebhookRejection> {
+        fn parse_webhook(_request: WebhookRequest) -> Result<WebhookResponse, WebhookRejection> {
             Err(WebhookRejection::BadRequest(
                 "this channel does not serve webhooks".to_string(),
             ))

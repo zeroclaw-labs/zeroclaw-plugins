@@ -233,3 +233,15 @@ pub fn posts_url(base_url: &str) -> String {
 pub fn me_url(base_url: &str) -> String {
     format!("{}/api/v4/users/me", base_url.trim_end_matches('/'))
 }
+
+/// The path of a request URL, without scheme, host, query or fragment. Error
+/// messages reach host logs, so they name the request this way rather than by
+/// the operator's server address or query parameters.
+pub fn url_path(url: &str) -> &str {
+    let rest = url.split_once("://").map_or(url, |(_, rest)| rest);
+    let tail = &rest[rest.find(['/', '?', '#']).unwrap_or(rest.len())..];
+    if !tail.starts_with('/') {
+        return "/";
+    }
+    tail.split(['?', '#']).next().unwrap_or("/")
+}

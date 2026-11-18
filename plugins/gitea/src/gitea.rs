@@ -570,6 +570,18 @@ pub fn rfc3339_to_unix(s: &str) -> Option<i64> {
     Some(ts)
 }
 
+/// The path of a request URL, without scheme, host, query or fragment. Error
+/// messages reach host logs, so they name the request this way rather than by
+/// the operator's server address or query parameters.
+pub fn url_path(url: &str) -> &str {
+    let rest = url.split_once("://").map_or(url, |(_, rest)| rest);
+    let tail = &rest[rest.find(['/', '?', '#']).unwrap_or(rest.len())..];
+    if !tail.starts_with('/') {
+        return "/";
+    }
+    tail.split(['?', '#']).next().unwrap_or("/")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

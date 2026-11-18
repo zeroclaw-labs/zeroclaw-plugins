@@ -5,33 +5,6 @@ connects your agent to Reddit as an OAuth2 bot. It long-polls the inbox for
 unread mentions, DMs, and comment replies and posts the agent's replies back —
 all from a sandboxed `wasm32-wasip2` WIT component, with no native build.
 
-```bash
-zeroclaw plugin install reddit \
-  --registry https://raw.githubusercontent.com/JordanTheJet/zeroclaw-plugins/main/registry.json
-```
-
-## Configuration
-
-The OAuth2 credentials and settings come from the plugin's config section
-(requires the `config_read` permission). Fields (they mirror the built-in
-`reddit` channel's snake_case keys):
-
-- `client_id` (required) — Reddit OAuth2 app client ID.
-- `client_secret` (required) — Reddit OAuth2 app client secret. Sent with
-  `client_id` as HTTP Basic auth to the token endpoint.
-- `refresh_token` (required) — OAuth2 refresh token for persistent access. It is
-  exchanged for a short-lived access token via the `refresh_token` grant, which
-  is cached and re-fetched automatically on a `401`.
-- `username` (required) — the bot's Reddit username (without the `u/` prefix).
-  Used for the self-loop guard and as the bot's self-handle.
-- `subreddits` — optional allow-list (without the `r/` prefix). Empty accepts
-  items from any subreddit the bot can see; DMs (which carry no subreddit) are
-  always accepted. Matching is case-insensitive.
-
-On a host with the `provides` feature this plugin **mirrors** the built-in
-`reddit` channel and reads `[channels.reddit.<alias>]`; on older hosts it loads
-as a novel channel configured from `[[plugins.entries.reddit]].config`.
-
 ## How it works
 
 - **Auth** — `POST https://www.reddit.com/api/v1/access_token` with HTTP Basic
@@ -48,11 +21,95 @@ as a novel channel configured from `[[plugins.entries.reddit]].config`.
 Every request carries the required `User-Agent`. A single short poll per
 `poll_message` keeps the client within Reddit's 60 requests/minute cap.
 
+## Host requirement
+
+The plugin binds the host contract first released in ZeroClaw v0.8.6: typed
+config through `config.get`, and its credentials through `secrets.get`. Released
+versions up to ZeroClaw v0.8.5 do not load it. The host also needs the Cranelift
+backend, which compiles `.wasm` components (`--features plugins-wasm-cranelift`
+in a source build).
+
+`zeroclaw plugin install` instantiates the component before it installs
+anything, and `zeroclaw plugin info reddit` repeats that check, so an
+incompatible host refuses the package with the reason instead of failing at
+startup.
+
+## Install and bind an instance
+
+The plugin runs only as a named channel instance, `plugin.<alias>`. For an
+instance named `main`:
+
+```bash
+zeroclaw plugin install reddit --channel-alias main --egress declared
+```
+
+`--channel-alias` writes the `[channels.plugin.main]` binding and creates the
+instance's config entry, and `--egress declared` grants the hosts the manifest
+declares: `oauth.reddit.com`, `www.reddit.com`. `--egress none` binds with no
+network reach instead, and `zeroclaw plugin bind` binds an already installed
+package.
+
+The instance key is `zpi1_` followed by the unpadded base64url of the JSON
+array `["reddit","channel","<alias>"]`; for `main` it is:
+
+`zpi1_WyJyZWRkaXQiLCJjaGFubmVsIiwibWFpbiJd`
+
+Set the credentials and settings, then enable the plugin system:
+
+```bash
+# Each secret prompts without echo and is stored encrypted.
+zeroclaw config set plugins.entries.zpi1_WyJyZWRkaXQiLCJjaGFubmVsIiwibWFpbiJd.config.client_secret
+zeroclaw config set plugins.entries.zpi1_WyJyZWRkaXQiLCJjaGFubmVsIiwibWFpbiJd.config.refresh_token
+zeroclaw config set --no-interactive plugins.entries.zpi1_WyJyZWRkaXQiLCJjaGFubmVsIiwibWFpbiJd.config.client_id YOUR_CLIENT_ID
+zeroclaw config set --no-interactive plugins.entries.zpi1_WyJyZWRkaXQiLCJjaGFubmVsIiwibWFpbiJd.config.username YOUR_BOT_USERNAME
+zeroclaw config set plugins.enabled true
+```
+
+Route the instance to an agent and admit the senders it may answer:
+
+```toml
+[agents.assistant]
+channels = ["plugin.main"]
+
+[peer_groups.reddit_main]
+channel = "plugin.main"
+external_peers = ["<sender>"]
+```
+
+Restart the daemon. Do not also run the built-in channel with the same
+credentials, or both answer.
+
+Upgrading from an earlier version: this version reads only its instance's config
+entry, never `[channels.reddit.<alias>]` or an older `[[plugins.entries]]`
+record named `reddit`. Bind an instance and set the values again under its key,
+the credentials through the secret prompt.
+
+## Configuration
+
+Set each non-secret value with
+`zeroclaw config set --no-interactive plugins.entries.<instance-key>.config.<key> <value>`;
+without `--no-interactive` the command prompts for the value instead. Set a
+credential without a value, so the command prompts for it without echo.
+Strings are written as is; booleans, integers, and lists as JSON text, for
+example `'["a","b"]'`. The schema rejects keys it does not list.
+
+| Key | Type | Default | Meaning |
+|---|---|---|---|
+| `client_id` | string, required |  | Reddit OAuth2 app client id. |
+| `client_secret` | string, secret, required |  | Reddit OAuth2 app client secret, sent with `client_id` as HTTP Basic auth to the token endpoint. |
+| `refresh_token` | string, secret, required |  | OAuth2 refresh token. It is exchanged for a short-lived access token, which is cached and refreshed on a `401`. |
+| `username` | string, required |  | The bot's username without `u/`, used for the self-loop guard and as the bot's handle. |
+| `subreddits` | list of strings | any | Allow-list without `r/`. Direct messages always pass. Matching ignores case. |
+
+The plugin reads its config and credentials when the host configures the
+instance, so a change takes effect after the instance restarts.
+
 ## Permissions
 
 - `http_client` — outbound calls to `oauth.reddit.com` and `www.reddit.com` (TLS
   is performed host-side).
-- `config_read` — read the credentials + settings above.
+- `config_read` — read the typed config through `config.get`; the credentials
+  arrive only through `secrets.get`.
 
 ## What's covered
 

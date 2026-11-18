@@ -147,12 +147,29 @@ jobs:
             base_commit=HEAD
           fi
           git show "${base_commit}:registry.json" > "$RUNNER_TEMP/base-registry.json"
-          tools/ci/run-packager-python.sh tools/build-registry.py \
+          # The ledger may only grow. A base that predates the ledger has none.
+          if git rev-parse --verify --quiet "${base_commit}:registry-retirements.json" >/dev/null; then
+            git show "${base_commit}:registry-retirements.json" \
+              > "$RUNNER_TEMP/base-retirements.json"
+          else
+            printf '{\n  "retired": []\n}\n' > "$RUNNER_TEMP/base-retirements.json"
+          fi
+          if ! tools/ci/run-packager-python.sh tools/build-registry.py \
+            --retirements registry-retirements.json \
+            --base-retirements "$RUNNER_TEMP/base-retirements.json" \
             --source-plugins plugins \
-            --check-history "$RUNNER_TEMP/base-registry.json" registry.json
+            --check-history "$RUNNER_TEMP/base-registry.json" registry.json \
+            2> "$RUNNER_TEMP/check-history.err"; then
+            cat "$RUNNER_TEMP/check-history.err" >&2
+            exit 1
+          fi
+          cat "$RUNNER_TEMP/check-history.err" >&2
+          # A retired entry still indexed means a publication run is due.
+          sed -n 's/^warning: /::warning::/p' "$RUNNER_TEMP/check-history.err"
       - name: Check generated registry metadata
         run: |
           tools/ci/run-packager-python.sh tools/build-registry.py \
+            --retirements registry-retirements.json \
             --source-plugins plugins \
             --check-metadata registry.json
 
@@ -168,31 +185,44 @@ jobs:
         run: |
           set -euo pipefail
 
-          mapfile -t refs < <(
-            sed -E 's/[[:space:]]*#.*$//' wit/UPSTREAM_REF \
-              | sed -E '/^[[:space:]]*$/d; s/^[[:space:]]+//; s/[[:space:]]+$//'
-          )
-          if [[ "${#refs[@]}" -ne 1 || ! "${refs[0]}" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "::error file=wit/UPSTREAM_REF::Expected exactly one lowercase 40-hex commit SHA"
-            exit 1
-          fi
+          # Require a vendored directory to be byte-identical to ZeroClaw's
+          # wit/v0 at the one commit its pin file names.
+          compare_pinned_wit() {
+            local pin_file=$1
+            local vendored=$2
+            local upstream=$3
+            local pinned_ref
+            pinned_ref=$(python3 tools/ci/manifest_field.py --wit-pin "$pin_file" "$vendored") || return 1
+            local fetched_ref
+            git init --quiet "$upstream"
+            git -C "$upstream" remote add origin \
+              https://github.com/zeroclaw-labs/zeroclaw.git
+            git -C "$upstream" sparse-checkout init --cone
+            git -C "$upstream" sparse-checkout set wit/v0
+            git -C "$upstream" -c protocol.version=2 fetch \
+              --quiet --no-tags --depth=1 --filter=blob:none origin "$pinned_ref"
+            fetched_ref=$(git -C "$upstream" rev-parse FETCH_HEAD)
+            if [[ "$fetched_ref" != "$pinned_ref" ]]; then
+              echo "::error::Fetched WIT commit $fetched_ref does not match pin $pinned_ref"
+              return 1
+            fi
+            git -C "$upstream" checkout --quiet --detach FETCH_HEAD
+            diff -ru "$vendored" "$upstream/wit/v0"
+          }
 
-          upstream_ref="${refs[0]}"
-          upstream="${RUNNER_TEMP}/zeroclaw-upstream"
-          git init --quiet "$upstream"
-          git -C "$upstream" remote add origin \
-            https://github.com/zeroclaw-labs/zeroclaw.git
-          git -C "$upstream" sparse-checkout init --cone
-          git -C "$upstream" sparse-checkout set wit/v0
-          git -C "$upstream" -c protocol.version=2 fetch \
-            --quiet --no-tags --depth=1 --filter=blob:none origin "$upstream_ref"
-          fetched_ref=$(git -C "$upstream" rev-parse FETCH_HEAD)
-          if [[ "$fetched_ref" != "$upstream_ref" ]]; then
-            echo "::error::Fetched WIT commit $fetched_ref does not match pin $upstream_ref"
-            exit 1
+          # wit/v0 tracks a released host. The optional wit/next tracks an
+          # unreleased host, and its plugins stay registry = false.
+          compare_pinned_wit wit/UPSTREAM_REF wit/v0 "${RUNNER_TEMP}/zeroclaw-upstream"
+          if [[ -e wit/NEXT_REF || -e wit/next ]]; then
+            if [[ ! -f wit/NEXT_REF || ! -d wit/next ]]; then
+              echo "::error file=wit/NEXT_REF::Add and remove wit/NEXT_REF and wit/next together"
+              exit 1
+            fi
+            compare_pinned_wit wit/NEXT_REF wit/next "${RUNNER_TEMP}/zeroclaw-next"
           fi
-          git -C "$upstream" checkout --quiet --detach FETCH_HEAD
-          diff -ru wit/v0 "$upstream/wit/v0"
+          if [[ -e wit/CURRENT_REF || -e wit/current ]]; then
+            compare_pinned_wit wit/CURRENT_REF wit/current "${RUNNER_TEMP}/zeroclaw-current"
+          fi
 
   components:
     name: Components (shard ${{ matrix.id }})
@@ -318,15 +348,18 @@ jobs:
             'from tools.registry_contract import PLUGIN_RELEASE_TAG; print(PLUGIN_RELEASE_TAG)')
           release_base="https://github.com/${GITHUB_REPOSITORY}/releases/download/${release_tag}"
           tools/ci/run-packager-python.sh tools/build-registry.py \
+            --retirements registry-retirements.json \
             --staged staged \
             --release-base "$release_base" \
             --existing-registry registry.json \
             --matrix-json "$PLANNED_MATRIX_JSON" \
             --out dist
           tools/ci/run-packager-python.sh tools/build-registry.py \
+            --retirements registry-retirements.json \
             --source-plugins staged \
             --check-metadata dist/registry.json
           tools/ci/run-packager-python.sh tools/build-registry.py \
+            --retirements registry-retirements.json \
             --check-publication registry.json dist/registry.json dist
       - name: Upload registry dry run
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

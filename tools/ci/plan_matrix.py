@@ -13,12 +13,14 @@ from pathlib import Path, PurePosixPath
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from registry_contract import PLUGIN_NAME_RE
+from registry_contract import PLUGIN_NAME_RE, current_wit_release_inputs
 
 DEFAULT_SHARD_SIZE = 8
 DEFAULT_MAX_SHARDS = 4
 FULL_SWEEP_PREFIXES = (".github/", "tools/", "wit/")
-FULL_SWEEP_FILES = {"registry.json"}
+# The retirement ledger changes what packaging may drop, so a ledger change
+# always runs the packaging dry run.
+FULL_SWEEP_FILES = {"registry.json", "registry-retirements.json"}
 DOC_ONLY_PREFIXES = ("docs/",)
 DOC_ONLY_FILES = {"README.md"}
 
@@ -290,7 +292,8 @@ def make_plan(
         PurePosixPath(path).as_posix().removeprefix("./").startswith("wit/v0/")
         for path in paths
     )
-    release = set(available) if release_all else strict
+    release = set(available) if release_all else set(strict)
+    release |= current_wit_release_inputs(paths) & set(available)
 
     shards = shard_plugins(selected, shard_size=shard_size, max_shards=max_shards)
     matrix = {

@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import argparse
+import re
+import shutil
 import sys
 import tomllib
 from pathlib import Path
@@ -16,6 +18,8 @@ from registry_contract import (
     WASM_PATH_RE,
     copy_regular_file,
     package_tree_errors,
+    read_regular_file,
+    withheld_wit_directories,
 )
 
 
@@ -48,6 +52,31 @@ def read_field(manifest: Path, field: str) -> str:
     return normalize(values.get(field))
 
 
+def prepare_wit_snapshot(manifest: Path, wit_root: Path, plugin: str) -> None:
+    with manifest.open("rb") as handle:
+        values = tomllib.load(handle)
+    if not PLUGIN_NAME_RE.fullmatch(plugin) or values.get("name") != plugin:
+        raise ManifestFieldError("snapshot plugin must match the canonical manifest name")
+    registry = values.get("registry", True)
+    if not isinstance(registry, bool):
+        raise ManifestFieldError("registry must be a boolean when present")
+    for directory in withheld_wit_directories(plugin, registry=registry):
+        path = wit_root / directory
+        if path.exists() or path.is_symlink():
+            shutil.rmtree(path)
+
+
+def read_wit_pin(pin_file: Path, vendored: Path) -> str:
+    if vendored.is_symlink() or not vendored.is_dir():
+        raise ManifestFieldError("WIT pin requires its matching vendored directory")
+    contents = read_regular_file(pin_file, byte_limit=4096).decode("utf-8")
+    refs = [line.partition("#")[0].strip() for line in contents.splitlines()]
+    refs = [ref for ref in refs if ref]
+    if len(refs) != 1 or not re.fullmatch(r"[0-9a-f]{40}", refs[0]):
+        raise ManifestFieldError("WIT pin must contain exactly one lowercase 40-hex SHA")
+    return refs[0]
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     checks = parser.add_mutually_exclusive_group()
@@ -55,6 +84,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     checks.add_argument("--validate-wasm-path")
     checks.add_argument("--validate-package-tree", type=Path)
     checks.add_argument("--copy-regular-file", nargs=2, type=Path)
+    checks.add_argument("--prepare-wit-snapshot", nargs=3, metavar=("MANIFEST", "WIT", "PLUGIN"))
+    checks.add_argument("--wit-pin", nargs=2, type=Path, metavar=("PIN", "DIRECTORY"))
     parser.add_argument("manifest", type=Path, nargs="?")
     parser.add_argument("field", nargs="?")
     return parser.parse_args(argv)
@@ -63,6 +94,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     try:
+        if args.prepare_wit_snapshot is not None:
+            manifest, wit_root, plugin = args.prepare_wit_snapshot
+            prepare_wit_snapshot(Path(manifest), Path(wit_root), plugin)
+            return 0
+        if args.wit_pin is not None:
+            print(read_wit_pin(*args.wit_pin))
+            return 0
         if args.validate_plugin_name is not None:
             if not PLUGIN_NAME_RE.fullmatch(args.validate_plugin_name):
                 raise ManifestFieldError("plugin name must be a lowercase slug")
@@ -93,7 +131,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.manifest is None or args.field is None:
             raise ManifestFieldError("manifest and field are required when not validating")
         print(read_field(args.manifest, args.field))
-    except ManifestFieldError as error:
+    except (ValueError, OSError) as error:
         print(f"error: {error}", file=sys.stderr)
         return 1
     return 0

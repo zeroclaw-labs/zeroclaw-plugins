@@ -6,6 +6,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
@@ -13,7 +14,10 @@ BUILD_REGISTRY = REPOSITORY_ROOT / "tools" / "build-registry.py"
 RELEASE_BASE = "https://example.invalid/releases/download/plugins"
 sys.path.insert(0, str(REPOSITORY_ROOT / "tools"))
 
+import registry_contract  # noqa: E402
 from registry_contract import PLUGIN_VERSION_RE  # noqa: E402
+sys.path.insert(0, str(REPOSITORY_ROOT / "tools" / "ci"))
+import plan_matrix  # noqa: E402
 
 
 def write_plugin(
@@ -23,24 +27,29 @@ def write_plugin(
     wasm: bytes = b"wasm-v1",
     provides: str | None = "telegram",
     sender_match: str | None = "exact",
+    permissions: tuple[str, ...] = ("config_read",),
+    registry: bool | None = None,
+    name: str = "bridge",
 ) -> None:
-    plugin = root / "bridge"
+    plugin = root / name
     plugin.mkdir(parents=True)
     lines = [
-        'name = "bridge"',
+        f'name = "{name}"',
         f'version = "{version}"',
         'description = "Bridge messages"',
         'author = "ZeroClaw Labs"',
-        'wasm_path = "bridge.wasm"',
+        f'wasm_path = "{name}.wasm"',
         'capabilities = ["channel"]',
-        'permissions = ["config_read"]',
+        f"permissions = {json.dumps(list(permissions))}",
     ]
+    if registry is not None:
+        lines.append(f"registry = {str(registry).lower()}")
     if provides is not None:
         lines.append(f'provides = "{provides}"')
     if sender_match is not None:
         lines.append(f'sender_match = "{sender_match}"')
     (plugin / "manifest.toml").write_text("\n".join(lines) + "\n")
-    (plugin / "bridge.wasm").write_bytes(wasm)
+    (plugin / f"{name}.wasm").write_bytes(wasm)
 
 
 def run_registry(
@@ -61,6 +70,19 @@ def write_registry(path: Path, entries: list[dict]) -> None:
     path.write_text(json.dumps({"plugins": entries}, indent=2) + "\n")
 
 
+def write_retirements(path: Path, entries: list[dict]) -> None:
+    path.write_text(json.dumps({"retired": entries}, indent=2) + "\n")
+
+
+def retirement(entry: dict, reason: str = "does not load on current hosts") -> dict:
+    return {
+        "name": entry["name"],
+        "version": entry["version"],
+        "sha256": entry["sha256"],
+        "reason": reason,
+    }
+
+
 class BuildRegistryTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory()
@@ -77,6 +99,7 @@ class BuildRegistryTests(unittest.TestCase):
         *,
         changed_plugins: tuple[str, ...] = (),
         environment: dict[str, str] | None = None,
+        retirements: Path | None = None,
     ):
         plugins = sorted(path.name for path in staged.iterdir())
         matrix = {
@@ -105,7 +128,28 @@ class BuildRegistryTests(unittest.TestCase):
         ]
         if existing is not None:
             arguments.extend(["--existing-registry", existing])
+        if retirements is not None:
+            arguments.extend(["--retirements", retirements])
         return run_registry(*arguments, environment=environment)
+
+    def published_history(self) -> tuple[Path, dict, dict]:
+        """Publish bridge 0.1.0 and 0.2.0; return the ledger and both entries."""
+        staged = self.root / "staged-history"
+        write_plugin(staged, version="0.1.0", wasm=b"wasm-v1")
+        first = self.build(staged, self.root / "history-1")
+        self.assertEqual(first.returncode, 0, first.stderr)
+        upgraded = self.root / "staged-history-2"
+        write_plugin(upgraded, version="0.2.0", wasm=b"wasm-v2")
+        second = self.build(
+            upgraded,
+            self.root / "history-2",
+            self.root / "history-1" / "registry.json",
+            changed_plugins=("bridge",),
+        )
+        self.assertEqual(second.returncode, 0, second.stderr)
+        base = self.root / "history-2" / "registry.json"
+        old, new = json.loads(base.read_text())["plugins"]
+        return base, old, new
 
     def test_metadata_is_synchronized_from_canonical_manifest(self) -> None:
         source = self.root / "plugins"
@@ -181,6 +225,44 @@ class BuildRegistryTests(unittest.TestCase):
         )
         self.assertIn("bump the canonical manifest version", changed.stderr)
         self.assertFalse((collision / "bridge-0.1.0.zip").exists())
+
+    def test_current_wit_selection_rejects_matrix_identity_reuse_only(self) -> None:
+        staged = self.root / "staged"
+        write_plugin(staged)
+        write_plugin(staged, name="matrix", version="0.3.0", provides="matrix")
+        initial = self.root / "initial"
+        first = self.build(staged, initial)
+        self.assertEqual(first.returncode, 0, first.stderr)
+        original = json.loads((initial / "registry.json").read_text())["plugins"]
+        repository = self.root / "repository"
+        for name in ("bridge", "matrix"):
+            (repository / "plugins" / name).mkdir(parents=True)
+        with mock.patch.object(plan_matrix, "git_changed_paths", return_value=["wit/CURRENT_REF"]), \
+                mock.patch.object(registry_contract, "CURRENT_WIT_CONSUMERS", frozenset({"matrix"})):
+            plan = plan_matrix.make_plan(repository, "pull_request", "origin/main")
+        matrix = json.dumps(plan["matrix"])
+
+        def publish(source: Path, out: Path):
+            return run_registry(
+                "--staged", source, "--out", out, "--release-base", RELEASE_BASE,
+                "--existing-registry", initial / "registry.json", "--matrix-json", matrix,
+            )
+
+        collision = publish(staged, self.root / "collision")
+        self.assertNotEqual(collision.returncode, 0)
+        self.assertIn("changed release input reuses immutable package identity matrix@0.3.0", collision.stderr)
+        self.assertNotIn("changed release input reuses immutable package identity bridge", collision.stderr)
+        upgraded = self.root / "upgraded"
+        write_plugin(upgraded)
+        write_plugin(upgraded, name="matrix", version="0.3.1", provides="matrix", wasm=b"current-wit")
+        out = self.root / "published"
+        result = publish(upgraded, out)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        entries = json.loads((out / "registry.json").read_text())["plugins"]
+        self.assertTrue(all(entry in entries for entry in original))
+        self.assertEqual(len(entries), 3)
+        self.assertTrue((out / "matrix-0.3.1.zip").is_file())
+        self.assertFalse((out / "bridge-0.1.0.zip").exists())
 
     def test_archive_bytes_match_golden_packager_contract(self) -> None:
         wasm = (
@@ -266,6 +348,57 @@ class BuildRegistryTests(unittest.TestCase):
         )
         self.assertNotEqual(checked.returncode, 0)
         self.assertIn("does not match canonical manifest version", checked.stderr)
+
+    def test_host_gated_permissions_require_the_registry_opt_out(self) -> None:
+        registry = self.root / "registry.json"
+        registry.write_text('{"plugins": []}\n')
+        gated = ("state_read", "state_write")
+
+        opted_out = self.root / "opted-out"
+        write_plugin(opted_out, permissions=gated, registry=False)
+        accepted = run_registry(
+            "--source-plugins", opted_out, "--check-metadata", registry
+        )
+        self.assertEqual(accepted.returncode, 0, accepted.stderr)
+
+        published = self.root / "published"
+        write_plugin(published, permissions=gated)
+        refused = run_registry(
+            "--source-plugins", published, "--check-metadata", registry
+        )
+        self.assertNotEqual(refused.returncode, 0)
+        for permission in gated:
+            self.assertIn(
+                f"permission {permission!r} is rejected by released hosts",
+                refused.stderr,
+            )
+
+        misspelled = self.root / "misspelled"
+        write_plugin(misspelled, permissions=("state_admin",), registry=False)
+        unknown = run_registry(
+            "--source-plugins", misspelled, "--check-metadata", registry
+        )
+        self.assertNotEqual(unknown.returncode, 0)
+        self.assertIn("unknown permissions value 'state_admin'", unknown.stderr)
+
+    def test_packaging_never_publishes_host_gated_permissions(self) -> None:
+        staged = self.root / "staged"
+        write_plugin(staged, permissions=("state_read",))
+        refused_out = self.root / "refused"
+        refused = self.build(staged, refused_out)
+        self.assertNotEqual(refused.returncode, 0)
+        self.assertIn(
+            "permission 'state_read' is rejected by released hosts", refused.stderr
+        )
+        self.assertFalse((refused_out / "bridge-0.1.0.zip").exists())
+
+        gated = self.root / "gated"
+        write_plugin(gated, permissions=("state_read",), registry=False)
+        skipped_out = self.root / "skipped"
+        skipped = self.build(gated, skipped_out)
+        self.assertEqual(skipped.returncode, 0, skipped.stderr)
+        self.assertIn("skipping bridge (registry = false", skipped.stdout)
+        self.assertFalse((skipped_out / "bridge-0.1.0.zip").exists())
 
     def test_new_version_is_appended_to_registry_history(self) -> None:
         staged = self.root / "staged"
@@ -540,6 +673,331 @@ class BuildRegistryTests(unittest.TestCase):
         result = self.build(staged, self.root / "out")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("staged plugin is missing manifest.toml", result.stderr)
+
+    def test_listed_retirement_leaves_the_publication_and_passes_history(self) -> None:
+        base, old, new = self.published_history()
+        ledger = self.root / "retirements.json"
+        write_retirements(ledger, [retirement(old)])
+        staged = self.root / "staged"
+        write_plugin(staged, version="0.2.0", wasm=b"wasm-v2")
+        dist = self.root / "dist"
+
+        built = self.build(staged, dist, base, retirements=ledger)
+        self.assertEqual(built.returncode, 0, built.stderr)
+        self.assertIn("retired bridge v0.1.0", built.stdout)
+        self.assertEqual(json.loads((dist / "registry.json").read_text())["plugins"], [new])
+        self.assertEqual(sorted(path.name for path in dist.iterdir()), ["registry.json"])
+
+        candidate = dist / "registry.json"
+        publication = run_registry(
+            "--check-publication", base, candidate, dist, "--retirements", ledger
+        )
+        self.assertEqual(publication.returncode, 0, publication.stderr)
+        history = run_registry("--check-history", base, candidate, "--retirements", ledger)
+        self.assertEqual(history.returncode, 0, history.stderr)
+        self.assertIn("1 listed retirement(s)", history.stdout)
+
+        # The same removal without the ledger is still a deletion.
+        unlisted_publication = run_registry("--check-publication", base, candidate, dist)
+        self.assertNotEqual(unlisted_publication.returncode, 0)
+        self.assertIn("publication candidate deleted bridge@0.1.0", unlisted_publication.stderr)
+        unlisted_history = run_registry("--check-history", base, candidate)
+        self.assertNotEqual(unlisted_history.returncode, 0)
+        self.assertIn("historical registry entry was deleted: bridge@0.1.0", unlisted_history.stderr)
+
+    def test_removal_outside_the_ledger_still_fails(self) -> None:
+        base, old, new = self.published_history()
+        ledger = self.root / "retirements.json"
+        write_retirements(ledger, [retirement(new)])
+        candidate = self.root / "candidate.json"
+        write_registry(candidate, [new])
+
+        history = run_registry("--check-history", base, candidate, "--retirements", ledger)
+        self.assertNotEqual(history.returncode, 0)
+        self.assertIn(
+            "historical registry entry was deleted: bridge@0.1.0 "
+            "(bridge@0.1.0 is not in the retirement ledger)",
+            history.stderr,
+        )
+
+        dist = self.root / "dist"
+        dist.mkdir()
+        write_registry(dist / "registry.json", [new])
+        publication = run_registry(
+            "--check-publication", base, dist / "registry.json", dist, "--retirements", ledger
+        )
+        self.assertNotEqual(publication.returncode, 0)
+        self.assertIn("publication candidate deleted bridge@0.1.0", publication.stderr)
+        # 0.2.0 is listed but still present in this candidate.
+        self.assertIn("publication candidate still indexes retired bridge@0.2.0", publication.stderr)
+
+    def test_listed_entry_still_indexed_warns_in_history_and_fails_publication(self) -> None:
+        base, old, _ = self.published_history()
+        ledger = self.root / "retirements.json"
+        write_retirements(ledger, [retirement(old)])
+
+        # A merged ledger change precedes the publication run that rewrites
+        # registry.json, so the checked-in index may still hold the entry.
+        pending = run_registry("--check-history", base, base, "--retirements", ledger)
+        self.assertEqual(pending.returncode, 0, pending.stderr)
+        self.assertIn(
+            "warning: retired registry entry is still indexed until the next "
+            "publication: bridge@0.1.0",
+            pending.stderr,
+        )
+
+        # A publication candidate must never keep it.
+        dist = self.root / "stale-dist"
+        dist.mkdir()
+        (dist / "registry.json").write_text(base.read_text())
+        stale = run_registry(
+            "--check-publication", base, dist / "registry.json", dist, "--retirements", ledger
+        )
+        self.assertNotEqual(stale.returncode, 0)
+        self.assertIn("publication candidate still indexes retired bridge@0.1.0", stale.stderr)
+
+    def test_retired_identity_can_never_be_indexed_again(self) -> None:
+        base, old, new = self.published_history()
+        ledger = self.root / "retirements.json"
+        write_retirements(ledger, [retirement(old)])
+
+        staged = self.root / "staged"
+        write_plugin(staged, version="0.1.0", wasm=b"rebuilt bytes")
+        republished = self.build(staged, self.root / "dist", base, retirements=ledger)
+        self.assertNotEqual(republished.returncode, 0)
+        self.assertIn("bridge@0.1.0 is retired and can never be indexed again", republished.stderr)
+
+        after = self.root / "after.json"
+        write_registry(after, [new])
+        readded = run_registry("--check-history", after, base, "--retirements", ledger)
+        self.assertNotEqual(readded.returncode, 0)
+        self.assertIn("retired registry entry was re-added: bridge@0.1.0", readded.stderr)
+
+        source = self.root / "plugins"
+        write_plugin(source, version="0.1.0")
+        refused = "bridge@0.1.0 is retired; bump the canonical manifest version"
+        metadata = run_registry(
+            "--source-plugins", source, "--check-metadata", base, "--retirements", ledger
+        )
+        self.assertNotEqual(metadata.returncode, 0)
+        self.assertIn(refused, metadata.stderr)
+        history = run_registry(
+            "--source-plugins", source, "--check-history", base, base, "--retirements", ledger
+        )
+        self.assertNotEqual(history.returncode, 0)
+        self.assertIn(refused, history.stderr)
+
+        # An opted-out source at a listed identity is not a hidden second copy,
+        # even while the pending entry is still indexed, and packaging skips it.
+        opted_out = self.root / "opted-out"
+        write_plugin(opted_out, version="0.1.0", registry=False)
+        allowed = run_registry(
+            "--source-plugins", opted_out, "--check-metadata", base, "--retirements", ledger
+        )
+        self.assertEqual(allowed.returncode, 0, allowed.stderr)
+        unlisted = run_registry("--source-plugins", opted_out, "--check-metadata", base)
+        self.assertNotEqual(unlisted.returncode, 0)
+        self.assertIn("registry=false plugin is already indexed: bridge@0.1.0", unlisted.stderr)
+        skipped = self.build(opted_out, self.root / "dist-opted-out", base, retirements=ledger)
+        self.assertEqual(skipped.returncode, 0, skipped.stderr)
+        self.assertIn("skipping bridge (registry = false", skipped.stdout)
+        self.assertEqual(
+            json.loads((self.root / "dist-opted-out" / "registry.json").read_text())["plugins"],
+            [new],
+        )
+
+    def test_retirement_must_name_the_published_bytes(self) -> None:
+        base, old, new = self.published_history()
+        ledger = self.root / "retirements.json"
+        write_retirements(ledger, [{**retirement(old), "sha256": "f" * 64}])
+        mismatch = f"retirement of bridge@0.1.0 names sha256 {'f' * 64}"
+
+        staged = self.root / "staged"
+        write_plugin(staged, version="0.2.0", wasm=b"wasm-v2")
+        built = self.build(staged, self.root / "dist", base, retirements=ledger)
+        self.assertNotEqual(built.returncode, 0)
+        self.assertIn(mismatch, built.stderr)
+
+        candidate = self.root / "candidate.json"
+        write_registry(candidate, [new])
+        history = run_registry("--check-history", base, candidate, "--retirements", ledger)
+        self.assertNotEqual(history.returncode, 0)
+        self.assertIn(mismatch, history.stderr)
+
+        # The same mismatch while the listed entry is still indexed.
+        pending = run_registry("--check-history", base, base, "--retirements", ledger)
+        self.assertNotEqual(pending.returncode, 0)
+        self.assertIn(mismatch, pending.stderr)
+
+        dist = self.root / "manual-dist"
+        dist.mkdir()
+        write_registry(dist / "registry.json", [new])
+        publication = run_registry(
+            "--check-publication", base, dist / "registry.json", dist, "--retirements", ledger
+        )
+        self.assertNotEqual(publication.returncode, 0)
+        self.assertIn(mismatch, publication.stderr)
+
+    def test_retirement_ledger_is_validated(self) -> None:
+        base, old, new = self.published_history()
+        valid = retirement(old)
+        later = retirement(new)
+        def ledger(entries: list) -> str:
+            return json.dumps({"retired": entries}, indent=2) + "\n"
+
+        fields = "must have exactly the fields ['name', 'version', 'sha256', 'reason']"
+        cases = {
+            "not an object": ("[]\n", "must contain only a retired array"),
+            "extra key": (
+                json.dumps({"retired": [], "notes": []}, indent=2) + "\n",
+                "must contain only a retired array",
+            ),
+            "missing field": (
+                ledger([{key: value for key, value in valid.items() if key != "reason"}]),
+                fields,
+            ),
+            "field order": (ledger([{"version": valid["version"], **valid}]), fields),
+            "bad name": (ledger([{**valid, "name": "Bridge"}]), "name 'Bridge' must be a lowercase slug"),
+            "unsafe version": (
+                ledger([{**valid, "version": "01.0.0"}]),
+                "version '01.0.0' must be a safe semantic version",
+            ),
+            "bad sha256": (ledger([{**valid, "sha256": "ABC"}]), "must have a lowercase 64-hex sha256"),
+            "empty reason": (ledger([{**valid, "reason": " "}]), "must give a non-empty reason"),
+            "duplicate": (ledger([valid, valid]), "repeats bridge@0.1.0"),
+            "order": (ledger([later, valid]), "is not in canonical name/version order"),
+            "formatting": (
+                json.dumps({"retired": [valid]}) + "\n",
+                "does not use canonical JSON formatting",
+            ),
+        }
+        for name, (contents, expected) in cases.items():
+            with self.subTest(name=name):
+                path = self.root / f"ledger-{name.replace(' ', '-')}.json"
+                path.write_text(contents)
+                result = run_registry("--check-history", base, base, "--retirements", path)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(expected, result.stderr)
+                self.assertNotIn("Traceback", result.stderr)
+
+        empty = self.root / "empty.json"
+        write_retirements(empty, [])
+        unchanged = run_registry("--check-history", base, base, "--retirements", empty)
+        self.assertEqual(unchanged.returncode, 0, unchanged.stderr)
+
+    def test_repository_retirement_ledger_is_canonical(self) -> None:
+        ledger = REPOSITORY_ROOT / "registry-retirements.json"
+        result = run_registry(
+            "--check-history",
+            REPOSITORY_ROOT / "registry.json",
+            REPOSITORY_ROOT / "registry.json",
+            "--retirements",
+            ledger,
+            "--base-retirements",
+            ledger,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_ledger_is_append_only_against_its_base(self) -> None:
+        base, old, new = self.published_history()
+        base_ledger = self.root / "base-retirements.json"
+        write_retirements(base_ledger, [retirement(old)])
+        head = self.root / "retirements.json"
+
+        def history(*entries: dict):
+            write_retirements(head, list(entries))
+            return run_registry(
+                "--check-history", base, base,
+                "--retirements", head, "--base-retirements", base_ledger,
+            )
+
+        dropped = history()
+        self.assertNotEqual(dropped.returncode, 0)
+        self.assertIn("retirement ledger entry was removed: bridge@0.1.0", dropped.stderr)
+
+        redigested = history({**retirement(old), "sha256": "e" * 64})
+        self.assertNotEqual(redigested.returncode, 0)
+        self.assertIn("retirement ledger entry changed its sha256: bridge@0.1.0", redigested.stderr)
+
+        renamed = history({**retirement(old), "version": "0.1.1"})
+        self.assertNotEqual(renamed.returncode, 0)
+        self.assertIn("retirement ledger entry was removed: bridge@0.1.0", renamed.stderr)
+
+        reworded = history(retirement(old, reason="reworded for reviewers"))
+        self.assertEqual(reworded.returncode, 0, reworded.stderr)
+
+        appended = history(retirement(old), retirement(new))
+        self.assertEqual(appended.returncode, 0, appended.stderr)
+
+        # A base that predates the ledger: validation writes this empty ledger.
+        base_ledger.write_text('{\n  "retired": []\n}\n')
+        first = history(retirement(old))
+        self.assertEqual(first.returncode, 0, first.stderr)
+
+    def test_new_retirement_must_match_a_published_entry(self) -> None:
+        base, old, _ = self.published_history()
+        base_ledger = self.root / "base-retirements.json"
+        write_retirements(base_ledger, [])
+        head = self.root / "retirements.json"
+
+        write_retirements(head, [{**retirement(old), "version": "0.3.1"}])
+        typo = run_registry(
+            "--check-history", base, base, "--retirements", head, "--base-retirements", base_ledger
+        )
+        self.assertNotEqual(typo.returncode, 0)
+        self.assertIn("new retirement bridge@0.3.1 is not indexed by the base registry", typo.stderr)
+
+        write_retirements(head, [{**retirement(old), "sha256": "d" * 64}])
+        wrong = run_registry(
+            "--check-history", base, base, "--retirements", head, "--base-retirements", base_ledger
+        )
+        self.assertNotEqual(wrong.returncode, 0)
+        self.assertIn(f"new retirement bridge@0.1.0 names sha256 {'d' * 64}", wrong.stderr)
+
+    def test_ledger_beside_a_registry_must_be_passed(self) -> None:
+        _, old, new = self.published_history()
+        repo = self.root / "repo"
+        repo.mkdir()
+        registry = repo / "registry.json"
+        write_registry(registry, [old, new])
+        ledger = repo / "registry-retirements.json"
+        write_retirements(ledger, [])
+        source = self.root / "plugins"
+        write_plugin(source, version="0.2.0")
+        missing = "registry-retirements.json exists; pass it with --retirements"
+
+        for arguments in (
+            ("--check-history", registry, registry),
+            ("--source-plugins", source, "--check-metadata", registry),
+            ("--check-publication", registry, self.root / "dist" / "registry.json", self.root / "dist"),
+        ):
+            with self.subTest(mode=arguments[0]):
+                result = run_registry(*arguments)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(missing, result.stderr)
+
+        staged = self.root / "staged"
+        write_plugin(staged, version="0.2.0", wasm=b"wasm-v2")
+        packaging = self.build(staged, self.root / "dist-packaging", registry)
+        self.assertNotEqual(packaging.returncode, 0)
+        self.assertIn(missing, packaging.stderr)
+
+        without_base = run_registry("--check-history", registry, registry, "--retirements", ledger)
+        self.assertNotEqual(without_base.returncode, 0)
+        self.assertIn("needs the base revision's ledger with --base-retirements", without_base.stderr)
+
+        both = run_registry(
+            "--check-history", registry, registry,
+            "--retirements", ledger, "--base-retirements", ledger,
+        )
+        self.assertEqual(both.returncode, 0, both.stderr)
+
+        misplaced = run_registry(
+            "--source-plugins", source, "--check-metadata", registry,
+            "--retirements", ledger, "--base-retirements", ledger,
+        )
+        self.assertNotEqual(misplaced.returncode, 0)
+        self.assertIn("--base-retirements is only valid with --check-history", misplaced.stderr)
 
 
 if __name__ == "__main__":
