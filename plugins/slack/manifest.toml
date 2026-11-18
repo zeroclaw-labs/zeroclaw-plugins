@@ -1,20 +1,30 @@
 name = "slack"
-version = "0.1.0"
+version = "0.2.0"
 description = "Slack channel plugin for ZeroClaw: Events API webhook ingest (HMAC-verified) + chat.postMessage over wasi:http."
 author = "JordanTheJet"
 wasm_path = "slack.wasm"
 capabilities = ["channel"]
-# Source-only until ZeroClaw exposes webhook ingress to channel plugins.
 registry = false
-# http_client: outbound chat.postMessage calls to the Slack Web API
-# (slack.com/api; TLS is performed host-side).
-# config_read: read bot_token + signing_secret + api_base_url from this
-# channel's config section.
 permissions = ["http_client", "config_read"]
-# provides: mirror the built-in `slack` channel — read [channels.slack.*] and
-# honor native-wins. Inert on hosts without the `provides` feature (they load
-# this as a novel channel named `slack`, configured from
-# [[plugins.entries.slack]]). This plugin implements the Events API webhook
-# path (signing_secret + chat.postMessage); the native channel additionally
-# supports Socket Mode (app_token).
 provides = "slack"
+
+[egress]
+hosts = ["slack.com"]
+
+[config_schema]
+"$schema" = "https://json-schema.org/draft/2020-12/schema"
+type = "object"
+additionalProperties = false
+
+[config_schema.properties.api_base_url]
+type = "string"
+
+[config_schema.properties.bot_token]
+type = "string"
+x-secret = true
+minLength = 1
+
+[config_schema.properties.signing_secret]
+type = "string"
+x-secret = true
+minLength = 1

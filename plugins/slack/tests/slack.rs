@@ -11,7 +11,6 @@ const SECRET: &str = "8f742231b10e8888abcd99yyyzzz85a5";
 
 fn signed(ts: &str, body: &[u8]) -> Vec<(String, String)> {
     vec![
-        ("x-webhook-method".to_string(), "POST".to_string()),
         ("x-slack-request-timestamp".to_string(), ts.to_string()),
         (
             "x-slack-signature".to_string(),
@@ -24,7 +23,7 @@ fn signed(ts: &str, body: &[u8]) -> Vec<(String, String)> {
 fn end_to_end_message_event() {
     let ts = "1700000000";
     let body = br#"{"type":"event_callback","event":{"type":"message","user":"U9","channel":"C9","text":"ping","ts":"1700000000.001"}}"#;
-    let out = parse_webhook(SECRET, &signed(ts, body), body, 1_700_000_000).unwrap();
+    let out = parse_webhook(SECRET, "POST", &signed(ts, body), body, 1_700_000_000).unwrap();
     assert_eq!(
         out,
         WebhookOutcome::Messages(vec![Inbound {
@@ -41,7 +40,7 @@ fn end_to_end_message_event() {
 fn end_to_end_challenge_handshake() {
     let ts = "1700000000";
     let body = br#"{"type":"url_verification","challenge":"abc123"}"#;
-    let out = parse_webhook(SECRET, &signed(ts, body), body, 1_700_000_000).unwrap();
+    let out = parse_webhook(SECRET, "POST", &signed(ts, body), body, 1_700_000_000).unwrap();
     assert_eq!(out, WebhookOutcome::Challenge("abc123".to_string()));
 }
 
@@ -50,11 +49,10 @@ fn forged_signature_is_rejected_at_the_boundary() {
     let ts = "1700000000";
     let body = br#"{"type":"url_verification","challenge":"abc123"}"#;
     let headers = vec![
-        ("x-webhook-method".to_string(), "POST".to_string()),
         ("x-slack-request-timestamp".to_string(), ts.to_string()),
         ("x-slack-signature".to_string(), "v0=deadbeef".to_string()),
     ];
-    assert!(parse_webhook(SECRET, &headers, body, 1_700_000_000).is_err());
+    assert!(parse_webhook(SECRET, "POST", &headers, body, 1_700_000_000).is_err());
 }
 
 #[test]

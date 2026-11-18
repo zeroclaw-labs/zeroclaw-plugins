@@ -1,17 +1,33 @@
 name = "line"
-version = "0.1.0"
+version = "0.2.0"
 description = "LINE channel plugin for ZeroClaw: webhook ingress (host-verified) + Messaging API push over wasi:http."
 author = "JordanTheJet"
 wasm_path = "line.wasm"
 capabilities = ["channel"]
-# Host-gated source: webhook ingress is not safe to advertise to stock hosts
-# until the matching host route is released.
 registry = false
-# http_client: Messaging API push (POST /v2/bot/message/push, TLS host-side).
-# config_read: read the channel access token + secret from this channel's config.
 permissions = ["http_client", "config_read"]
-# provides: mirror the built-in `line` channel — read [channels.line.*] and honor
-# native-wins. The plugin serves inbound over the host webhook route
-# (/plugin/line) and verifies the X-Line-Signature HMAC itself; requires a host
-# with the webhook-ingress capability (zeroclaw#8862).
 provides = "line"
+
+[egress]
+hosts = ["api.line.me"]
+
+[config_schema]
+"$schema" = "https://json-schema.org/draft/2020-12/schema"
+type = "object"
+additionalProperties = false
+
+[config_schema.properties.api_base]
+type = "string"
+
+[config_schema.properties.api_base_url]
+type = "string"
+
+[config_schema.properties.channel_access_token]
+type = "string"
+x-secret = true
+minLength = 1
+
+[config_schema.properties.channel_secret]
+type = "string"
+x-secret = true
+minLength = 1

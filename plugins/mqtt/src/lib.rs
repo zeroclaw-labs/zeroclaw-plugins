@@ -8,7 +8,7 @@ pub mod mqtt;
 #[cfg(target_family = "wasm")]
 mod component {
     wit_bindgen::generate!({
-        path: "../../wit/unstable",
+        path: "../../wit/v0",
         world: "channel-plugin",
         features: ["plugins-wit-v0", "plugins-wit-v0-sockets"],
     });
@@ -22,15 +22,16 @@ mod component {
     };
     use exports::zeroclaw::plugin::channel::{
         ApprovalRequest, ApprovalResponse, ChannelCapabilities, Guest as Channel, InboundMessage,
-        SendMessage, WebhookRejection,
+        SendMessage, WebhookRejection, WebhookRequest, WebhookResponse,
     };
     use exports::zeroclaw::plugin::plugin_info::Guest as PluginInfo;
     use zeroclaw::plugin::logging::{
         log_record, LogLevel, PluginAction, PluginEvent, PluginOutcome,
     };
-    use zeroclaw::plugin::socket::{self, SocketEvent};
+    use zeroclaw::plugin::sockets::{self, ConnectMode, ConnectRequest, Connection, ReceiveEvent};
+    use zeroclaw::plugin::{config, secrets};
 
-    const PLUGIN_VERSION: &str = "0.1.0";
+    const PLUGIN_VERSION: &str = env!("CARGO_PKG_VERSION");
     const MAX_SOCKET_EVENTS_PER_POLL: usize = 64;
     const MAX_PACKETS_PER_POLL: usize = 128;
     const MAX_QUEUED_INBOUND: usize = 256;
@@ -39,7 +40,7 @@ mod component {
     #[derive(Default)]
     struct RuntimeState {
         config: Option<MqttConfig>,
-        connection: Option<u64>,
+        connection: Option<Connection>,
         protocol: MqttSession,
         inbound: VecDeque<PublishPacket>,
         reconnect: ReconnectBackoff,
@@ -81,15 +82,20 @@ mod component {
     fn send_frame(state: &mut RuntimeState, frame: &[u8], now: u64) -> Result<(), String> {
         let handle = state
             .connection
+            .as_ref()
             .ok_or_else(|| "mqtt: socket is not connected".to_string())?;
-        socket::tcp_send(handle, frame)?;
+        for chunk in frame.chunks(16 * 1024) {
+            handle
+                .send(chunk)
+                .map_err(|error| format!("mqtt: socket send: {error:?}"))?;
+        }
         state.last_transmit_ms = now;
         Ok(())
     }
 
     fn fail_connection(state: &mut RuntimeState, now: u64, reason: &str) {
         if let Some(handle) = state.connection.take() {
-            socket::tcp_close(handle);
+            sockets::close(handle);
         }
         state.protocol.disconnect();
         state.ping_sent_ms = None;
@@ -108,17 +114,26 @@ mod component {
             .clone()
             .ok_or_else(|| "mqtt: channel is not configured".to_string())?;
         let endpoint = config.endpoint().map_err(|error| error.to_string())?;
-        let handle = socket::tcp_connect(&endpoint.host, endpoint.port, endpoint.tls)?;
+        let handle = sockets::connect(&ConnectRequest {
+            host: endpoint.host,
+            port: endpoint.port,
+            mode: if endpoint.tls {
+                ConnectMode::DirectTls
+            } else {
+                ConnectMode::Plaintext
+            },
+            tls_profile: None,
+        })
+        .map_err(|error| format!("mqtt: socket connect: {error:?}"))?;
         let connect = match state.protocol.begin(&config) {
             Ok(connect) => connect,
             Err(error) => {
-                socket::tcp_close(handle);
+                sockets::close(handle);
                 return Err(error.to_string());
             }
         };
         state.connection = Some(handle);
         if let Err(error) = send_frame(state, &connect, now) {
-            socket::tcp_close(handle);
             state.connection = None;
             state.protocol.disconnect();
             return Err(error);
@@ -219,11 +234,11 @@ mod component {
             if packet_budget == 0 || state.inbound.len() >= MAX_QUEUED_INBOUND {
                 break;
             }
-            let Some(handle) = state.connection else {
+            let Some(handle) = state.connection.as_ref() else {
                 break;
             };
-            match socket::tcp_receive(handle) {
-                Ok(SocketEvent::Data(bytes)) => {
+            match handle.receive() {
+                Ok(ReceiveEvent::Data(bytes)) => {
                     if let Err(error) = state.protocol.feed(&bytes) {
                         let reason = error.to_string();
                         fail_connection(state, now, &reason);
@@ -234,12 +249,14 @@ mod component {
                         return Err(error);
                     }
                 }
-                Ok(SocketEvent::Idle) => break,
-                Ok(SocketEvent::Closed(reason)) => {
+                Ok(ReceiveEvent::Idle) => break,
+                Ok(ReceiveEvent::Closed(reason)) => {
+                    let reason = format!("mqtt: socket closed: {reason:?}");
                     fail_connection(state, now, &reason);
                     return Err(reason);
                 }
                 Err(error) => {
+                    let error = format!("mqtt: socket receive: {error:?}");
                     fail_connection(state, now, &error);
                     return Err(error);
                 }
@@ -301,12 +318,24 @@ mod component {
             CHANNEL.to_string()
         }
 
-        fn configure(config: String) -> Result<(), String> {
+        fn configure() -> Result<(), String> {
+            let public = config::get().map_err(|error| format!("mqtt: config: {error:?}"))?;
+            let mut settings: serde_json::Map<String, serde_json::Value> =
+                serde_json::from_str(&public).map_err(|_| "mqtt: invalid public configuration")?;
+            settings.entry("enabled").or_insert(true.into());
+            match secrets::get("password") {
+                Ok(value) => {
+                    settings.insert("password".into(), value.into());
+                }
+                Err(secrets::SecretError::NotFound) => {}
+                Err(error) => return Err(format!("mqtt: password: {error:?}")),
+            }
+            let config = serde_json::Value::Object(settings).to_string();
             let config = MqttConfig::from_json(&config).map_err(|error| error.to_string())?;
             STATE.with(|cell| {
                 let mut state = cell.borrow_mut();
                 if let Some(handle) = state.connection.take() {
-                    socket::tcp_close(handle);
+                    sockets::close(handle);
                 }
                 *state = RuntimeState {
                     config: Some(config),
@@ -447,10 +476,7 @@ mod component {
         fn webhook_path() -> Option<String> {
             None
         }
-        fn parse_webhook(
-            _headers: Vec<(String, String)>,
-            _body: Vec<u8>,
-        ) -> Result<Vec<InboundMessage>, WebhookRejection> {
+        fn parse_webhook(_request: WebhookRequest) -> Result<WebhookResponse, WebhookRejection> {
             Err(WebhookRejection::BadRequest(
                 "mqtt does not serve webhooks".to_string(),
             ))
