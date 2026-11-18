@@ -99,7 +99,7 @@ pub fn parse_update(update: &Value) -> Option<Inbound> {
         reply_target,
         content: text,
         channel_alias: None,
-        timestamp: date,
+        timestamp: date.saturating_mul(1_000),
         thread_ts: thread_id.map(|t| t.to_string()),
     })
 }

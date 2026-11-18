@@ -33,9 +33,10 @@ mod component {
 
     use crate::bluesky::{
         build_create_session, build_send_body, build_update_seen, extract_notifications,
-        latest_indexed_at, millis_to_rfc3339, notification_indexed_at, parse_notification,
-        parse_session, truncate_post, xrpc_url, BlueskyConfig, Inbound, Session,
-        NSID_CREATE_RECORD, NSID_CREATE_SESSION, NSID_LIST_NOTIFICATIONS, NSID_UPDATE_SEEN,
+        indexed_time_key, latest_indexed_at, millis_to_rfc3339, notification_indexed_at,
+        parse_notification, parse_session, truncate_post, xrpc_url, BlueskyConfig, Inbound,
+        Session, NSID_CREATE_RECORD, NSID_CREATE_SESSION, NSID_LIST_NOTIFICATIONS,
+        NSID_UPDATE_SEEN,
     };
 
     use exports::zeroclaw::plugin::channel::{
@@ -297,10 +298,12 @@ mod component {
             }
 
             let prev_cursor = CURSOR.with(|c| c.borrow().clone());
+            let previous_time = indexed_time_key(&prev_cursor);
             for notif in &notifs {
                 // Client-side cursor: only deliver notifications newer than the
                 // last one seen (guards against `updateSeen` propagation lag).
-                if !prev_cursor.is_empty() && notification_indexed_at(notif) <= prev_cursor.as_str()
+                if previous_time.is_some()
+                    && indexed_time_key(notification_indexed_at(notif)) <= previous_time
                 {
                     continue;
                 }
@@ -311,7 +314,7 @@ mod component {
 
             // Advance the cursor and mark the batch seen (best effort).
             if let Some(latest) = latest_indexed_at(&notifs) {
-                if latest > prev_cursor {
+                if indexed_time_key(&latest) > previous_time {
                     CURSOR.with(|c| *c.borrow_mut() = latest.clone());
                     let seen_url = xrpc_url(&cfg.base_url(), NSID_UPDATE_SEEN);
                     let seen_body = build_update_seen(&latest);

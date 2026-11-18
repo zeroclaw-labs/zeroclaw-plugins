@@ -95,8 +95,8 @@ instance, so a change takes effect after the instance restarts.
 `src/bluesky.rs` holds the pure AT-Protocol logic — notification → message
 mapping (mentions/replies only, unread, self-loop guard), the `createSession` /
 `createRecord` / `updateSeen` payload builders, the reply-threading strong-ref
-encode/decode, the 300-char post clamp, and dependency-free RFC-3339 ⇄
-Unix-millis conversion — with host `cargo test` coverage in `tests/`.
+encode/decode, the 300-char post clamp, and conversion between RFC 3339
+timestamps and Unix milliseconds — with host `cargo test` coverage in `tests/`.
 `src/lib.rs` is the thin component shim that does the HTTP via the blocking
 [`waki`](https://crates.io/crates/waki) `wasi:http` client, caches the session
 JWT (re-authenticating on a 401), and tracks the notification cursor.

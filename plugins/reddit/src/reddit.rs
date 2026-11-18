@@ -222,7 +222,8 @@ pub fn parse_item(item: &Value, username: &str, subreddits: &[String]) -> Option
         .get("created_utc")
         .and_then(Value::as_f64)
         .unwrap_or(0.0);
-    let timestamp = if created < 0.0 { 0 } else { created as u64 };
+    // Reddit reports fractional Unix seconds; the channel WIT accepts integer milliseconds.
+    let timestamp = (created * 1_000.0).round() as u64;
 
     Some(Inbound {
         id: format!("reddit_{name}"),

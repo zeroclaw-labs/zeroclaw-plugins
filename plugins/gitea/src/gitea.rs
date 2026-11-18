@@ -333,7 +333,9 @@ pub struct Inbound {
 /// Returns `None` when the issue number can't be recovered.
 pub fn comment_to_inbound(comment: &GiteaComment, repo: &RepoRef) -> Option<Inbound> {
     let number = comment.issue_number()?;
-    let ts = rfc3339_to_unix(&comment.created_at).unwrap_or(0).max(0) as u64;
+    let ts = rfc3339_to_millis(&comment.created_at)
+        .and_then(|time| u64::try_from(time).ok())
+        .unwrap_or(0);
     Some(Inbound {
         id: format!("ghc_{}", comment.id),
         sender: comment.user.login(),
@@ -528,6 +530,10 @@ pub fn unix_to_rfc3339(secs: i64) -> String {
 /// Parse an RFC3339 timestamp to Unix seconds (UTC). Accepts a trailing `Z`, a
 /// `±hh:mm`/`±hhmm` offset, and an optional fractional-seconds part (ignored).
 pub fn rfc3339_to_unix(s: &str) -> Option<i64> {
+    rfc3339_to_millis(s).map(|millis| millis.div_euclid(1_000))
+}
+
+fn rfc3339_to_millis(s: &str) -> Option<i64> {
     let s = s.trim();
     if s.len() < 19 {
         return None;
@@ -544,10 +550,14 @@ pub fn rfc3339_to_unix(s: &str) -> Option<i64> {
     let mut ts = days_from_civil(year, month, day) * 86_400 + hour * 3600 + min * 60 + sec;
 
     let mut rest = &s[19..];
+    let mut millis = 0;
     if let Some(stripped) = rest.strip_prefix('.') {
         let non_digit = stripped
             .find(|c: char| !c.is_ascii_digit())
             .unwrap_or(stripped.len());
+        for (digit, weight) in stripped.bytes().take(non_digit).zip([100, 10, 1]) {
+            millis += i64::from(digit - b'0') * weight;
+        }
         rest = &stripped[non_digit..];
     }
     match rest.chars().next() {
@@ -567,7 +577,7 @@ pub fn rfc3339_to_unix(s: &str) -> Option<i64> {
         }
         _ => return None,
     }
-    Some(ts)
+    Some(ts * 1_000 + millis)
 }
 
 /// The path of a request URL, without scheme, host, query or fragment. Error
@@ -734,7 +744,7 @@ mod tests {
         assert_eq!(inb.content, "@bot hello");
         assert_eq!(
             inb.timestamp,
-            rfc3339_to_unix("2026-06-13T01:05:00Z").unwrap() as u64
+            rfc3339_to_unix("2026-06-13T01:05:00Z").unwrap() as u64 * 1_000
         );
     }
 

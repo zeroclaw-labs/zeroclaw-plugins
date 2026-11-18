@@ -78,7 +78,7 @@ fn notification_and_comment_map_to_an_inbound() {
         "id": 99,
         "body": "@mybot please take a look",
         "user": {"login": "alice"},
-        "created_at": "2026-06-13T01:05:00Z",
+        "created_at": "2026-06-13T02:05:00.123456+01:00",
         "issue_url": "https://git.example.org/api/v1/repos/forge/project/issues/7"
     }))
     .unwrap();
@@ -91,7 +91,7 @@ fn notification_and_comment_map_to_an_inbound() {
     assert_eq!(inb.content, "@mybot please take a look");
     assert_eq!(
         inb.timestamp,
-        rfc3339_to_unix("2026-06-13T01:05:00Z").unwrap() as u64
+        rfc3339_to_unix("2026-06-13T01:05:00Z").unwrap() as u64 * 1_000 + 123
     );
 }
 

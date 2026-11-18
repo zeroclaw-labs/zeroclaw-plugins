@@ -141,10 +141,12 @@ fn parse_tweet(tweet: &Value) -> Option<Inbound> {
         reply_target: id,
         content: text,
         channel_alias: None,
-        // The X API reports `created_at` as an RFC3339 string, not an epoch;
-        // the host stamps its own receive time, so this is left 0 rather than
-        // pull in a date parser for the pure core.
-        timestamp: 0,
+        timestamp: tweet
+            .get("created_at")
+            .and_then(Value::as_str)
+            .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+            .and_then(|time| u64::try_from(time.timestamp_millis()).ok())
+            .unwrap_or(0),
         thread_ts: None,
     })
 }
