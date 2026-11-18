@@ -1,0 +1,9 @@
+name = "solana-payment-verify"
+version = "0.1.0"
+description = "Verify a finalized SOL or SPL-token payment against an exact recipient, amount, reference, and optional memo policy."
+author = "YoungblutSchilling"
+wasm_path = "solana_payment_verify.wasm"
+capabilities = ["tool"]
+# http_client: call the operator-selected Solana JSON-RPC endpoint.
+# config_read: read that endpoint and the finalized/confirmed commitment policy.
+permissions = ["http_client", "config_read"]
