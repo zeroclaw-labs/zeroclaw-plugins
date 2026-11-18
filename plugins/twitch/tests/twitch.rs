@@ -1,13 +1,11 @@
 use twitch::twitch::{
-    encode_privmsg, normalize_oauth_token, normalize_twitch_channel, registration_frame,
-    IrcLineBuffer, IrcMessage, ProtocolAction, ProtocolSession, TwitchConfig,
+    encode_privmsg, normalize_oauth_token, normalize_twitch_channel, oauth_pass,
+    registration_frame, IrcLineBuffer, IrcMessage, ProtocolAction, ProtocolSession, TwitchConfig,
 };
 
 fn config(mention_only: bool) -> TwitchConfig {
     TwitchConfig {
-        enabled: true,
         bot_username: "ZeroClaw_Bot".to_string(),
-        oauth_token: "test-token".to_string(),
         channels: vec!["MyChannel".to_string(), "#Other_Channel".to_string()],
         mention_only,
     }
@@ -32,21 +30,17 @@ fn ready_session(config: &TwitchConfig) -> ProtocolSession {
 }
 
 #[test]
-fn native_config_fields_drive_registration_in_required_order() {
-    let parsed = TwitchConfig::from_json(
+fn public_config_and_secret_token_drive_registration_in_required_order() {
+    let parsed = TwitchConfig::from_public_json(
         r##"{
-            "enabled": true,
             "bot_username": "  TwitchBot  ",
-            "oauth_token": " token-value ",
             "channels": ["SomeChannel", "#SECOND"],
-            "mention_only": true,
-            "excluded_tools": ["ignored-native-field"]
+            "mention_only": true
         }"##,
     )
     .unwrap();
-    parsed.validate().unwrap();
     assert_eq!(
-        String::from_utf8(registration_frame(&parsed).unwrap()).unwrap(),
+        String::from_utf8(registration_frame(&parsed, " token-value ").unwrap()).unwrap(),
         "CAP REQ :twitch.tv/tags twitch.tv/commands\r\n\
          PASS oauth:token-value\r\nNICK twitchbot\r\n"
     );
@@ -70,9 +64,26 @@ fn native_normalization_and_command_injection_validation_are_preserved() {
     let mut invalid = config(false);
     invalid.bot_username = "bot\r\nJOIN".to_string();
     assert!(invalid.validate().is_err());
-    invalid = config(false);
-    invalid.oauth_token = "token\nNICK attacker".to_string();
-    assert!(invalid.validate().is_err());
+    assert!(oauth_pass("token\nNICK attacker").is_err());
+    assert!(oauth_pass("  ").is_err());
+    assert!(oauth_pass("oauth:").is_err());
+    assert!(registration_frame(&config(false), "token\nNICK attacker").is_err());
+    assert!(TwitchConfig::from_public_json(r#"{"channels":["a"]}"#).is_err());
+    assert!(
+        TwitchConfig::from_public_json(r#"{"bot_username":"ok","channels":["bad name"]}"#).is_err()
+    );
+}
+
+#[test]
+fn non_channel_privmsg_is_not_misrouted_to_the_bots_own_channel() {
+    let config = config(false);
+    let mut session = ready_session(&config);
+    assert!(session
+        .receive(
+            b"@id=w1 :alice!alice@host PRIVMSG zeroclaw_bot :psst\r\n",
+            &config
+        )
+        .is_empty());
 }
 
 #[test]
@@ -215,7 +226,7 @@ fn auth_failure_and_capability_rejection_are_terminal() {
                 &config
             )
             .as_slice(),
-        [ProtocolAction::Disconnect(_)]
+        [ProtocolAction::Rejected(_)]
     ));
 
     let mut session = ProtocolSession::default();
@@ -225,6 +236,14 @@ fn auth_failure_and_capability_rejection_are_terminal() {
                 b":tmi.twitch.tv CAP * NAK :twitch.tv/tags twitch.tv/commands\r\n",
                 &config
             )
+            .as_slice(),
+        [ProtocolAction::Rejected(_)]
+    ));
+
+    let mut session = ready_session(&config);
+    assert!(matches!(
+        session
+            .receive(b":tmi.twitch.tv RECONNECT\r\n", &config)
             .as_slice(),
         [ProtocolAction::Disconnect(_)]
     ));
