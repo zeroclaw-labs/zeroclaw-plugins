@@ -1,41 +1,17 @@
-//! A ZeroClaw WIT **channel** plugin: Nextcloud Talk (bot webhook mode).
-//!
-//! Inbound is a **webhook**: the host mounts this plugin's route at
-//! `/plugin/nextcloud` (from the exported `webhook-path`) and hands each raw
-//! `POST` to `parse-webhook`. The plugin owns its authenticity check — it
-//! verifies the Talk bot HMAC signature
-//! (`hex(HMAC-SHA256(secret, X-Nextcloud-Talk-Random ++ raw_body))`) over the
-//! exact bytes using its own `webhook_secret`, returning a typed rejection so
-//! the gateway replies 401 or 400 and enqueues nothing. There is no poll: `poll-message`
-//! always returns `none`.
-//!
-//! Outbound replies go through the Nextcloud Talk OCS API:
-//! `POST {base_url}/ocs/v2.php/apps/spreed/api/v1/chat/{token}?format=json` with
-//! `Authorization: Bearer <app_token>`, `OCS-APIRequest: true`,
-//! `Accept: application/json`, and body `{"message": "<text>"}` — mirroring the
-//! built-in `nextcloud_talk` channel. All HTTP goes through the host's
-//! `wasi:http` (`http_client`); TLS is performed host-side. Config
-//! (`base_url`, `app_token`, `webhook_secret`, `bot_name`) comes from the
-//! plugin's own section (`config_read`).
-//!
-//! The pure logic lives in [`nextcloud`] (no wasm/http deps) and is covered by a
-//! host `cargo test`; this file is the thin component shim that wires it to the
-//! `channel-plugin` WIT world with the blocking `waki` client.
-//!
-//! Build:  rustup target add wasm32-wasip2
-//!         cargo build --target wasm32-wasip2 --release
+//! Nextcloud Talk channel. The host forwards webhook requests to the guest;
+//! the plugin verifies the HMAC over the random header and raw request body,
+//! decodes Talk events and posts replies through the OCS chat API.
 
 pub mod nextcloud;
 
 #[cfg(target_family = "wasm")]
 mod component {
     wit_bindgen::generate!({
-        path: "../../wit/unstable",
+        path: "../../wit/v0",
         world: "channel-plugin",
         features: ["plugins-wit-v0"],
     });
 
-    use std::cell::RefCell;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use serde_json::Value;
@@ -47,18 +23,45 @@ mod component {
 
     use exports::zeroclaw::plugin::channel::{
         ApprovalRequest, ApprovalResponse, ChannelCapabilities, Guest as Channel, InboundMessage,
-        SendMessage, WebhookRejection,
+        SendMessage, WebhookRejection, WebhookRequest, WebhookResponse,
     };
     use exports::zeroclaw::plugin::plugin_info::Guest as PluginInfo;
 
+    use zeroclaw::plugin::{config, secrets};
+
+    fn public_config() -> Result<NextcloudConfig, String> {
+        let public = config::get().map_err(|_| "nextcloud: public configuration unavailable")?;
+        serde_json::from_str(&public)
+            .map_err(|_| "nextcloud: invalid public configuration".to_string())
+    }
+
+    fn optional_secret(key: &str) -> Result<Option<String>, String> {
+        match secrets::get(key) {
+            Ok(value) => Ok(Some(value)),
+            Err(secrets::SecretError::NotFound) => Ok(None),
+            Err(_) => Err(format!("nextcloud: cannot read {key}")),
+        }
+    }
+
+    fn send_config() -> Result<NextcloudConfig, String> {
+        let mut cfg = public_config()?;
+        cfg.app_token = optional_secret("app_token")?;
+        Ok(cfg)
+    }
+
+    fn inbound_config() -> Result<NextcloudConfig, String> {
+        let mut cfg = public_config()?;
+        cfg.webhook_secret = optional_secret("webhook_secret")?;
+        if cfg.webhook_secret().is_empty() {
+            return Err("nextcloud: webhook_secret required for webhook ingress".into());
+        }
+        Ok(cfg)
+    }
+
     const PLUGIN_NAME: &str = "nextcloud";
-    const PLUGIN_VERSION: &str = "0.1.0";
+    const PLUGIN_VERSION: &str = env!("CARGO_PKG_VERSION");
     /// URL path segment the host mounts under `/plugin/<segment>`.
     const WEBHOOK_SEGMENT: &str = "nextcloud";
-
-    thread_local! {
-        static CONFIG: RefCell<NextcloudConfig> = RefCell::new(NextcloudConfig::default());
-    }
 
     /// Current Unix time in milliseconds (the WIT `timestamp` unit), or `0` if the
     /// clock is unavailable.
@@ -130,13 +133,12 @@ mod component {
             PLUGIN_NAME.to_string()
         }
 
-        fn configure(config: String) -> Result<(), String> {
-            CONFIG.with(|c| *c.borrow_mut() = NextcloudConfig::from_json(&config));
-            Ok(())
+        fn configure() -> Result<(), String> {
+            public_config().map(|_| ())
         }
 
         fn send(message: SendMessage) -> Result<(), String> {
-            let cfg = CONFIG.with(|c| c.borrow().clone());
+            let cfg = send_config()?;
             let token = cfg.app_token();
             if token.is_empty() {
                 return Err("nextcloud: no app_token configured".to_string());
@@ -165,7 +167,7 @@ mod component {
 
         /// Config-level readiness (no network): send requires a base URL + token.
         fn health_check() -> bool {
-            let cfg = CONFIG.with(|c| c.borrow().clone());
+            let Ok(cfg) = send_config() else { return false };
             !cfg.base_url().is_empty() && !cfg.app_token().is_empty()
         }
 
@@ -173,14 +175,15 @@ mod component {
             Some(WEBHOOK_SEGMENT.to_string())
         }
 
-        fn parse_webhook(
-            headers: Vec<(String, String)>,
-            body: Vec<u8>,
-        ) -> Result<Vec<InboundMessage>, WebhookRejection> {
-            let cfg = CONFIG.with(|c| c.borrow().clone());
+        fn parse_webhook(request: WebhookRequest) -> Result<WebhookResponse, WebhookRejection> {
+            let headers = request.headers;
+            let body = request.body;
+            let cfg = inbound_config().map_err(WebhookRejection::Unauthorized)?;
             authenticate_webhook(&headers, &body, &cfg).map_err(WebhookRejection::Unauthorized)?;
             let inbound = decode_webhook(&body, &cfg).map_err(WebhookRejection::BadRequest)?;
-            Ok(inbound.into_iter().map(to_wit).collect())
+            Ok(WebhookResponse::Messages(
+                inbound.into_iter().map(to_wit).collect(),
+            ))
         }
 
         // ── capability-gated stubs (documented WIT defaults) ──

@@ -229,6 +229,20 @@ class MatrixPlanTests(unittest.TestCase):
         self.assertEqual(plan["count"], 33)
         self.assertEqual([len(shard) for shard in shards], [9, 8, 8, 8])
 
+    def test_synchronize_uses_pr_base_while_push_uses_before(self) -> None:
+        env = {
+            "GITHUB_EVENT_NAME": "pull_request",
+            "GITHUB_PR_BASE_SHA": "target-commit",
+            "GITHUB_EVENT_BEFORE": "previous-topic-head",
+            "GITHUB_BASE_REF": "release-branch",
+        }
+        with mock.patch.dict(os.environ, env, clear=True):
+            self.assertEqual(plan_matrix.parse_args([]).base, "target-commit")
+            self.assertEqual(plan_matrix.parse_args(["--event", "push"]).base, "previous-topic-head")
+            self.assertEqual(plan_matrix.parse_args(["--base", "explicit-ref"]).base, "explicit-ref")
+            del os.environ["GITHUB_PR_BASE_SHA"]
+            self.assertEqual(plan_matrix.parse_args([]).base, "origin/release-branch")
+
     def test_pull_request_selects_only_changed_plugin(self) -> None:
         temp, root = self.make_repository(3)
         self.addCleanup(temp.cleanup)

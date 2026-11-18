@@ -1,19 +1,47 @@
 name = "lark"
-version = "0.1.0"
+version = "0.2.0"
 description = "Lark / Feishu channel plugin for ZeroClaw: webhook ingress + im/v1/messages send over wasi:http."
 author = "JordanTheJet"
 wasm_path = "lark.wasm"
 capabilities = ["channel"]
-# Source-only until ZeroClaw exposes webhook ingress to channel plugins.
 registry = false
-# http_client: outbound calls to the Lark/Feishu Open Platform
-# (open.larksuite.com / open.feishu.cn) — tenant_access_token exchange +
-# im/v1/messages send. TLS is performed host-side.
-# config_read: read the channel settings (app_id/app_secret/verification_token/
-# encrypt_key/api_base_url) from this channel's config section.
 permissions = ["http_client", "config_read"]
-# provides: mirror the built-in `lark` channel — read [channels.lark.*] and
-# honor native-wins. Inert on hosts without the `provides` feature (they load
-# this as a novel channel named `lark`, configured from
-# [[plugins.entries.lark]]).
 provides = "lark"
+
+[egress]
+hosts = ["open.larksuite.com", "open.feishu.cn"]
+
+[config_schema]
+"$schema" = "https://json-schema.org/draft/2020-12/schema"
+type = "object"
+additionalProperties = false
+
+[config_schema.properties.enabled]
+type = "boolean"
+
+[config_schema.properties.app_id]
+type = "string"
+
+[config_schema.properties.api_base_url]
+type = "string"
+
+[config_schema.properties.use_feishu]
+type = "boolean"
+
+[config_schema.properties.per_user_session]
+type = "boolean"
+
+[config_schema.properties.app_secret]
+type = "string"
+x-secret = true
+minLength = 1
+
+[config_schema.properties.verification_token]
+type = "string"
+x-secret = true
+minLength = 1
+
+[config_schema.properties.encrypt_key]
+type = "string"
+x-secret = true
+minLength = 1

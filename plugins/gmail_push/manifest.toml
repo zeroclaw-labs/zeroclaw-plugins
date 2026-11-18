@@ -1,19 +1,41 @@
 name = "gmail_push"
-version = "0.1.0"
+version = "0.2.0"
 description = "Gmail Pub/Sub push channel plugin for ZeroClaw: authenticated push ingress + Gmail History/messages fetch + send over wasi:http."
 author = "JordanTheJet"
 wasm_path = "gmail_push.wasm"
 capabilities = ["channel"]
 sender_match = "email"
-# Source-only until ZeroClaw exposes webhook ingress to channel plugins.
 registry = false
-# http_client: Gmail API calls (users.watch, history, messages.get, messages.send;
-# TLS is performed host-side).
-# config_read: read this channel's settings + secrets (oauth_token, topic,
-# webhook_secret) from its config section.
-permissions = ["http_client", "config_read"]
-# provides: mirror the built-in `gmail_push` channel — read [channels.gmail_push.*]
-# and honor native-wins. The plugin serves inbound over the host webhook route
-# (/plugin/gmail_push); requires a host with the webhook-ingress capability
-# (zeroclaw#8862).
+permissions = ["http_client", "config_read", "state_read", "state_write"]
 provides = "gmail_push"
+
+[egress]
+hosts = ["gmail.googleapis.com"]
+
+[config_schema]
+"$schema" = "https://json-schema.org/draft/2020-12/schema"
+type = "object"
+additionalProperties = false
+
+[config_schema.properties.enabled]
+type = "boolean"
+
+[config_schema.properties.topic]
+type = "string"
+
+[config_schema.properties.label_filter]
+type = "array"
+items = { type = "string" }
+
+[config_schema.properties.webhook_url]
+type = "string"
+
+[config_schema.properties.oauth_token]
+type = "string"
+x-secret = true
+minLength = 1
+
+[config_schema.properties.webhook_secret]
+type = "string"
+x-secret = true
+minLength = 1

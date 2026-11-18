@@ -1,44 +1,33 @@
-# email
+# Email
 
-Text-only IMAP/SMTP channel plugin for ZeroClaw. The component drives both
-protocols over the host-mediated zeroclaw:plugin/socket WIT import; the host
-owns TCP, DNS, and TLS while the plugin owns framing and application state.
+Text-only IMAP and SMTP channel over ZeroClaw’s socket resource. The host applies its email sender matching to addresses and display-name forms.
 
-The manifest mirrors the built-in email channel with provides = "email" and
-reads the host-resolved [channels.email.<alias>] section as its only config
-source. sender_match = "email" leaves peer authorization with the host and
-uses email-aware canonicalization for address and display-name forms.
+## Install and configure
 
-This implementation remains registry = false because the socket_client host
-capability is not on ZeroClaw upstream master. It can be built and reviewed,
-but a stock upstream host cannot instantiate it yet.
+Build the source-only package from its directory and bind the channel on ZeroClaw v0.9.0.
 
-## Configuration
+```sh
+cargo build --locked --release --target wasm32-wasip2
+cp target/wasm32-wasip2/release/email.wasm .
+zeroclaw plugin install "$PWD"
+zeroclaw plugin bind email --channel-alias mail --egress none
+zeroclaw plugin info email
+```
 
-The schema matches the native EmailConfig field names and defaults:
+Copy the config entry key printed by `plugin info` into the shell variable `key`. The commands for secrets prompt without echo. Grant the IMAP host and, when sending mail, the SMTP host.
 
-~~~toml
-[channels.email.work]
-enabled = true
-imap_host = "imap.example.com"
-imap_port = 993
-imap_folder = "INBOX"
-smtp_host = "smtp.example.com"
-smtp_port = 465
-smtp_tls = true
-username = "bot@example.com"
-password = "imap-password"
-smtp_username = "bot@example.com"       # optional; falls back to username
-smtp_password = "smtp-password"         # optional; falls back to password
-from_address = "bot@example.com"
-poll_interval_secs = 60
-default_subject = "Re: Message"
-observer_mode = false
-~~~
+```sh
+zeroclaw config set "plugins.entries.$key.egress_hosts" 'imap.example.com,smtp.example.com'
+zeroclaw config set "plugins.entries.$key.config.imap_host" 'imap.example.com'
+zeroclaw config set "plugins.entries.$key.config.username" 'bot@example.com'
+zeroclaw config set "plugins.entries.$key.config.password"
+zeroclaw config set "plugins.entries.$key.config.smtp_host" 'smtp.example.com'
+zeroclaw config set "plugins.entries.$key.config.from_address" 'bot@example.com'
+```
 
-The host decrypts secrets before calling configure. The plugin keeps that
-parsed config as the canonical channel configuration and stores only live
-protocol/session state beside it.
+Enable `plugins.enabled`, route `plugin.mail` to an enabled agent, and authorize senders in the alias’s peer group.
+
+Omit both `smtp_host` and `from_address` for an inbound-only mailbox. A blank pair has the same effect. Inbound-only mailboxes also support `observer_mode = true`. A send request returns an inbound-only error before opening an SMTP connection. Configure both fields to enable sending. SMTP credentials default to the IMAP credentials and can be set separately using `smtp_username` and the `smtp_password` secret.
 
 ## Supported behavior
 

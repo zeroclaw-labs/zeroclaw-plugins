@@ -1,42 +1,18 @@
-//! A ZeroClaw WIT **channel** plugin: WhatsApp Cloud (Meta Graph webhook).
-//!
-//! A **webhook** channel: it does not poll. The host serves `GET` + `POST` on
-//! `/plugin/whatsapp` and hands each request to [`parse_webhook`], passing the
-//! request line via two reserved lower-cased headers:
-//!
-//!   * `x-webhook-method` — `"GET"` or `"POST"`,
-//!   * `x-webhook-query`  — the raw query string.
-//!
-//! **GET** is Meta's verification handshake
-//! (`?hub.mode=subscribe&hub.verify_token=…&hub.challenge=…`): when the token
-//! matches this channel's `verify_token`, the plugin returns exactly one
-//! `InboundMessage` with `channel = "__webhook_reply__"` and `content` = the
-//! `hub.challenge`, which the host echoes back verbatim (enqueuing nothing).
-//!
-//! **POST** is a message event: the plugin verifies the `X-Hub-Signature-256`
-//! HMAC-SHA256 over the raw body with its `app_secret`, then decodes
-//! `entry[].changes[].value.messages[]` into inbound text messages. A bad
-//! signature returns `Err(reason)` so the host replies `401`.
-//!
-//! Replies are sent with `POST <api_base>/<phone_number_id>/messages` (Bearer
-//! `access_token`) over the host's `wasi:http` (`waki`), which performs TLS
-//! host-side. The pure, I/O-free logic lives in [`whatsapp`] and is covered by a
-//! host `cargo test`; this file is the thin component shim.
-//!
-//! Build:  rustup target add wasm32-wasip2
-//!         cargo build --target wasm32-wasip2 --release
+//! WhatsApp Cloud channel. The plugin checks the typed GET query against the
+//! verification token and returns the challenge as an HTTP reply. For POST it
+//! verifies the Graph app secret against the raw body and decodes text events.
+//! Replies go through the Meta Graph Cloud API.
 
 pub mod whatsapp;
 
 #[cfg(target_family = "wasm")]
 mod component {
     wit_bindgen::generate!({
-        path: "../../wit/unstable",
+        path: "../../wit/v0",
         world: "channel-plugin",
         features: ["plugins-wit-v0"],
     });
 
-    use std::cell::RefCell;
     use std::time::Duration;
 
     use serde_json::Value;
@@ -44,25 +20,49 @@ mod component {
     use crate::whatsapp::{
         build_send_body, decode_inbound, get_verification_challenge, health_url, send_url,
         verify_get_request, verify_signature, Inbound, WhatsAppConfig, WEBHOOK_PATH,
-        WEBHOOK_REPLY_CHANNEL,
     };
 
     use exports::zeroclaw::plugin::channel::{
         ApprovalRequest, ApprovalResponse, ChannelCapabilities, Guest as Channel, InboundMessage,
-        SendMessage, WebhookRejection,
+        SendMessage, WebhookRejection, WebhookRequest, WebhookResponse,
     };
     use exports::zeroclaw::plugin::plugin_info::Guest as PluginInfo;
 
+    use zeroclaw::plugin::{config, secrets};
+
+    fn public_config() -> Result<WhatsAppConfig, String> {
+        let public = config::get().map_err(|_| "whatsapp: public configuration unavailable")?;
+        serde_json::from_str(&public)
+            .map_err(|_| "whatsapp: invalid public configuration".to_string())
+    }
+
+    fn optional_secret(key: &str) -> Result<Option<String>, String> {
+        match secrets::get(key) {
+            Ok(value) => Ok(Some(value)),
+            Err(secrets::SecretError::NotFound) => Ok(None),
+            Err(_) => Err(format!("whatsapp: cannot read {key}")),
+        }
+    }
+
+    fn send_config() -> Result<WhatsAppConfig, String> {
+        let mut cfg = public_config()?;
+        cfg.access_token = optional_secret("access_token")?;
+        Ok(cfg)
+    }
+
+    fn inbound_config() -> Result<WhatsAppConfig, String> {
+        let mut cfg = public_config()?;
+        cfg.app_secret = optional_secret("app_secret")?;
+        cfg.verify_token = optional_secret("verify_token")?;
+        Ok(cfg)
+    }
+
     const PLUGIN_NAME: &str = "whatsapp";
-    const PLUGIN_VERSION: &str = "0.1.0";
+    const PLUGIN_VERSION: &str = env!("CARGO_PKG_VERSION");
     /// Connect-phase timeout for every Graph API call. `waki` can only bound the
     /// connect (not the response body), which is enough to fail fast on a dead
     /// endpoint.
     const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
-
-    thread_local! {
-        static CONFIG: RefCell<WhatsAppConfig> = RefCell::new(WhatsAppConfig::default());
-    }
 
     /// Stamp a decoded [`Inbound`] with the plugin's `channel` and the WIT
     /// inbound-message shape.
@@ -76,25 +76,6 @@ mod component {
             channel_alias: inb.channel_alias,
             timestamp: inb.timestamp,
             thread_ts: inb.thread_ts,
-            interruption_scope_id: None,
-            attachments: Vec::new(),
-            subject: None,
-        }
-    }
-
-    /// Build the reserved challenge-echo reply: `channel = "__webhook_reply__"`,
-    /// `content` = the exact body the host should send back (the verification
-    /// challenge). The host replies `200` with `content` and enqueues nothing.
-    fn webhook_reply(content: String) -> InboundMessage {
-        InboundMessage {
-            id: "whatsapp-webhook-verify".to_string(),
-            sender: String::new(),
-            reply_target: String::new(),
-            content,
-            channel: WEBHOOK_REPLY_CHANNEL.to_string(),
-            channel_alias: None,
-            timestamp: 0,
-            thread_ts: None,
             interruption_scope_id: None,
             attachments: Vec::new(),
             subject: None,
@@ -126,14 +107,12 @@ mod component {
             PLUGIN_NAME.to_string()
         }
 
-        fn configure(config: String) -> Result<(), String> {
-            let cfg = WhatsAppConfig::from_json(&config);
-            CONFIG.with(|c| *c.borrow_mut() = cfg);
-            Ok(())
+        fn configure() -> Result<(), String> {
+            public_config().map(|_| ())
         }
 
         fn send(message: SendMessage) -> Result<(), String> {
-            let cfg = CONFIG.with(|c| c.borrow().clone());
+            let cfg = send_config()?;
             let token = cfg.access_token();
             if token.is_empty() {
                 return Err("whatsapp: missing access_token in config".to_string());
@@ -177,7 +156,7 @@ mod component {
         }
 
         fn health_check() -> bool {
-            let cfg = CONFIG.with(|c| c.borrow().clone());
+            let Ok(cfg) = send_config() else { return false };
             if !cfg.can_send() {
                 return false;
             }
@@ -197,42 +176,42 @@ mod component {
             Some(WEBHOOK_PATH.to_string())
         }
 
-        fn parse_webhook(
-            headers: Vec<(String, String)>,
-            body: Vec<u8>,
-        ) -> Result<Vec<InboundMessage>, WebhookRejection> {
-            let cfg = CONFIG.with(|c| c.borrow().clone());
-            let method = header_get(&headers, "x-webhook-method").unwrap_or_default();
+        fn parse_webhook(request: WebhookRequest) -> Result<WebhookResponse, WebhookRejection> {
+            let headers = request.headers;
+            let body = request.body;
+            let cfg = inbound_config().map_err(WebhookRejection::Unauthorized)?;
+            let method = &request.method;
 
             // ── Meta verification handshake (GET) ──
             if method.eq_ignore_ascii_case("GET") {
-                let query = header_get(&headers, "x-webhook-query").unwrap_or_default();
+                let query = request.query;
                 verify_get_request(&cfg, &query).map_err(WebhookRejection::Unauthorized)?;
                 let challenge =
                     get_verification_challenge(&query).map_err(WebhookRejection::BadRequest)?;
-                return Ok(vec![webhook_reply(challenge)]);
+                return Ok(WebhookResponse::Reply(challenge));
             }
 
             // ── Event webhook (POST) ──
-            // Verify X-Hub-Signature-256 when an app_secret is configured. When
-            // it is absent the check is skipped (mirrors the native channel,
-            // which treats app_secret as optional); configuring it is strongly
-            // recommended and documented in the README.
             let app_secret = cfg.app_secret();
-            if !app_secret.is_empty() {
-                let sig = header_get(&headers, "x-hub-signature-256").unwrap_or_default();
-                if !verify_signature(app_secret, &body, &sig) {
-                    return Err(WebhookRejection::Unauthorized(
-                        "whatsapp: X-Hub-Signature-256 verification failed".to_string(),
-                    ));
-                }
+            if app_secret.is_empty() {
+                return Err(WebhookRejection::Unauthorized(
+                    "whatsapp: app_secret required for inbound POST".into(),
+                ));
+            }
+            let sig = header_get(&headers, "x-hub-signature-256").unwrap_or_default();
+            if !verify_signature(app_secret, &body, &sig) {
+                return Err(WebhookRejection::Unauthorized(
+                    "whatsapp: X-Hub-Signature-256 verification failed".into(),
+                ));
             }
 
             let payload: Value = serde_json::from_slice(&body).map_err(|e| {
                 WebhookRejection::BadRequest(format!("whatsapp: invalid JSON payload: {e}"))
             })?;
             let inbs = decode_inbound(&payload, None);
-            Ok(inbs.into_iter().map(to_wit).collect())
+            Ok(WebhookResponse::Messages(
+                inbs.into_iter().map(to_wit).collect(),
+            ))
         }
 
         // ── capability-gated stubs (documented WIT defaults) ──

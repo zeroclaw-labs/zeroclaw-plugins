@@ -1,11 +1,13 @@
 # Standalone crate (own [workspace]): built for wasm32-wasip2 as a channel
-# plugin component; the pure IRC state machine is host-tested with cargo test.
+# plugin component; the pure `irc` core (rlib) holds the protocol state machine
+# and is host-tested with plain `cargo test`. The host `sockets` import exists
+# only in the wasm component, so `lib.rs` performs the I/O the core decides on.
 [package]
 name = "irc"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
-description = "IRC channel plugin for ZeroClaw: TLS, registration, SASL, and text chat."
+description = "IRC channel plugin for ZeroClaw: TLS, IRCv3 SASL (PLAIN or EXTERNAL), NickServ, paced text chat."
 publish = false
 
 [lib]

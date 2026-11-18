@@ -59,9 +59,9 @@ fmt
   files, runs the registry-builder unit tests, requires source changes to leave
   the generated `registry.json` release identities and history against the
   base, allows only manifest-derived metadata refreshes, and checks generated
-  metadata against canonical `manifest.toml` data. The host-gated `state_read`
-  and `state_write` permissions are accepted only in a `registry = false`
-  plugin, because released hosts reject a manifest that requests them.
+  metadata against canonical `manifest.toml` data. Registry-enabled packages must pair the
+  `config_read` permission (including its legacy `env_read` spelling) with a
+  `[config_schema]` table. Released hosts support `state_read` and `state_write`.
 - `wit-drift` fetches and cryptographically verifies the ZeroClaw Git object at
   the revision in `wit/UPSTREAM_REF`, then
   requires its `wit/v0` directory to be byte-identical to this repository's
