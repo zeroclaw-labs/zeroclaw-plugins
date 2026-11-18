@@ -175,3 +175,14 @@ builds such a plugin without `wit/next/`.
 zeroclaw plugin install <name> --registry https://my-host/registry.json
 export ZEROCLAW_PLUGIN_REGISTRY_URL=https://my-host/registry.json
 ```
+
+## Contributing
+
+See [CONTRIBUTING.md](./CONTRIBUTING.md), including how contributions are
+licensed under the ZeroClaw Contributor License Agreement.
+
+## License
+
+Dual-licensed under [MIT](./LICENSE-MIT) OR [Apache 2.0](./LICENSE-APACHE), at
+your option, except [`plugins/redact-text`](./plugins/redact-text), which is
+Apache 2.0 only. See [NOTICE](./NOTICE) for attribution.
