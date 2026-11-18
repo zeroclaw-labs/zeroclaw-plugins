@@ -21,22 +21,17 @@ Enable plugins, route `plugin.gmail_push` to an agent and configure the permitte
 
 ## How it works
 
-Gmail delivers change notifications via Google Cloud **Pub/Sub push** (an
-HTTP `POST`), so this is a **webhook** channel, not a poller. The host serves
-`POST /plugin/gmail_push`. On each notification the plugin:
+Google Cloud Pub/Sub sends Gmail change notifications to `POST /plugin/gmail_push`.
+The webhook and the supervised listener share a durable cursor.
 
 1. Authenticates the request using the configured `webhook_secret` in its Bearer header. Configure a trusted HTTPS ingress to verify Pub/Sub’s signed OIDC JWT (issuer, audience and service account), replace the incoming authorization header with the shared secret and block direct access to the plugin route. [Google Pub/Sub authentication](https://docs.cloud.google.com/pubsub/docs/authenticate-push-subscriptions)
 2. **Decodes** the Pub/Sub envelope. The base64 `message.data` decodes to
    `{emailAddress, historyId}` — the push carries **only a `historyId`, never the
    message body**.
-3. **Fetches** the actual messages: it calls the Gmail **History** API since the
-   last-seen `historyId`, then **`messages.get`** for each new message, using the
-   configured `oauth_token`. The From/Subject/plain-text-body are returned as
-   inbound messages (`content` = `"Subject: …\n\n<body>"`).
+3. **Persists the highest notification ID** for this binding before acknowledging the push. The first notification establishes a starting point. Repeated or out-of-order notifications cannot move it backwards.
+4. **Delivers mail through the running listener.** The listener queries Gmail history in increasing order and fetches each added message. It hands the From, Subject and plain-text body to the host. A notification can arrive while an earlier record is still waiting for delivery.
 
-The **first** notification only records the `historyId` and returns nothing (it
-establishes the cursor), matching the native channel. The `historyId` cursor is
-stored in binding-scoped durable state with compare-and-swap revisions. Use a separate binding when switching mailboxes.
+The instance records both the newest announced change and the last history record handed to the host. It advances the delivery position on the next poll after handing off the record's messages. A restart can replay the last unfinished record, using the same Gmail message IDs. Use a separate binding when switching mailboxes.
 
 Replies are sent via the Gmail `messages.send` API (RFC 2822 message, URL-safe
 base64), with CRLF-sanitized headers.
@@ -61,9 +56,7 @@ With `oauth_token` and `topic` configured, the running listener registers a Gmai
 - **Text only.** Attachments are ignored; the plain-text body (or HTML-stripped
   `text/html`, or the snippet) is used. Deferred: attachments, threading beyond
   `thread_ts`, richer MIME.
-- The History + `messages.get` orchestration runs inside `parse_webhook` over
-  `wasi:http`; on a transient fetch failure the plugin returns `Err`, so Pub/Sub
-  redelivers (the `historyId` cursor is only advanced on success).
+- Gmail read failures leave the delivery position intact. The listener retries after five seconds. A message deleted before `messages.get` is skipped. If Gmail reports that the starting history ID has expired, reconcile the mailbox before seeding a fresh binding. [Gmail history recovery](https://developers.google.com/workspace/gmail/api/reference/rest/v1/users.history/list)
 
 ## Build
 
