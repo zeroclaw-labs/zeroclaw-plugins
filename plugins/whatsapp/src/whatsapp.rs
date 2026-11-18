@@ -40,12 +40,6 @@ pub const CHANNEL_VERSION: &str = "0.1.0";
 /// arrive there.
 pub const WEBHOOK_PATH: &str = "whatsapp";
 
-/// Reserved `channel` value for a challenge-echo reply. An `InboundMessage`
-/// whose `channel` is this and whose `content` is the body to send makes the
-/// host reply `200` with that body verbatim and enqueue nothing. Used for the
-/// Meta GET verification handshake.
-pub const WEBHOOK_REPLY_CHANNEL: &str = "__webhook_reply__";
-
 /// The plugin's config section. When installed as a mirror of the built-in
 /// `whatsapp` channel this is the same `[channels.whatsapp.<alias>]` block the
 /// native reads, so the field names match the native `WhatsAppConfig`
