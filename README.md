@@ -130,9 +130,10 @@ and its layout is the required format:
 4. **Manifest.** `manifest.toml` with `name` (kebab-case, says what it does),
    `version`, `wasm_path`, `capabilities`, and only permissions the host
    actually supports (`http_client`, `file_read`, `file_write`, `config_read`,
-   `memory_read`, `memory_write`, `socket_client`, `websocket_client`).
-   `state_read` and `state_write` are host-gated: released hosts reject them,
-   so CI accepts them only in a `registry = false` plugin.
+   `memory_read`, `memory_write`, `socket_client`, `websocket_client`,
+   `state_read`, `state_write`). Packages that request `config_read` must
+   declare their settings in a `[config_schema]` table. Declaring that table
+   requires the same permission.
 5. Build it:
    ```bash
    rustup target add wasm32-wasip2
@@ -163,11 +164,9 @@ The publish workflow skips those plugins entirely: no build, no zip, and no
 `registry.json` entry. Remove the guard only when stock hosts can run the
 plugin and the protocol parity tests are in place.
 
-A plugin that needs an interface only an unreleased host provides binds
-`wit/next/` instead of `wit/v0/`, and it may request the host-gated
-`state_read` and `state_write` permissions. Both require `registry = false`:
-CI rejects a host-gated permission in a plugin headed for the registry, and
-builds such a plugin without `wit/next/`.
+A plugin that needs an interface from `wit/next/` must set
+`registry = false`. CI builds registry-enabled plugins with `wit/v0/` and
+withholds the pre-release interface tree.
 
 ## Run your own registry
 

@@ -30,10 +30,6 @@ pub const LINQ_API_BASE: &str = "https://api.linqapp.com/api/partner/v3";
 /// (`/plugin/linq`).
 pub const WEBHOOK_PATH: &str = "linq";
 
-/// Reserved `channel` value for a challenge-echo reply (unused by Linq, which
-/// has no GET verification, but defined for consistency).
-pub const WEBHOOK_REPLY_CHANNEL: &str = "__webhook_reply__";
-
 /// Reject webhook timestamps more than this many seconds from now (replay
 /// window). Mirrors the native `verify_linq_signature`.
 pub const MAX_SIGNATURE_AGE_SECS: i64 = 300;

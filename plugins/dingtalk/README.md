@@ -1,26 +1,27 @@
-# DingTalk channel plugin
+# DingTalk
 
-This plugin mirrors `[channels.dingtalk.<alias>]` through `provides =
-"dingtalk"`. It implements DingTalk Stream Mode rather than a webhook listener:
+DingTalk Stream Mode channel. The plugin registers the bot over HTTPS, opens the returned WebSocket, acknowledges callbacks and sends replies through the session webhook supplied by DingTalk.
 
-1. register `client_id` and `client_secret` with the gateway API;
-2. connect to the returned WebSocket endpoint through the host `ws-client`;
-3. acknowledge system and callback frames;
-4. deliver inbound text with private/group reply routing;
-5. reply through the `sessionWebhook` supplied with each inbound message.
+## Install and configure
 
-The implementation is real but remains `registry = false` until ZeroClaw's
-host-mediated WebSocket capability lands on upstream master. It builds and runs
-against the `channel-to-plugin` host branch that provides `ws-client`.
+Build the source-only package from its directory and bind the channel on ZeroClaw v0.9.0.
 
-## Configuration
-
-```toml
-[channels.dingtalk.default]
-enabled = true
-client_id = "<DingTalk AppKey>"
-client_secret = "<encrypted AppSecret>"
+```sh
+cargo build --locked --release --target wasm32-wasip2
+cp target/wasm32-wasip2/release/dingtalk.wasm .
+zeroclaw plugin install "$PWD"
+zeroclaw plugin bind dingtalk --channel-alias dingtalk-bot --egress declared
+zeroclaw plugin info dingtalk
 ```
+
+Copy the config entry key printed by `plugin info` into the shell variable `key`. The commands for secrets prompt without echo. The declared host is `api.dingtalk.com` for registration. Also grant the hosts from your DingTalk gateway WebSocket URL and session webhook URL on this instance’s `egress_hosts`. Keep the registration host when updating the list.
+
+```sh
+zeroclaw config set "plugins.entries.$key.config.client_id" 'APP_KEY'
+zeroclaw config set "plugins.entries.$key.config.client_secret"
+```
+
+Enable `plugins.enabled`, route `plugin.dingtalk-bot` to an enabled agent, and authorize senders in the alias’s peer group.
 
 Outbound messages require a prior inbound message for that chat because
 DingTalk creates the session reply URL dynamically.

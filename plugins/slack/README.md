@@ -7,16 +7,28 @@ signature, answers the URL-verification handshake, and decodes message events �
 then sends the agent's replies with `chat.postMessage`. It runs entirely inside
 a sandboxed `wasm32-wasip2` WIT component, with no native build.
 
-```bash
-zeroclaw plugin install slack \
-  --registry https://raw.githubusercontent.com/JordanTheJet/zeroclaw-plugins/main/registry.json
+
+## Install locally on ZeroClaw v0.9.0
+
+From this plugin directory, build and bind the source-only package:
+
+```sh
+cargo build --release --locked --target wasm32-wasip2
+mkdir -p target/package
+cp manifest.toml target/wasm32-wasip2/release/slack.wasm target/package/
+zeroclaw plugin install ./target/package --channel-alias slack --egress declared
+zeroclaw plugin info slack
 ```
+
+Use the channel instance key printed by `zeroclaw plugin info slack`. Store each setting under `plugins.entries.<instance-key>.config`. Set secret fields using `zeroclaw config set plugins.entries.<instance-key>.config.signing_secret` and enter the value at the prompt.
+
+Enable plugins, route `plugin.slack` to an agent and configure the permitted senders in its peer group. Restart or reload the daemon. Each binding claims the fixed callback path `/plugin/slack`, so use one active binding for that path.
+
+The default API hostname is declared in the manifest. If you change the API origin, grant the new trusted hostname in `plugins.entries.<instance-key>.egress_hosts`.
 
 ## Configuration
 
-Config comes from the plugin's section (requires the `config_read` permission).
-Field names match the built-in `slack` channel where they overlap, so a mirror
-install reads `[channels.slack.<alias>]` directly. Fields used by this plugin:
+The binding accepts these settings:
 
 - `bot_token` (required) — the Slack bot OAuth token (`xoxb-…`), sent as
   `Authorization: Bearer <token>` on every `chat.postMessage`.
@@ -48,7 +60,7 @@ plugin implements the **Events API webhook** path instead.
   `POST {api_base}/chat.postMessage`; text over ~40 000 characters is split into
   multiple messages.
 
-## Scope (v0.1.0)
+## Scope (v0.2.0)
 
 Text messages only. **Deferred:** attachments/media, reactions, pins, threads
 (replies post to the channel root), draft/streaming updates, and interactive

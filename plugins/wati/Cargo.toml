@@ -5,7 +5,7 @@
 # webhooks, so there is no HMAC dependency (see README).
 [package]
 name = "wati"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 description = "WATI (WhatsApp Business API) channel plugin for ZeroClaw: webhook ingress (host-routed) + text send over wasi:http."
