@@ -12,12 +12,16 @@ pub const INTENTS: u64 = (1 << 25) | (1 << 30);
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq)]
 pub struct QQConfig {
-    #[serde(default)]
+    #[serde(default = "default_enabled")]
     pub enabled: bool,
     #[serde(default)]
     pub app_id: String,
     #[serde(default)]
     pub app_secret: String,
+}
+
+fn default_enabled() -> bool {
+    true
 }
 
 impl QQConfig {
@@ -26,7 +30,7 @@ impl QQConfig {
     }
 
     pub fn is_configured(&self) -> bool {
-        !self.app_id.trim().is_empty() && !self.app_secret.trim().is_empty()
+        self.enabled && !self.app_id.trim().is_empty() && !self.app_secret.trim().is_empty()
     }
 }
 

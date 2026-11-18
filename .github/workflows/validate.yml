@@ -97,6 +97,7 @@ jobs:
       - name: Plan validation shards
         id: plan
         env:
+          GITHUB_PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
           GITHUB_EVENT_BEFORE: ${{ github.event.before }}
         run: python3 tools/ci/plan_matrix.py
 

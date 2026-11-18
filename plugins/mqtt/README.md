@@ -1,7 +1,6 @@
-# MQTT channel plugin
+# MQTT
 
-This plugin mirrors `[channels.mqtt.<alias>]` through `provides = "mqtt"`.
-It implements MQTT 3.1.1 over ZeroClaw's host-mediated raw socket transport:
+The plugin implements MQTT 3.1.1 over ZeroClaw's host-mediated raw socket transport:
 
 1. resolve `mqtt://` or `mqtts://` from the injected channel configuration;
 2. open host-owned TCP/TLS and send a clean-session `CONNECT`;
@@ -15,27 +14,32 @@ MQTT topic names are case-sensitive. The manifest therefore uses
 `sender_match = "exact"`, matching the native MQTT topic matcher and ensuring
 that peer-group entries authorize the exact topic delivered by the broker.
 
-The implementation is real but remains `registry = false` until ZeroClaw's
-`socket_client` host capability lands on upstream master. It can run only
-against a host branch that imports `zeroclaw:plugin/socket` and grants the
-manifest's `socket_client` permission.
+## Install and configure
 
-## Configuration
+Build the source-only package from its directory and bind the channel on ZeroClaw v0.9.0.
 
-The host-injected alias section is the only configuration source:
-
-```toml
-[channels.mqtt.default]
-enabled = true
-broker_url = "mqtts://broker.example.com:8883"
-client_id = "zeroclaw-agent"
-topics = ["sensors/#", "alerts/+/critical"]
-qos = 1
-username = "<broker user>"
-password = "<encrypted broker password>"
-use_tls = true
-keep_alive_secs = 30
+```sh
+cargo build --locked --release --target wasm32-wasip2
+cp target/wasm32-wasip2/release/mqtt.wasm .
+zeroclaw plugin install "$PWD"
+zeroclaw plugin bind mqtt --channel-alias broker --egress none
+zeroclaw plugin info mqtt
 ```
+
+Copy the config entry key printed by `plugin info` into the shell variable `key`. The commands for secrets prompt without echo. Grant the hostname in the broker URL.
+
+```sh
+zeroclaw config set "plugins.entries.$key.egress_hosts" 'broker.example.com'
+zeroclaw config set "plugins.entries.$key.config.broker_url" 'mqtts://broker.example.com:8883'
+zeroclaw config set "plugins.entries.$key.config.client_id" 'zeroclaw-agent'
+zeroclaw config set "plugins.entries.$key.config.topics" '["sensors/#"]'
+zeroclaw config set "plugins.entries.$key.config.qos" '1'
+zeroclaw config set "plugins.entries.$key.config.use_tls" 'true'
+zeroclaw config set "plugins.entries.$key.config.username" 'broker-user'
+zeroclaw config set "plugins.entries.$key.config.password"
+```
+
+Enable `plugins.enabled`, route `plugin.broker` to an enabled agent, and authorize senders in the alias’s peer group.
 
 `use_tls` must agree with the URL scheme. Ports default to 1883 for `mqtt://`
 and 8883 for `mqtts://`. QoS 0, 1, and 2 are supported for subscriptions,
@@ -51,10 +55,6 @@ and SNI belong to the host socket implementation.
 - WIT channel content is text, so non-UTF-8 MQTT payloads are converted with
   UTF-8 replacement characters.
 - Packets larger than 1 MiB are rejected to bound guest memory use.
-- Unit tests use deterministic binary fixtures. No live broker or live TLS
-  connection is exercised in this repository because the required stock-host
-  capability is not yet available on upstream master.
-
 ## Validation
 
 ```bash
