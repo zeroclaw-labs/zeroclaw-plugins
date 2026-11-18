@@ -5,7 +5,7 @@
 # `hmac`/`sha2` (wasm-compatible, compiled for both targets).
 [package]
 name = "line"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 description = "LINE channel plugin for ZeroClaw: webhook ingress (host-verified) + Messaging API push over wasi:http."

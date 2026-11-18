@@ -13,10 +13,27 @@ messages, and replies via the Messaging API **push** endpoint. A
 > the plugin's `parse-webhook`. Point your LINE channel's webhook URL at
 > `https://<your-gateway>/plugin/line`.
 
+## Install locally on ZeroClaw v0.9.0
+
+From this plugin directory, build and bind the source-only package:
+
+```sh
+cargo build --release --locked --target wasm32-wasip2
+mkdir -p target/package
+cp manifest.toml target/wasm32-wasip2/release/line.wasm target/package/
+zeroclaw plugin install ./target/package --channel-alias line --egress declared
+zeroclaw plugin info line
+```
+
+Use the channel instance key printed by `zeroclaw plugin info line`. Store each setting under `plugins.entries.<instance-key>.config`. Set secret fields using `zeroclaw config set plugins.entries.<instance-key>.config.channel_secret` and enter the value at the prompt.
+
+Enable plugins, route `plugin.line` to an agent and configure the permitted senders in its peer group. Restart or reload the daemon. Each binding claims the fixed callback path `/plugin/line`, so use one active binding for that path.
+
+The default API hostname is declared in the manifest. If you change the API origin, grant the new trusted hostname in `plugins.entries.<instance-key>.egress_hosts`.
+
 ## Configuration
 
-Mirrors the built-in `line` channel — reads `[channels.line.<alias>]` (requires
-`config_read`):
+The binding accepts these settings:
 
 - `channel_access_token` (required) — Messaging API bearer token (send).
 - `channel_secret` (required) — verifies the `X-Line-Signature` webhook HMAC.
