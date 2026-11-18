@@ -27,7 +27,6 @@ mod component {
         features: ["plugins-wit-v0"],
     });
 
-    use std::cell::{Cell, RefCell};
     use std::time::Duration;
 
     use crate::webhook::{
@@ -46,22 +45,13 @@ mod component {
     const PLUGIN_VERSION: &str = env!("CARGO_PKG_VERSION");
     const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
-    thread_local! {
-        static CONFIG: RefCell<WebhookConfig> = RefCell::new(WebhookConfig::default());
-        static AUTH_HEADER: RefCell<Option<String>> = const { RefCell::new(None) };
-        static SECRET: RefCell<Option<String>> = const { RefCell::new(None) };
-        /// Monotonic inbound counter for the message id (`webhook_<seq>`),
-        /// mirroring the native channel's sequence.
-        static SEQ: Cell<u64> = const { Cell::new(0) };
-    }
-
     /// Report a config or secret read the host refused or could not serve,
     /// naming the key and the error kind, never a value.
     fn report_read_failure(key: &str, kind: &str) {
         logging::log_record(
             LogLevel::Warn,
             &PluginEvent {
-                function_name: "webhook::configure".to_string(),
+                function_name: "webhook::read_config".to_string(),
                 action: PluginAction::Fail,
                 outcome: Some(PluginOutcome::Failure),
                 duration_ms: None,
@@ -88,25 +78,24 @@ mod component {
         }
     }
 
-    /// The instance's typed config, read when the host configures the
-    /// instance. `config.get` serves the public settings; the schema's
-    /// `x-secret` values (`secret`, `auth_header`) reach the plugin only
-    /// through `secrets.get`. A read the host refuses is logged and leaves
-    /// its field at the default, so a misconfigured instance stays inert
-    /// rather than half-configured.
-    fn load_config() -> (WebhookConfig, Option<String>, Option<String>) {
-        let public = config::get().unwrap_or_else(|error| {
+    fn public_config() -> Result<WebhookConfig, String> {
+        let public = config::get().map_err(|error| {
             report_read_failure("config", config_error_kind(error));
-            String::new()
-        });
-        let cfg = WebhookConfig::from_public_json(&public);
-        let auth_header = secrets::get("auth_header")
-            .map_err(|error| report_read_failure("auth_header", secret_error_kind(error)))
-            .ok();
-        let secret = secrets::get("secret")
-            .map_err(|error| report_read_failure("secret", secret_error_kind(error)))
-            .ok();
-        (cfg, auth_header, secret)
+            "webhook: public configuration unavailable"
+        })?;
+        serde_json::from_str(&public)
+            .map_err(|_| "webhook: invalid public configuration".to_string())
+    }
+
+    fn optional_secret(key: &str) -> Result<Option<String>, String> {
+        match secrets::get(key) {
+            Ok(value) => Ok(Some(value)),
+            Err(secrets::SecretError::NotFound) => Ok(None),
+            Err(error) => {
+                report_read_failure(key, secret_error_kind(error));
+                Err(format!("webhook: cannot read {key}"))
+            }
+        }
     }
 
     fn header_get(headers: &[(String, String)], name: &str) -> Option<String> {
@@ -117,13 +106,8 @@ mod component {
     }
 
     fn to_wit(inb: Inbound) -> InboundMessage {
-        let seq = SEQ.with(|c| {
-            let v = c.get();
-            c.set(v.wrapping_add(1));
-            v
-        });
         InboundMessage {
-            id: format!("webhook_{seq}"),
+            id: inb.id,
             sender: inb.sender,
             reply_target: inb.reply_target,
             content: inb.content,
@@ -154,23 +138,17 @@ mod component {
         }
 
         fn configure() -> Result<(), String> {
-            let (cfg, auth_header, secret) = load_config();
-            CONFIG.with(|c| *c.borrow_mut() = cfg);
-            AUTH_HEADER.with(|c| *c.borrow_mut() = auth_header);
-            SECRET.with(|c| *c.borrow_mut() = secret);
-            Ok(())
+            public_config().map(|_| ())
         }
 
         fn send(message: SendMessage) -> Result<(), String> {
-            let cfg = CONFIG.with(|c| c.borrow().clone());
-            // Secrets are resolved at the point of use: the schema's
-            // `x-secret` values never live in the public config object.
-            let auth_header = AUTH_HEADER.with(|c| c.borrow().clone());
+            let cfg = public_config()?;
             // No outbound URL configured → drop silently (matches the native
             // channel, which logs and returns Ok).
             let Some(url) = cfg.send_url().map(str::to_string) else {
                 return Ok(());
             };
+            let auth_header = optional_secret("auth_header")?;
             let body = build_outgoing(
                 &message.content,
                 message.thread_ts.as_deref(),
@@ -219,13 +197,13 @@ mod component {
         fn parse_webhook(request: WebhookRequest) -> Result<WebhookResponse, WebhookRejection> {
             let headers = request.headers;
             let body = request.body;
-            let method = header_get(&headers, "x-webhook-method").unwrap_or_default();
+            let method = &request.method;
             // Generic webhook has no GET verification; ack a GET with nothing.
             if method.eq_ignore_ascii_case("GET") {
                 return Ok(WebhookResponse::Reply(String::new()));
             }
 
-            let secret = SECRET.with(|c| c.borrow().clone());
+            let secret = optional_secret("secret").map_err(WebhookRejection::Unauthorized)?;
             let signature = header_get(&headers, "x-webhook-signature");
             if !verify_signature(
                 WebhookConfig::secret_value(secret.as_deref()),

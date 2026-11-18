@@ -18,11 +18,13 @@ startup.
 
 ## Install and bind an instance
 
-The plugin runs only as a named channel instance, `plugin.<alias>`. For an
-instance named `main`:
+The plugin runs only as a named channel instance, `plugin.<alias>`. Build the source-only package from this directory and bind an instance named `main`:
 
 ```bash
-zeroclaw plugin install webhook --channel-alias main
+cargo build --release --locked --target wasm32-wasip2
+mkdir -p target/package
+cp manifest.toml target/wasm32-wasip2/release/webhook.wasm target/package/
+zeroclaw plugin install ./target/package --channel-alias main --egress none
 ```
 
 `--channel-alias` writes the `[channels.plugin.main]` binding and creates the
@@ -32,7 +34,7 @@ package.
 The instance key is `zpi1_` followed by the unpadded base64url of the JSON
 array `["webhook","channel","<alias>"]`.
 
-Set the public settings and the credentials, then enable the plugin system:
+Use the instance key shown by `zeroclaw plugin info webhook`. When using `send_url`, grant that trusted hostname in the binding’s `egress_hosts`. Route `plugin.main` to the intended agent and configure its allowed senders. Set the public settings and credentials, then enable the plugin system:
 
 ```bash
 # Public settings (typed through config.get).
@@ -61,8 +63,8 @@ The schema rejects keys it does not list.
 |---|---|---|---|
 | `send_url` | string |  | Outbound reply endpoint (optional; no-op when unset). |
 | `send_method` | string | `POST` | `POST` or `PUT`. |
-| `auth_header` | string, required as secret |  | `Authorization` header value for outbound (via `secrets.get`). |
-| `secret` | string, required as secret |  | HMAC-SHA256 signing secret for inbound verification (via `secrets.get`). |
+| `auth_header` | secret string |  | `Authorization` header value for outbound (via `secrets.get`). |
+| `secret` | secret string |  | HMAC-SHA256 signing secret for inbound verification (via `secrets.get`). |
 
 ## How it works
 
@@ -71,10 +73,10 @@ The host serves `POST /plugin/webhook`. On each request the plugin:
 1. **Verifies** the signature when a `secret` is configured: the request must
    carry `X-Webhook-Signature: [sha256=]<hex(HMAC-SHA256(secret, body))>`. A bad
    or missing signature is rejected with `401`. When no secret is set, all inbound
-   is accepted (matching the native channel).
-2. **Decodes** the JSON body `{sender, content, thread_id?}` into an inbound
+   is accepted. Expose an unsigned callback only through an ingress that authenticates callers and blocks direct access.
+2. **Decodes** the JSON body `{sender, content, id?, thread_id?}` into an inbound
    message. Empty `content` (or invalid JSON) is a `400`. `reply_target` is the
-   `thread_id` when present, else the `sender`.
+   `thread_id` when present, else the `sender`. A stable delivery `id` enables host deduplication across retries. Leave `id` unset for independent deliveries.
 
 Replies are sent to `send_url` as `{content, thread_id?, recipient?}` via `POST`
 (or `PUT` when `send_method = "PUT"`), with the `auth_header` secret sent
@@ -82,7 +84,7 @@ as `Authorization` when set. When `send_url` is unset, outbound is a no-op.
 
 The native `port` / `listen_path` fields are **ignored**: as a plugin, inbound
 arrives on the host's `/plugin/webhook` route (the host owns the listener), not a
-private port. They are accepted for config compatibility.
+private port. The closed plugin schema does not accept those keys.
 
 ## Scope / deferrals
 

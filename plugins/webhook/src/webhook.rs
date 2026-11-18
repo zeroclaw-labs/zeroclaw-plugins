@@ -127,11 +127,10 @@ impl WebhookConfig {
     }
 }
 
-/// An inbound webhook message, pre-WIT-lift. The `channel` is always
-/// `"webhook"`, stamped by the host shim; `id` (`webhook_<seq>`) is assigned
-/// there too.
+/// A decoded inbound webhook, including its optional stable delivery ID.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Inbound {
+    pub id: String,
     pub sender: String,
     pub reply_target: String,
     pub content: String,
@@ -141,6 +140,8 @@ pub struct Inbound {
 /// The inbound payload shape: `{sender, content, thread_id?}`.
 #[derive(Debug, Deserialize)]
 struct IncomingWebhook {
+    #[serde(default)]
+    id: String,
     #[serde(default)]
     sender: String,
     content: String,
@@ -188,6 +189,7 @@ pub fn parse_incoming(body: &[u8]) -> Result<Inbound, String> {
         .clone()
         .unwrap_or_else(|| payload.sender.clone());
     Ok(Inbound {
+        id: payload.id,
         sender: payload.sender,
         reply_target,
         content: payload.content,
@@ -219,6 +221,14 @@ mod tests {
         let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes()).unwrap();
         mac.update(body);
         hex::encode(mac.finalize().into_bytes())
+    }
+
+    #[test]
+    fn stable_ids_are_supplied_by_the_caller() {
+        let with_id = parse_incoming(br#"{"id":"delivery-2","content":"ping"}"#).unwrap();
+        let untracked = parse_incoming(br#"{"content":"ping"}"#).unwrap();
+        assert_eq!(with_id.id, "delivery-2");
+        assert!(untracked.id.is_empty());
     }
 
     #[test]
