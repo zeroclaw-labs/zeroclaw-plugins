@@ -8,7 +8,7 @@ mod component {
         features: ["plugins-wit-v0"],
     });
 
-    use crate::core::{parse_job, reply_key, Config};
+    use crate::core::{parse_job, recovery_key, reply_key, Config};
     use exports::zeroclaw::plugin::channel::{
         ApprovalRequest, ApprovalResponse, ChannelCapabilities, Guest as Channel, InboundMessage,
         SendMessage, WebhookRejection, WebhookRequest, WebhookResponse,
@@ -50,6 +50,22 @@ mod component {
         Ok(body.get("result").cloned().unwrap_or(Value::Null))
     }
 
+    fn notify(op: &str, data: &Value) {
+        if call(op, data).is_err() {
+            logging::log_record(
+                logging::LogLevel::Warn,
+                &logging::PluginEvent {
+                    function_name: format!("iris_chat::{op}"),
+                    action: logging::PluginAction::Fail,
+                    outcome: Some(logging::PluginOutcome::Failure),
+                    duration_ms: None,
+                    attrs: None,
+                    message: format!("Iris bridge {op} notification failed"),
+                },
+            );
+        }
+    }
+
     fn receive() -> Result<Option<InboundMessage>, String> {
         let cfg = current()?;
         if PENDING.with(|pending| pending.borrow().is_some()) {
@@ -61,13 +77,13 @@ mod component {
         if job.interrupted {
             call(
                 "send",
-                &json!({"key":format!("recovery:{}", job.id),
+                &json!({"key":recovery_key(&job.id),
                 "text":"My previous task was interrupted. I did not repeat it automatically. Send a new message to continue."}),
             )?;
             call("finish", &json!({"id":job.id}))?;
             return Ok(None);
         }
-        call("seen", &json!({"id":job.id}))?;
+        notify("seen", &json!({"id":job.id}));
         PENDING.with(|pending| *pending.borrow_mut() = Some(job.id.clone()));
         Ok(Some(InboundMessage {
             id: job.id,
@@ -140,7 +156,7 @@ mod component {
                 call("finish", &json!({"id":id}))?;
                 PENDING.with(|value| *value.borrow_mut() = None);
             }
-            call("typing", &json!({"active":false}))?;
+            notify("typing", &json!({"active":false}));
             Ok(())
         }
         fn poll_message() -> Option<InboundMessage> {

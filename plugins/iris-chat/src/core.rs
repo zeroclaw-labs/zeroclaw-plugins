@@ -57,8 +57,25 @@ pub fn parse_job(value: serde_json::Value, config: &Config) -> Result<Option<Job
     Ok(Some(job))
 }
 
+// The bridge accepts delivery keys up to 300 characters. Preserve existing
+// keys for retries and compact only those that would exceed that limit.
+fn delivery_key(key: String) -> String {
+    if key.chars().count() <= 300 {
+        key
+    } else {
+        format!("hash:{:x}", Sha256::digest(key.as_bytes()))
+    }
+}
+
 pub fn reply_key(anchor: &str, text: &str) -> String {
-    format!("reply:{anchor}:{:x}", Sha256::digest(text.as_bytes()))
+    delivery_key(format!(
+        "reply:{anchor}:{:x}",
+        Sha256::digest(text.as_bytes())
+    ))
+}
+
+pub fn recovery_key(id: &str) -> String {
+    delivery_key(format!("recovery:{id}"))
 }
 
 #[cfg(test)]
