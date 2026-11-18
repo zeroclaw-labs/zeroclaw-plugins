@@ -6,10 +6,24 @@ API**. It receives messages as signed webhooks and sends the agent's replies
 with `POST /<phone_number_id>/messages` — all from a sandboxed
 `wasm32-wasip2` WIT component, with no native build.
 
-```bash
-zeroclaw plugin install whatsapp \
-  --registry https://raw.githubusercontent.com/JordanTheJet/zeroclaw-plugins/main/registry.json
+
+## Install locally on ZeroClaw v0.9.0
+
+From this plugin directory, build and bind the source-only package:
+
+```sh
+cargo build --release --locked --target wasm32-wasip2
+mkdir -p target/package
+cp manifest.toml target/wasm32-wasip2/release/whatsapp.wasm target/package/
+zeroclaw plugin install ./target/package --channel-alias whatsapp --egress declared
+zeroclaw plugin info whatsapp
 ```
+
+Use the channel instance key printed by `zeroclaw plugin info whatsapp`. Store each setting under `plugins.entries.<instance-key>.config`. Set secret fields using `zeroclaw config set plugins.entries.<instance-key>.config.app_secret` and enter the value at the prompt.
+
+Enable plugins, route `plugin.whatsapp` to an agent and configure the permitted senders in its peer group. Restart or reload the daemon. Each binding claims the fixed callback path `/plugin/whatsapp`, so use one active binding for that path.
+
+The default API hostname is declared in the manifest. If you change the API origin, grant the new trusted hostname in `plugins.entries.<instance-key>.egress_hosts`.
 
 ## How it works
 
@@ -32,33 +46,19 @@ put in config, and subscribe to the `messages` field.
 
 ## Configuration
 
-This plugin mirrors the built-in `whatsapp` channel: it reads the same
-`[channels.whatsapp.<alias>]` section (Cloud-API fields). On a host built with
-the `provides` feature it takes over the native `whatsapp` type; elsewhere it
-loads as a novel channel named `whatsapp` configured from
-`[[plugins.entries.whatsapp]]`.
+Set these keys on the bound plugin instance.
 
 | key               | required | meaning                                                                                 |
 | ----------------- | :------: | --------------------------------------------------------------------------------------- |
 | `access_token`    |   yes    | Graph API access token (Bearer) used to send replies.                                   |
 | `phone_number_id` |   yes    | The WhatsApp phone-number ID the send endpoint is scoped to.                            |
 | `verify_token`    |   yes    | The token you invent and paste into Meta's webhook setup; echoed during GET verification. |
-| `app_secret`      | strongly recommended | Meta **App Secret**, used to verify `X-Hub-Signature-256` on inbound POSTs.  |
+| `app_secret`      | for POST | Meta **App Secret**, used to verify `X-Hub-Signature-256` on inbound POSTs.  |
 | `api_base_url`    |    no    | Override the Graph origin. Default `https://graph.facebook.com/v20.0`.                   |
 
-> **Signature verification is only enforced when `app_secret` is set** (matching
-> the native channel, which treats it as optional). Leaving it unset means the
-> gateway will accept any well-formed POST to your public `/plugin/whatsapp`
-> route — set it in production.
+The binding requires `app_secret` to verify every inbound POST. The GET handshake requires `verify_token`.
 
-```toml
-[channels.whatsapp.main]
-enabled = true
-access_token = "EAAG...your-graph-token..."
-phone_number_id = "1234567890"
-verify_token = "a-secret-you-choose"
-app_secret = "your-meta-app-secret"
-```
+
 
 ## Scope
 
