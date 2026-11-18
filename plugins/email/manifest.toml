@@ -1,16 +1,86 @@
 name = "email"
-version = "0.1.0"
+version = "0.2.0"
 description = "Text-only IMAP/SMTP email channel over host-mediated TCP and implicit TLS."
 author = "JordanTheJet"
 wasm_path = "email.wasm"
 capabilities = ["channel"]
 sender_match = "email"
-# Real implementation, kept source-only until ZeroClaw's socket-client host
-# capability reaches upstream master.
 registry = false
-# socket_client: host-mediated IMAP and SMTP TCP/TLS.
-# config_read: read [channels.email.*] when loaded as a mirror plugin.
 permissions = ["socket_client", "config_read"]
-# provides: mirror the built-in `email` channel — read the existing
-# channel config as the single source of truth and honor native-wins.
 provides = "email"
+
+[config_schema]
+"$schema" = "https://json-schema.org/draft/2020-12/schema"
+type = "object"
+additionalProperties = false
+required = ["imap_host", "username", "password"]
+
+[config_schema.properties.imap_host]
+type = "string"
+minLength = 1
+
+[config_schema.properties.imap_folder]
+type = "string"
+
+[config_schema.properties.smtp_host]
+type = "string"
+
+[config_schema.properties.smtp_username]
+type = "string"
+
+[config_schema.properties.smtp_password]
+type = "string"
+x-secret = true
+
+[config_schema.properties.username]
+type = "string"
+minLength = 1
+
+[config_schema.properties.password]
+type = "string"
+minLength = 1
+x-secret = true
+
+[config_schema.properties.from_address]
+type = "string"
+
+[config_schema.properties.default_subject]
+type = "string"
+
+[config_schema.properties.enabled]
+type = "boolean"
+
+[config_schema.properties.smtp_tls]
+type = "boolean"
+
+[config_schema.properties.html_body]
+type = "boolean"
+
+[config_schema.properties.observer_mode]
+type = "boolean"
+
+[config_schema.properties.excluded_tools]
+type = "array"
+items = { type = "string" }
+
+[config_schema.properties.imap_port]
+type = "integer"
+minimum = 1
+maximum = 65535
+
+[config_schema.properties.smtp_port]
+type = "integer"
+minimum = 1
+maximum = 65535
+
+[config_schema.properties.idle_timeout_secs]
+type = "integer"
+minimum = 0
+
+[config_schema.properties.poll_interval_secs]
+type = "integer"
+minimum = 1
+
+[config_schema.properties.max_attachment_bytes]
+type = "integer"
+minimum = 0

@@ -610,3 +610,44 @@ fn smtp_does_not_retry_ambiguous_post_data_disconnect() {
     }
     assert!(!smtp.has_work());
 }
+
+#[test]
+fn receive_only_mailboxes_accept_blank_or_omitted_smtp_fields() {
+    let base = serde_json::json!({"enabled":true, "observer_mode":true, "imap_host":"imap.example.invalid",
+                                 "username":"bot@example.invalid","password":"test-password"});
+    let mut blank = base.clone();
+    blank["smtp_host"] = serde_json::json!(" ");
+    blank["from_address"] = serde_json::json!("");
+    for value in [base.clone(), blank] {
+        let config = EmailConfig::from_json(&value.to_string()).unwrap();
+        let (_, actions) = selected_machine(&EmailConfig {
+            imap_folder: "Robot Mail".into(),
+            username: "imap-user@example.invalid".into(),
+            password: "imap-secret".into(),
+            ..config.clone()
+        });
+        assert_eq!(imap_send(&actions), "ZC0003 UID SEARCH UID 8:*\r\n");
+        let err = build_outbound_email(
+            &config,
+            "recipient@example.invalid",
+            "hello",
+            None,
+            None,
+            1,
+            1,
+        )
+        .unwrap_err();
+        assert!(err.contains("inbound-only"));
+    }
+    for (key, value) in [
+        ("smtp_host", "smtp.example.invalid"),
+        ("from_address", "bot@example.invalid"),
+    ] {
+        let mut partial = base.clone();
+        partial[key] = serde_json::json!(value);
+        assert!(EmailConfig::from_json(&partial.to_string())
+            .err()
+            .expect("half-configured SMTP")
+            .contains("together"));
+    }
+}

@@ -9,13 +9,14 @@ pub mod email;
 #[cfg(target_family = "wasm")]
 mod component {
     wit_bindgen::generate!({
-        path: "../../wit/unstable",
+        path: "../../wit/v0",
         world: "channel-plugin",
         features: ["plugins-wit-v0", "plugins-wit-v0-sockets"],
     });
 
     use std::cell::RefCell;
     use std::collections::VecDeque;
+    use std::rc::Rc;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use crate::email::{
@@ -24,15 +25,16 @@ mod component {
     };
     use exports::zeroclaw::plugin::channel::{
         ApprovalRequest, ApprovalResponse, ChannelCapabilities, Guest as Channel, InboundMessage,
-        SendMessage, WebhookRejection,
+        SendMessage, WebhookRejection, WebhookRequest, WebhookResponse,
     };
     use exports::zeroclaw::plugin::plugin_info::Guest as PluginInfo;
     use zeroclaw::plugin::logging::{
         log_record, LogLevel, PluginAction, PluginEvent, PluginOutcome,
     };
-    use zeroclaw::plugin::socket::{self, SocketEvent};
+    use zeroclaw::plugin::sockets::{self, ConnectMode, ConnectRequest, Connection, ReceiveEvent};
+    use zeroclaw::plugin::{config, secrets};
 
-    const PLUGIN_VERSION: &str = "0.1.0";
+    const PLUGIN_VERSION: &str = env!("CARGO_PKG_VERSION");
     const MAX_SOCKET_EVENTS_PER_POLL: usize = 64;
     const MAX_INBOUND_QUEUE: usize = 64;
     const INITIAL_RETRY_MS: u64 = 1000;
@@ -70,11 +72,11 @@ mod component {
 
     struct Runtime {
         config: Option<EmailConfig>,
-        imap_handle: Option<u64>,
+        imap_handle: Option<Rc<Connection>>,
         imap: Option<ImapMachine>,
         imap_framer: ImapFramer,
         imap_retry: RetryState,
-        smtp_handle: Option<u64>,
+        smtp_handle: Option<Rc<Connection>>,
         smtp: SmtpMachine,
         smtp_framer: SmtpFramer,
         smtp_retry: RetryState,
@@ -109,17 +111,19 @@ mod component {
         }
 
         fn close(&mut self) {
-            if let Some(handle) = self.imap_handle.take() {
-                socket::tcp_close(handle);
-            }
-            if let Some(handle) = self.smtp_handle.take() {
-                socket::tcp_close(handle);
-            }
+            self.imap_handle = None;
+            self.smtp_handle = None;
         }
 
         fn connect_imap(&mut self, config: &EmailConfig, now_ms: u64) -> Result<(), String> {
-            let handle = socket::tcp_connect(&config.imap_host, config.imap_port, true)?;
-            self.imap_handle = Some(handle);
+            let handle = sockets::connect(&ConnectRequest {
+                host: config.imap_host.clone(),
+                port: config.imap_port,
+                mode: ConnectMode::DirectTls,
+                tls_profile: None,
+            })
+            .map_err(|error| format!("email: imap connect: {error:?}"))?;
+            self.imap_handle = Some(Rc::new(handle));
             self.imap = Some(ImapMachine::new(now_ms));
             self.imap_framer = ImapFramer::default();
             self.imap_retry.success();
@@ -133,8 +137,18 @@ mod component {
         }
 
         fn connect_smtp(&mut self, config: &EmailConfig, now_ms: u64) -> Result<(), String> {
-            let handle = socket::tcp_connect(&config.smtp_host, config.smtp_port, config.smtp_tls)?;
-            self.smtp_handle = Some(handle);
+            let handle = sockets::connect(&ConnectRequest {
+                host: config.smtp_host.clone(),
+                port: config.smtp_port,
+                mode: if config.smtp_tls {
+                    ConnectMode::DirectTls
+                } else {
+                    ConnectMode::Plaintext
+                },
+                tls_profile: None,
+            })
+            .map_err(|error| format!("email: smtp connect: {error:?}"))?;
+            self.smtp_handle = Some(Rc::new(handle));
             self.smtp_framer = SmtpFramer::default();
             self.smtp.on_connected(now_ms);
             self.smtp_retry.success();
@@ -172,15 +186,21 @@ mod component {
         fn drain_imap(&mut self, config: &EmailConfig, now_ms: u64) -> Result<(), String> {
             let handle = self
                 .imap_handle
+                .clone()
                 .ok_or_else(|| "email: missing IMAP socket handle".to_string())?;
-            let pending = socket::tcp_pending(handle)?;
+            let pending = handle
+                .pending()
+                .map_err(|error| format!("email: pending: {error:?}"))?;
             let attempts = usize::try_from(pending)
                 .unwrap_or(MAX_SOCKET_EVENTS_PER_POLL)
                 .clamp(1, MAX_SOCKET_EVENTS_PER_POLL);
 
             for _ in 0..attempts {
-                match socket::tcp_receive(handle)? {
-                    SocketEvent::Data(bytes) => {
+                match handle
+                    .receive()
+                    .map_err(|error| format!("email: receive: {error:?}"))?
+                {
+                    ReceiveEvent::Data(bytes) => {
                         let frames = self.imap_framer.feed(&bytes)?;
                         for frame in frames {
                             let actions = self
@@ -188,12 +208,12 @@ mod component {
                                 .as_mut()
                                 .ok_or_else(|| "email: missing IMAP state".to_string())?
                                 .on_frame(frame, config, now_ms)?;
-                            self.apply_imap_actions(handle, actions)?;
+                            self.apply_imap_actions(&handle, actions)?;
                         }
                     }
-                    SocketEvent::Idle => break,
-                    SocketEvent::Closed(reason) => {
-                        return Err(format!("email: IMAP socket closed: {reason}"));
+                    ReceiveEvent::Idle => break,
+                    ReceiveEvent::Closed(reason) => {
+                        return Err(format!("email: IMAP socket closed: {reason:?}"));
                     }
                 }
             }
@@ -203,17 +223,23 @@ mod component {
                 .as_mut()
                 .ok_or_else(|| "email: missing IMAP state".to_string())?
                 .tick(config, now_ms)?;
-            self.apply_imap_actions(handle, actions)
+            self.apply_imap_actions(&handle, actions)
         }
 
         fn apply_imap_actions(
             &mut self,
-            handle: u64,
+            handle: &Connection,
             actions: Vec<ImapAction>,
         ) -> Result<(), String> {
             for action in actions {
                 match action {
-                    ImapAction::Send(bytes) => socket::tcp_send(handle, &bytes)?,
+                    ImapAction::Send(bytes) => {
+                        for chunk in bytes.chunks(16 * 1024) {
+                            handle
+                                .send(chunk)
+                                .map_err(|error| format!("email: send: {error:?}"))?;
+                        }
+                    }
                     ImapAction::Message(message) => {
                         if self.inbound.len() >= MAX_INBOUND_QUEUE {
                             self.inbound.pop_front();
@@ -238,9 +264,7 @@ mod component {
         }
 
         fn drop_imap(&mut self, reason: &str, now_ms: u64) {
-            if let Some(handle) = self.imap_handle.take() {
-                socket::tcp_close(handle);
-            }
+            self.imap_handle = None;
             self.imap = None;
             self.imap_framer = ImapFramer::default();
             self.imap_retry.fail(now_ms);
@@ -277,40 +301,52 @@ mod component {
         fn drain_smtp(&mut self, config: &EmailConfig, now_ms: u64) -> Result<(), String> {
             let handle = self
                 .smtp_handle
+                .clone()
                 .ok_or_else(|| "email: missing SMTP socket handle".to_string())?;
-            let pending = socket::tcp_pending(handle)?;
+            let pending = handle
+                .pending()
+                .map_err(|error| format!("email: pending: {error:?}"))?;
             let attempts = usize::try_from(pending)
                 .unwrap_or(MAX_SOCKET_EVENTS_PER_POLL)
                 .clamp(1, MAX_SOCKET_EVENTS_PER_POLL);
 
             for _ in 0..attempts {
-                match socket::tcp_receive(handle)? {
-                    SocketEvent::Data(bytes) => {
+                match handle
+                    .receive()
+                    .map_err(|error| format!("email: receive: {error:?}"))?
+                {
+                    ReceiveEvent::Data(bytes) => {
                         let replies = self.smtp_framer.feed(&bytes)?;
                         for reply in replies {
                             let actions = self.smtp.on_reply(reply, config, now_ms)?;
-                            self.apply_smtp_actions(handle, actions)?;
+                            self.apply_smtp_actions(&handle, actions)?;
                         }
                     }
-                    SocketEvent::Idle => break,
-                    SocketEvent::Closed(reason) => {
-                        return Err(format!("email: SMTP socket closed: {reason}"));
+                    ReceiveEvent::Idle => break,
+                    ReceiveEvent::Closed(reason) => {
+                        return Err(format!("email: SMTP socket closed: {reason:?}"));
                     }
                 }
             }
 
             let actions = self.smtp.tick(now_ms)?;
-            self.apply_smtp_actions(handle, actions)
+            self.apply_smtp_actions(&handle, actions)
         }
 
         fn apply_smtp_actions(
             &mut self,
-            handle: u64,
+            handle: &Connection,
             actions: Vec<SmtpAction>,
         ) -> Result<(), String> {
             for action in actions {
                 match action {
-                    SmtpAction::Send(bytes) => socket::tcp_send(handle, &bytes)?,
+                    SmtpAction::Send(bytes) => {
+                        for chunk in bytes.chunks(16 * 1024) {
+                            handle
+                                .send(chunk)
+                                .map_err(|error| format!("email: send: {error:?}"))?;
+                        }
+                    }
                     SmtpAction::Delivered(recipient) => emit(
                         LogLevel::Info,
                         PluginAction::Send,
@@ -329,9 +365,7 @@ mod component {
         }
 
         fn drop_smtp(&mut self, reason: &str, now_ms: u64) {
-            if let Some(handle) = self.smtp_handle.take() {
-                socket::tcp_close(handle);
-            }
+            self.smtp_handle = None;
             self.smtp_framer = SmtpFramer::default();
             let actions = self.smtp.on_disconnected(reason);
             for action in actions {
@@ -419,7 +453,22 @@ mod component {
             CHANNEL.to_string()
         }
 
-        fn configure(config: String) -> Result<(), String> {
+        fn configure() -> Result<(), String> {
+            let public = config::get().map_err(|error| format!("email: config: {error:?}"))?;
+            let mut settings: serde_json::Map<String, serde_json::Value> =
+                serde_json::from_str(&public).map_err(|_| "email: invalid public configuration")?;
+            settings.entry("enabled").or_insert(true.into());
+            let password =
+                secrets::get("password").map_err(|error| format!("email: password: {error:?}"))?;
+            settings.insert("password".into(), password.into());
+            match secrets::get("smtp_password") {
+                Ok(value) => {
+                    settings.insert("smtp_password".into(), value.into());
+                }
+                Err(secrets::SecretError::NotFound) => {}
+                Err(error) => return Err(format!("email: smtp_password: {error:?}")),
+            }
+            let config = serde_json::Value::Object(settings).to_string();
             let config = EmailConfig::from_json(&config)?;
             RUNTIME.with(|state| {
                 let mut runtime = state.borrow_mut();
@@ -497,7 +546,7 @@ mod component {
                     .borrow()
                     .config
                     .as_ref()
-                    .filter(|config| config.enabled)
+                    .filter(|config| config.enabled && !config.from_address.trim().is_empty())
                     .map(|config| config.from_address.clone())
             })
         }
@@ -623,10 +672,7 @@ mod component {
             None
         }
 
-        fn parse_webhook(
-            _headers: Vec<(String, String)>,
-            _body: Vec<u8>,
-        ) -> Result<Vec<InboundMessage>, WebhookRejection> {
+        fn parse_webhook(_request: WebhookRequest) -> Result<WebhookResponse, WebhookRejection> {
             Err(WebhookRejection::BadRequest(
                 "email: webhook ingress is not supported".to_string(),
             ))
