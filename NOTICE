@@ -1,0 +1,50 @@
+ZeroClaw Plugin Registry
+Copyright 2025 ZeroClaw Labs
+
+This product includes software developed at ZeroClaw Labs (https://github.com/zeroclaw-labs).
+
+License
+-------
+
+This software is available under a dual-license model:
+
+  1. MIT License — see LICENSE-MIT
+  2. Apache License 2.0 — see LICENSE-APACHE
+
+You may use either license. Contributors grant rights under both.
+See CONTRIBUTING.md for how contributions are licensed.
+
+Exception: plugins/redact-text is available under the Apache License 2.0
+only. See "Reference Plugin" below.
+
+Contributors
+------------
+
+For the latest contributor list, see the repository contributors page:
+https://github.com/zeroclaw-labs/zeroclaw-plugins/graphs/contributors
+
+All contributors retain copyright ownership of their contributions.
+Contributions are permanently attributed in the repository commit history.
+Patent rights are protected for all contributors under Apache License 2.0.
+
+Third-Party Dependencies
+------------------------
+
+Each plugin under plugins/ uses third-party libraries and components,
+each licensed under their respective terms.
+
+See each plugin's Cargo.lock for its complete dependency list.
+
+Reference Plugin
+----------------
+
+plugins/redact-text is adapted from the ZeroClaw reference plugin:
+
+  Project:  zeroclaw-reference-plugin
+  Author:   singlerider
+  Source:   https://github.com/singlerider/zeroclaw-reference-plugin
+  License:  Apache License, Version 2.0 (as declared in its Cargo.toml)
+
+Because the reference plugin is licensed under the Apache License 2.0 only,
+plugins/redact-text is too, including its versions published before 0.4.1
+under the label "MIT OR Apache-2.0".
