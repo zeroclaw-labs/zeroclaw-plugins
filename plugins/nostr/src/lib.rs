@@ -1,32 +1,11 @@
-//! A ZeroClaw WIT **channel** plugin: Nostr (WebSocket relay).
-//!
-//! Nostr has no HTTP polling surface: a client keeps a persistent WebSocket to a
-//! relay, sends a `["REQ", ...]` subscription, and drains `["EVENT", ...]`
-//! frames. A plugin can't open a socket inside the WASI sandbox, so the host
-//! owns it: this shim drives the relay protocol over the host's `websocket`
-//! resource (`wit/next`, gated by the `websocket_client` permission and the
-//! instance's egress grant) exactly as the sibling HTTP plugins drive
-//! `wasi:http`. Config arrives through `config.get`; the private key is an
-//! `x-secret` read through `secrets.get`.
-//!
-//! Scope (v0.1.0): **receive-only, plaintext notes** — it proves the WebSocket
-//! round-trip by subscribing (kind 1) and surfacing each received note as an
-//! inbound message. Encrypted DMs (NIP-04 kind 4 / NIP-17) are not decrypted and
-//! outbound `send` is not implemented, because both need secp256k1 (schnorr) +
-//! AES that are too heavy for the pure core; see the README for the follow-up.
-//!
-//! The pure relay-protocol logic lives in [`nostr`] (no wasm/socket deps) and is
-//! covered by a host `cargo test`; this file is the thin component shim.
-//!
-//! Build:  rustup target add wasm32-wasip2
-//!         cargo build --target wasm32-wasip2 --release
-
+//! Receive signed public Nostr notes over a host-owned WebSocket.
+//! The guest verifies NIP-01 authorship before emitting a channel message.
 pub mod nostr;
 
 #[cfg(target_family = "wasm")]
 mod component {
     wit_bindgen::generate!({
-        path: "../../wit/next",
+        path: "../../wit/v0",
         world: "channel-plugin",
         features: ["plugins-wit-v0", "plugins-wit-v0-websocket"],
     });
@@ -35,8 +14,8 @@ mod component {
     use std::collections::{HashSet, VecDeque};
 
     use crate::nostr::{
-        decode_cursor, decode_relay_message, encode_cursor, event_to_inbound, should_emit,
-        since_after, Inbound, NostrConfig, RelayMessage, CURSOR_KEY,
+        decode_cursor, decode_relay_message, encode_cursor, event_to_inbound, should_emit, Inbound,
+        NostrConfig, RelayMessage, CURSOR_KEY,
     };
 
     use exports::zeroclaw::plugin::channel::{
@@ -45,12 +24,11 @@ mod component {
     };
     use exports::zeroclaw::plugin::plugin_info::Guest as PluginInfo;
     use zeroclaw::plugin::config;
-    use zeroclaw::plugin::secrets::{self, SecretError};
     use zeroclaw::plugin::state::{self, StateError};
     use zeroclaw::plugin::websocket::{self, ConnectOptions, Connection, Event, Message};
 
     const PLUGIN_NAME: &str = "nostr";
-    const PLUGIN_VERSION: &str = "0.1.0";
+    const PLUGIN_VERSION: &str = env!("CARGO_PKG_VERSION");
 
     /// Max frames drained per `poll_message` so a busy relay never starves the
     /// caller's back-off loop.
@@ -152,22 +130,20 @@ mod component {
         SUBSCRIBED.with(|s| s.set(false));
     }
 
-    /// Typed public config from `config.get`, plus the `x-secret` private key.
     fn load_config() -> Result<NostrConfig, String> {
         let public = config::get().map_err(|error| format!("nostr: config: {error:?}"))?;
-        let mut value: serde_json::Value =
-            serde_json::from_str(&public).map_err(|error| format!("nostr: config: {error}"))?;
-        let object = value
-            .as_object_mut()
-            .ok_or_else(|| "nostr: config is not an object".to_string())?;
-        match secrets::get("private_key") {
-            Ok(key) => {
-                object.insert("private_key".to_string(), serde_json::Value::String(key));
-            }
-            Err(SecretError::NotFound) => {}
-            Err(error) => return Err(format!("nostr: secret private_key: {error:?}")),
+        Ok(NostrConfig::from_json(&public))
+    }
+
+    fn next_inbound() -> Option<InboundMessage> {
+        let message = BUFFER.with(|queue| queue.borrow_mut().pop_front())?;
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .ok();
+        if let Some(now) = now {
+            advance_cursor((message.timestamp / 1000).min(now.as_secs()));
         }
-        Ok(NostrConfig::from_json(&value.to_string()))
+        Some(to_wit(message))
     }
 
     struct NostrChannel;
@@ -188,27 +164,22 @@ mod component {
 
         fn configure() -> Result<(), String> {
             let cfg = load_config()?;
-            // A fresh config invalidates any live connection; redial lazily.
             drop_connection();
+            BUFFER.with(|queue| queue.borrow_mut().clear());
+            SEEN.with(|seen| seen.borrow_mut().clear());
+            CURSOR.with(|cursor| *cursor.borrow_mut() = None);
             CONFIG.with(|c| *c.borrow_mut() = cfg);
             Ok(())
         }
 
-        /// Receive-only in v0.1.0. Publishing a note requires schnorr-signing the
-        /// event with secp256k1, which is deferred (see the README); we fail
-        /// loudly rather than silently dropping the agent's reply.
         fn send(_message: SendMessage) -> Result<(), String> {
-            Err(
-                "nostr plugin v0.1.0 is receive-only; outbound publish (schnorr/secp256k1 \
-                 event signing) is a planned follow-up"
-                    .to_string(),
-            )
+            Err("nostr: public-note subscriptions are receive-only".into())
         }
 
         fn poll_message() -> Option<InboundMessage> {
             // 1) Anything already decoded?
-            if let Some(inb) = BUFFER.with(|b| b.borrow_mut().pop_front()) {
-                return Some(to_wit(inb));
+            if let Some(message) = next_inbound() {
+                return Some(message);
             }
 
             let cfg = CONFIG.with(|c| c.borrow().clone());
@@ -231,7 +202,7 @@ mod component {
             //    note a previous run of this instance delivered.
             if !SUBSCRIBED.with(Cell::get) {
                 let (cursor, _) = load_cursor();
-                let since = since_after((cursor > 0).then_some(cursor));
+                let since = (cursor > 0).then_some(cursor);
                 let frame = cfg.build_req_frame_since(since);
                 let sent = CONN.with(|c| {
                     c.borrow()
@@ -252,16 +223,17 @@ mod component {
                 let received = CONN.with(|c| c.borrow().as_ref().map(Connection::receive));
                 match received? {
                     Ok(Some(Event::Message(Message::Text(frame)))) => {
-                        if let RelayMessage::Event { event, .. } = decode_relay_message(&frame) {
-                            let (cursor, _) = CURSOR.with(|c| *c.borrow()).unwrap_or((0, None));
-                            let already_delivered = cursor > 0 && event.created_at <= cursor;
-                            if should_emit(&cfg, &event)
-                                && !already_delivered
-                                && first_sighting(&event.id)
-                            {
+                        if let RelayMessage::Event {
+                            event,
+                            subscription_id,
+                        } = decode_relay_message(&frame)
+                        {
+                            if subscription_id != cfg.subscription_id {
+                                continue;
+                            }
+                            if should_emit(&cfg, &event) && first_sighting(&event.id) {
                                 let inb = event_to_inbound(&event, None);
                                 BUFFER.with(|b| b.borrow_mut().push_back(inb));
-                                advance_cursor(event.created_at);
                             }
                         }
                     }
@@ -277,7 +249,7 @@ mod component {
                 }
             }
 
-            BUFFER.with(|b| b.borrow_mut().pop_front()).map(to_wit)
+            next_inbound()
         }
 
         fn get_channel_capabilities() -> ChannelCapabilities {
@@ -285,9 +257,7 @@ mod component {
         }
 
         fn health_check() -> bool {
-            // Healthy when we have somewhere to connect; the socket itself is
-            // host-owned and reconnected lazily by `poll_message`.
-            CONFIG.with(|c| !c.borrow().relays.is_empty())
+            CONN.with(|connection| connection.borrow().is_some())
         }
 
         /// Our own hex pubkey, when configured — lets the runtime's self-loop
