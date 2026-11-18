@@ -1,24 +1,29 @@
-# wecom-ws - ZeroClaw WeCom AI Bot channel plugin
+# WeCom AI Bot
 
-This plugin implements the WeCom AI Bot long-connection text protocol through
-ZeroClaw's host-mediated `ws-client` WIT import. The host owns the WebSocket and
-TLS; the component owns subscription, application-level ping frames, callback
-decoding, access control, reply encoding, and reconnect state.
+The WeCom AI Bot channel subscribes to callbacks over a host-managed WebSocket. It receives direct and group text, acknowledges subscriptions, sends replies and reconnects after a disconnect.
 
-The plugin mirrors the native `wecom_ws` channel with `provides = "wecom_ws"`.
-Its only configuration source is the JSON section the host injects from
-`[channels.wecom_ws.<alias>]`:
+## Install and configure
 
-```toml
-[channels.wecom_ws.primary]
-enabled = true
-bot_id = "your-wecom-bot-id"
-secret = "your-wecom-bot-secret"
-allowed_users = ["operator-userid"]
-allowed_groups = ["approved-chatid"]
-bot_name = "assistant"
-stream_mode = "partial"
+Build the source-only package from its directory and bind the channel on ZeroClaw v0.9.0.
+
+```sh
+cargo build --locked --release --target wasm32-wasip2
+cp target/wasm32-wasip2/release/wecom_ws.wasm .
+zeroclaw plugin install "$PWD"
+zeroclaw plugin bind wecom-ws --channel-alias wecom-bot --egress declared
+zeroclaw plugin info wecom-ws
 ```
+
+Copy the config entry key printed by `plugin info` into the shell variable `key`. The commands for secrets prompt without echo. The declaration grants `openws.work.weixin.qq.com` when selected at bind time.
+
+```sh
+zeroclaw config set "plugins.entries.$key.config.bot_id" 'BOT_ID'
+zeroclaw config set "plugins.entries.$key.config.secret"
+zeroclaw config set "plugins.entries.$key.config.allowed_users" '["operator-userid"]'
+zeroclaw config set "plugins.entries.$key.config.allowed_groups" '["approved-chatid"]'
+```
+
+Enable `plugins.enabled`, route `plugin.wecom-bot` to an enabled agent, and authorize senders in the alias’s peer group.
 
 Empty `allowed_users` and `allowed_groups` deny all inbound callbacks. A `"*"`
 entry allows every identifier in that list; all other identifiers are matched
@@ -53,11 +58,6 @@ events, and typing indicators are not available. `proxy_url`, file retention,
 and file-size config are native media/transport concerns and are not consumed by
 this component. WebSocket command acknowledgements arrive asynchronously, so a
 successful `send` confirms host-buffer acceptance rather than remote delivery.
-
-`registry = false` remains required because the `plugins-wit-v0-websocket` host
-capability is not on upstream master. A live test additionally requires WeCom
-AI Bot credentials and a ZeroClaw host built with that capability; the focused
-tests use protocol fixtures and do not contact WeCom.
 
 ## Validation
 

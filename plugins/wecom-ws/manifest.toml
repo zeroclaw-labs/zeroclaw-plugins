@@ -1,16 +1,46 @@
 name = "wecom-ws"
-version = "0.1.0"
+version = "0.2.0"
 description = "WeCom AI Bot WebSocket channel plugin for ZeroClaw with host-mediated text callbacks and replies."
 author = "JordanTheJet"
 wasm_path = "wecom_ws.wasm"
 capabilities = ["channel"]
 sender_match = "exact"
-# Real implementation, kept source-only until ZeroClaw's websocket-client host
-# capability reaches upstream master.
 registry = false
-# websocket_client: subscribe, ping, receive callbacks, and send text frames.
-# config_read: read [channels.wecom_ws.*] when loaded as a mirror plugin.
 permissions = ["websocket_client", "config_read"]
-# provides: mirror the built-in `wecom_ws` channel - read the existing
-# channel config as the single source of truth and honor native-wins.
 provides = "wecom_ws"
+
+[egress]
+hosts = ["openws.work.weixin.qq.com"]
+
+[config_schema]
+"$schema" = "https://json-schema.org/draft/2020-12/schema"
+type = "object"
+additionalProperties = false
+required = ["bot_id", "secret"]
+
+[config_schema.properties.bot_id]
+type = "string"
+minLength = 1
+
+[config_schema.properties.secret]
+type = "string"
+minLength = 1
+x-secret = true
+
+[config_schema.properties.bot_name]
+type = "string"
+
+[config_schema.properties.enabled]
+type = "boolean"
+
+[config_schema.properties.allowed_users]
+type = "array"
+items = { type = "string" }
+
+[config_schema.properties.allowed_groups]
+type = "array"
+items = { type = "string" }
+
+[config_schema.properties.stream_mode]
+type = "string"
+enum = ["off", "partial"]
