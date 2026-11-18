@@ -6,10 +6,24 @@ connects your agent to [Nextcloud Talk](https://nextcloud.com/talk/) as a Talk
 sends the agent's replies back through the OCS chat API — all from a sandboxed
 `wasm32-wasip2` WIT component, with no native build.
 
-```bash
-zeroclaw plugin install nextcloud \
-  --registry https://raw.githubusercontent.com/JordanTheJet/zeroclaw-plugins/main/registry.json
+
+## Install locally on ZeroClaw v0.9.0
+
+From this plugin directory, build and bind the source-only package:
+
+```sh
+cargo build --release --locked --target wasm32-wasip2
+mkdir -p target/package
+cp manifest.toml target/wasm32-wasip2/release/nextcloud.wasm target/package/
+zeroclaw plugin install ./target/package --channel-alias nextcloud --egress none
+zeroclaw plugin info nextcloud
 ```
+
+Use the channel instance key printed by `zeroclaw plugin info nextcloud`. Store each setting under `plugins.entries.<instance-key>.config`. Set secret fields using `zeroclaw config set plugins.entries.<instance-key>.config.webhook_secret` and enter the value at the prompt.
+
+Enable plugins, route `plugin.nextcloud` to an agent and configure the permitted senders in its peer group. Restart or reload the daemon. Each binding claims the fixed callback path `/plugin/nextcloud`, so use one active binding for that path.
+
+Set `plugins.entries.<instance-key>.egress_hosts` to the trusted host of your outbound URL to allow replies.
 
 ## How it works
 
@@ -54,24 +68,19 @@ boundary.
 
 ## Configuration
 
-Config comes from the plugin's own section (requires the `config_read`
-permission). Field names match the built-in `nextcloud` channel, so a mirror
-install reads `[channels.nextcloud_talk.<alias>]` directly. Fields used by this
-plugin:
+The binding accepts these settings:
 
 - `base_url` (required) — the Nextcloud origin, e.g.
   `https://cloud.example.com`. A trailing slash is trimmed.
 - `app_token` (required for sending) — the bot app token, sent as
   `Authorization: Bearer <app_token>` on OCS calls.
 - `webhook_secret` — the Talk bot shared secret used to verify inbound webhook
-  signatures. **When set, unsigned or mis-signed requests are rejected. When
-  empty, webhooks are accepted unsigned** (mirroring the built-in channel, which
-  only verifies when a secret is configured). Setting it is strongly recommended.
+  signatures. Inbound requires a configured secret and a valid signature.
 - `bot_name` — the bot's display name, used to drop the bot's own messages.
 
 Point your Talk bot's webhook at `https://<your-gateway>/plugin/nextcloud`.
 
-## Scope (v0.1.0)
+## Scope (v0.2.0)
 
 Text messages, send + receive. Deferred for now:
 
