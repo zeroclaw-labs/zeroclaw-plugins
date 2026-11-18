@@ -1,0 +1,51 @@
+[package]
+name = "stake-tx-build"
+version = "0.2.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "ZeroClaw WIT plugin: builds unsigned delegate and deactivate stake transactions for allowlisted accounts. Holds no keys."
+publish = false
+
+# cdylib for the wasm component; rlib so the pure transaction-building core
+# is testable on the host with a plain `cargo test`.
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+wit-bindgen = "0.46"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+bs58 = "0.5.1"
+base64 = "0.22"
+
+[target.'cfg(target_family = "wasm")'.dependencies]
+waki = { version = "0.5.1", features = ["json"] }
+
+# Test-only. The shipped component carries no SDK, which is why the encoder is
+# hand-rolled; keeping the official crates here is what makes that claim
+# checkable. tests/sdk_differential.rs builds every message twice and compares
+# what the message means: the same account keys with the same signer and
+# writable flags, the same program, the same instruction data byte for byte, and
+# the same accounts passed to each instruction. Whole-message byte equality is
+# deliberately not the criterion; the test file says why.
+#
+# These are the split-out official crates rather than the monolithic
+# `solana-sdk`: that one pulls `openssl-sys` through its client stack, which
+# needs a system OpenSSL that a clean Windows box does not have. The pieces
+# below carry the same encoding logic with no native dependency.
+[target.'cfg(not(target_family = "wasm"))'.dev-dependencies]
+solana-hash = "2"
+solana-instruction = { version = "2", features = ["std"] }
+solana-message = { version = "2", features = ["bincode"] }
+solana-pubkey = "2"
+solana-stake-interface = { version = "1", features = ["bincode"] }
+solana-system-interface = { version = "1", features = ["bincode"] }
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true
+codegen-units = 1
+
+# Standalone crate: built for wasm32-wasip2, not part of the host workspace.
+[workspace]
