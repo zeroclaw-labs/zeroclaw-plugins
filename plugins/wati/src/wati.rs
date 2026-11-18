@@ -6,8 +6,7 @@
 //!
 //!   * parsing the plugin's `[channels.wati.<alias>]` config section,
 //!   * the WATI/Meta-style verification handshake
-//!     (`GET …?hub.challenge=…`, echoed verbatim — WATI does **not** send a
-//!     `hub.verify_token`, matching the native gateway),
+//!     (`GET …?hub.challenge=…`, echoed verbatim),
 //!   * decoding a WATI event payload (variable field names) into inbound text
 //!     messages, and
 //!   * building the `POST /api/ext/v3/conversations/messages/text` send target +
@@ -18,15 +17,8 @@
 //!
 //! ## Security note
 //!
-//! WATI does not sign its inbound webhooks (there is no HMAC/signature header),
-//! and the native gateway performs **no** authenticity check on the inbound
-//! `POST /wati` body — it relies on the sender allowlist (`peer_groups`), which
-//! the host applies to plugin-returned messages. This plugin therefore performs
-//! no signature verification either; deploy the `/plugin/wati` route behind a
-//! secret path or network ACL if you need transport authenticity.
-//!
-//! Scope: **text messages only** (send + receive). Media/voice transcription is
-//! intentionally deferred (see README).
+//! The adapter relies on a trusted ingress to authenticate event requests. It
+//! decodes the forwarded body and leaves sender authorization to the host.
 
 use std::collections::HashMap;
 
@@ -40,11 +32,6 @@ pub const DEFAULT_API_URL: &str = "https://live-mt-server.wati.io";
 /// (`/plugin/wati`). Both the GET verification and the POST event webhook arrive
 /// there.
 pub const WEBHOOK_PATH: &str = "wati";
-
-/// Reserved `channel` value for a challenge-echo reply. An `InboundMessage`
-/// whose `channel` is this and whose `content` is the body to send makes the
-/// host reply `200` with that body verbatim and enqueue nothing.
-pub const WEBHOOK_REPLY_CHANNEL: &str = "__webhook_reply__";
 
 /// The plugin's config section, mirroring the native `[channels.wati.<alias>]`
 /// snake_case keys. serde ignores native fields this text-only v0.1.0 plugin
@@ -231,7 +218,7 @@ fn extract_timestamp_ms(payload: &Value) -> u64 {
 }
 
 /// Extract the `hub.challenge` from a raw GET query string, percent-decoded.
-/// WATI's verification handshake echoes this value with no token check (matching
+/// The adapter echoes this value for the verification handshake (matching
 /// the native gateway). Returns `Err` when absent so the component emits a
 /// bad-request rejection.
 pub fn extract_challenge(raw_query: &str) -> Result<String, String> {

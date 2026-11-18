@@ -1,17 +1,31 @@
 name = "wati"
-version = "0.1.0"
+version = "0.2.0"
 description = "WATI (WhatsApp Business API) channel plugin for ZeroClaw: webhook ingress (host-routed) + text send over wasi:http."
 author = "JordanTheJet"
 wasm_path = "wati.wasm"
 capabilities = ["channel"]
-# Source-only until ZeroClaw exposes webhook ingress to channel plugins.
 registry = false
-# http_client: outbound calls to the WATI API (TLS is performed host-side).
-# config_read: read this channel's settings + secret (api_token, api_url,
-# tenant_id) from its config section.
 permissions = ["http_client", "config_read"]
-# provides: mirror the built-in `wati` channel — read [channels.wati.*] and honor
-# native-wins. The plugin serves inbound over the host webhook route
-# (/plugin/wati); requires a host with the webhook-ingress capability
-# (zeroclaw#8862).
 provides = "wati"
+
+[egress]
+hosts = ["live-mt-server.wati.io"]
+
+[config_schema]
+"$schema" = "https://json-schema.org/draft/2020-12/schema"
+type = "object"
+additionalProperties = false
+
+[config_schema.properties.enabled]
+type = "boolean"
+
+[config_schema.properties.api_url]
+type = "string"
+
+[config_schema.properties.tenant_id]
+type = "string"
+
+[config_schema.properties.api_token]
+type = "string"
+x-secret = true
+minLength = 1

@@ -1,35 +1,17 @@
-//! A ZeroClaw WIT **channel** plugin: Linq (Partner V3 API — iMessage/RCS/SMS).
-//!
-//! A **webhook** channel: it does not poll. The host serves `POST` on
-//! `/plugin/linq` and hands each request to [`parse_webhook`]. When a
-//! `signing_secret` is configured the plugin verifies the `X-Webhook-Signature`
-//! HMAC-SHA256 over `"{X-Webhook-Timestamp}.{body}"` (a 300 s replay window)
-//! before decoding events; a bad signature returns `Err(reason)` so the host
-//! replies `401`. Linq has no GET verification handshake, so a GET is a no-op
-//! acknowledgement.
-//!
-//! Replies are sent to the originating chat (`POST <base>/chats/<id>/messages`);
-//! on a `404` (unknown chat) the plugin creates a new chat
-//! (`POST <base>/chats`) from `from_phone`. TLS is performed host-side by the
-//! `wasi:http` client (`waki`).
-//!
-//! The pure logic (config/signature/decode/body) lives in [`linq`] and is
-//! host-`cargo test`ed; this file is the component shim.
-//!
-//! Build:  rustup target add wasm32-wasip2
-//!         cargo build --target wasm32-wasip2 --release
+//! Linq Partner channel. The host forwards the typed HTTP request to the guest.
+//! The plugin authenticates message webhooks using the signing secret and
+//! timestamped HMAC, and sends replies over the host's HTTP client.
 
 pub mod linq;
 
 #[cfg(target_family = "wasm")]
 mod component {
     wit_bindgen::generate!({
-        path: "../../wit/unstable",
+        path: "../../wit/v0",
         world: "channel-plugin",
         features: ["plugins-wit-v0"],
     });
 
-    use std::cell::RefCell;
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
     use crate::linq::{
@@ -39,17 +21,34 @@ mod component {
 
     use exports::zeroclaw::plugin::channel::{
         ApprovalRequest, ApprovalResponse, ChannelCapabilities, Guest as Channel, InboundMessage,
-        SendMessage, WebhookRejection,
+        SendMessage, WebhookRejection, WebhookRequest, WebhookResponse,
     };
     use exports::zeroclaw::plugin::plugin_info::Guest as PluginInfo;
 
-    const PLUGIN_NAME: &str = "linq";
-    const PLUGIN_VERSION: &str = "0.1.0";
-    const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+    use zeroclaw::plugin::{config, secrets};
 
-    thread_local! {
-        static CONFIG: RefCell<LinqConfig> = RefCell::new(LinqConfig::default());
+    fn public_config() -> Result<LinqConfig, String> {
+        let public = config::get().map_err(|_| "linq: public configuration unavailable")?;
+        serde_json::from_str(&public).map_err(|_| "linq: invalid public configuration".to_string())
     }
+
+    fn optional_secret(key: &str) -> Result<Option<String>, String> {
+        match secrets::get(key) {
+            Ok(value) => Ok(Some(value)),
+            Err(secrets::SecretError::NotFound) => Ok(None),
+            Err(_) => Err(format!("linq: cannot read {key}")),
+        }
+    }
+
+    fn send_config() -> Result<LinqConfig, String> {
+        let mut cfg = public_config()?;
+        cfg.api_token = optional_secret("api_token")?;
+        Ok(cfg)
+    }
+
+    const PLUGIN_NAME: &str = "linq";
+    const PLUGIN_VERSION: &str = env!("CARGO_PKG_VERSION");
+    const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
     fn now_secs() -> i64 {
         SystemTime::now()
@@ -109,13 +108,12 @@ mod component {
             PLUGIN_NAME.to_string()
         }
 
-        fn configure(config: String) -> Result<(), String> {
-            CONFIG.with(|c| *c.borrow_mut() = LinqConfig::from_json(&config));
-            Ok(())
+        fn configure() -> Result<(), String> {
+            public_config().map(|_| ())
         }
 
         fn send(message: SendMessage) -> Result<(), String> {
-            let cfg = CONFIG.with(|c| c.borrow().clone());
+            let cfg = send_config()?;
             let token = cfg.api_token();
             if token.is_empty() {
                 return Err("linq: missing api_token in config".to_string());
@@ -152,43 +150,47 @@ mod component {
         }
 
         fn health_check() -> bool {
-            CONFIG.with(|c| !c.borrow().api_token().is_empty())
+            send_config().is_ok_and(|cfg| !cfg.api_token().is_empty())
         }
 
         fn webhook_path() -> Option<String> {
             Some(WEBHOOK_PATH.to_string())
         }
 
-        fn parse_webhook(
-            headers: Vec<(String, String)>,
-            body: Vec<u8>,
-        ) -> Result<Vec<InboundMessage>, WebhookRejection> {
-            let method = header_get(&headers, "x-webhook-method").unwrap_or_default();
+        fn parse_webhook(request: WebhookRequest) -> Result<WebhookResponse, WebhookRejection> {
+            let headers = request.headers;
+            let body = request.body;
+            let method = &request.method;
             // Linq has no GET verification handshake; ack a GET with nothing.
             if method.eq_ignore_ascii_case("GET") {
-                return Ok(Vec::new());
+                return Ok(WebhookResponse::Messages(Vec::new()));
             }
 
-            let cfg = CONFIG.with(|c| c.borrow().clone());
-            // Verify the signature only when a signing secret is configured
-            // (mirrors the native gateway).
-            if let Some(secret) = cfg.signing_secret() {
-                let timestamp = header_get(&headers, "x-webhook-timestamp").unwrap_or_default();
-                let signature = header_get(&headers, "x-webhook-signature").unwrap_or_default();
-                if !verify_signature(secret, &body, &timestamp, &signature, now_secs()) {
-                    return Err(WebhookRejection::Unauthorized(
-                        "linq: X-Webhook-Signature verification failed".to_string(),
-                    ));
-                }
+            let secret = optional_secret("signing_secret")
+                .map_err(WebhookRejection::Unauthorized)?
+                .filter(|value| !value.trim().is_empty())
+                .ok_or_else(|| {
+                    WebhookRejection::Unauthorized(
+                        "linq: signing_secret required for webhook ingress".into(),
+                    )
+                })?;
+            let timestamp = header_get(&headers, "x-webhook-timestamp").unwrap_or_default();
+            let signature = header_get(&headers, "x-webhook-signature").unwrap_or_default();
+            if !verify_signature(secret.trim(), &body, &timestamp, &signature, now_secs()) {
+                return Err(WebhookRejection::Unauthorized(
+                    "linq: X-Webhook-Signature verification failed".into(),
+                ));
             }
 
             let payload: serde_json::Value = serde_json::from_slice(&body).map_err(|e| {
                 WebhookRejection::BadRequest(format!("linq: invalid JSON payload: {e}"))
             })?;
-            Ok(parse_webhook_payload(&payload)
-                .into_iter()
-                .map(to_wit)
-                .collect())
+            Ok(WebhookResponse::Messages(
+                parse_webhook_payload(&payload)
+                    .into_iter()
+                    .map(to_wit)
+                    .collect(),
+            ))
         }
 
         // ── capability-gated stubs (documented WIT defaults) ──

@@ -11,12 +11,16 @@ pub const BOT_CALLBACK_TOPIC: &str = "/v1.0/im/bot/messages/get";
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq)]
 pub struct DingTalkConfig {
-    #[serde(default)]
+    #[serde(default = "default_enabled")]
     pub enabled: bool,
     #[serde(default)]
     pub client_id: String,
     #[serde(default)]
     pub client_secret: String,
+}
+
+fn default_enabled() -> bool {
+    true
 }
 
 impl DingTalkConfig {
@@ -25,7 +29,7 @@ impl DingTalkConfig {
     }
 
     pub fn is_configured(&self) -> bool {
-        !self.client_id.trim().is_empty() && !self.client_secret.trim().is_empty()
+        self.enabled && !self.client_id.trim().is_empty() && !self.client_secret.trim().is_empty()
     }
 }
 

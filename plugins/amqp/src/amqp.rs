@@ -64,6 +64,8 @@ pub struct AmqpConfig {
     #[serde(default)]
     pub queue: Option<String>,
     #[serde(default)]
+    pub tls_profile: Option<String>,
+    #[serde(default)]
     pub ca_cert: Option<String>,
     #[serde(default)]
     pub client_cert: Option<String>,
@@ -112,14 +114,14 @@ impl AmqpConfig {
         if self.sender_label.trim().is_empty() {
             return Err("amqp: sender_label must not be empty".to_string());
         }
-        if endpoint.tls && self.ca_cert.as_deref().is_none_or(str::is_empty) {
-            return Err("amqp: amqps:// requires ca_cert, matching the native schema".to_string());
-        }
-        if self.client_cert.is_some() || self.client_key.is_some() {
+        if self.ca_cert.is_some() || self.client_cert.is_some() || self.client_key.is_some() {
             return Err(
-                "amqp: client_cert/client_key mutual TLS is unsupported by the host socket ABI"
-                    .to_string(),
+                "amqp: configure the TLS material on a host TLS profile and select tls_profile"
+                    .into(),
             );
+        }
+        if self.tls_profile.is_some() && !endpoint.tls {
+            return Err("amqp: tls_profile requires amqps://".into());
         }
         if self.dispatch != Dispatch::AgentLoop {
             return Err(

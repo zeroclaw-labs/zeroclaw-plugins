@@ -29,11 +29,6 @@ pub const MAX_TIMESTAMP_SKEW_SECS: i64 = 60 * 5;
 /// capped at 40 000 characters; we split a little under that to leave headroom.
 pub const MAX_TEXT_CHARS: usize = 39_000;
 
-/// Reserved channel value the host recognizes: a single inbound message with
-/// this `channel` means "reply to the HTTP request with `content` as the body
-/// and enqueue nothing" (the webhook-challenge convention).
-pub const WEBHOOK_REPLY_CHANNEL: &str = "__webhook_reply__";
-
 /// The platform identifier stamped on real inbound events.
 pub const CHANNEL: &str = "slack";
 
@@ -114,7 +109,7 @@ pub struct Inbound {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WebhookOutcome {
     /// A `url_verification` handshake: echo this exact string back in the HTTP
-    /// response body (the `__webhook_reply__` convention).
+    /// response body using the typed webhook reply.
     Challenge(String),
     /// Zero or more real events to enqueue (`channel = "slack"`).
     Messages(Vec<Inbound>),
@@ -244,12 +239,11 @@ fn parse_event(event: &Value) -> Vec<Inbound> {
 /// probe and `Ok(true)` for an authenticated POST that should be decoded.
 pub fn authenticate_webhook(
     signing_secret: &str,
+    method: &str,
     headers: &[(String, String)],
     body: &[u8],
     now_secs: i64,
 ) -> Result<bool, String> {
-    // The host passes the request line via reserved lower-cased headers.
-    let method = header(headers, "x-webhook-method").unwrap_or("POST");
     if method.eq_ignore_ascii_case("GET") {
         return Ok(false);
     }
@@ -289,11 +283,12 @@ pub fn decode_webhook(body: &[u8]) -> Result<WebhookOutcome, String> {
 /// payload-rejection boundary.
 pub fn parse_webhook(
     signing_secret: &str,
+    method: &str,
     headers: &[(String, String)],
     body: &[u8],
     now_secs: i64,
 ) -> Result<WebhookOutcome, String> {
-    if !authenticate_webhook(signing_secret, headers, body, now_secs)? {
+    if !authenticate_webhook(signing_secret, method, headers, body, now_secs)? {
         return Ok(WebhookOutcome::Messages(Vec::new()));
     }
     decode_webhook(body)
@@ -357,7 +352,6 @@ mod tests {
 
     fn signed_headers(ts: &str, body: &[u8]) -> Vec<(String, String)> {
         vec![
-            ("x-webhook-method".to_string(), "POST".to_string()),
             ("x-slack-request-timestamp".to_string(), ts.to_string()),
             (
                 "x-slack-signature".to_string(),
@@ -492,9 +486,8 @@ mod tests {
 
     #[test]
     fn get_probe_returns_empty() {
-        let headers = vec![("x-webhook-method".to_string(), "GET".to_string())];
         // No signature headers at all — a GET must not require them.
-        let out = parse_webhook(SECRET, &headers, b"", 0).unwrap();
+        let out = parse_webhook(SECRET, "GET", &[], b"", 0).unwrap();
         assert_eq!(out, WebhookOutcome::Messages(Vec::new()));
     }
 
@@ -503,7 +496,7 @@ mod tests {
         let ts = "1531420618";
         let body = br#"{"type":"url_verification","challenge":"3eZbrw1aBm2rZgRNFdxV2595E9CY3gmdALWMmHkvFXO7tYXAYM8P"}"#;
         let headers = signed_headers(ts, body);
-        let out = parse_webhook(SECRET, &headers, body, 1531420618).unwrap();
+        let out = parse_webhook(SECRET, "POST", &headers, body, 1531420618).unwrap();
         assert_eq!(
             out,
             WebhookOutcome::Challenge(
@@ -517,7 +510,7 @@ mod tests {
         let ts = "1531420618";
         let body = br#"{"type":"url_verification"}"#;
         let headers = signed_headers(ts, body);
-        assert!(parse_webhook(SECRET, &headers, body, 1531420618).is_err());
+        assert!(parse_webhook(SECRET, "POST", &headers, body, 1531420618).is_err());
     }
 
     #[test]
@@ -534,7 +527,7 @@ mod tests {
             }
         }"#;
         let headers = signed_headers(ts, body);
-        let out = parse_webhook(SECRET, &headers, body, 1531420618).unwrap();
+        let out = parse_webhook(SECRET, "POST", &headers, body, 1531420618).unwrap();
         let WebhookOutcome::Messages(msgs) = out else {
             panic!("expected Messages");
         };
@@ -552,7 +545,7 @@ mod tests {
         let ts = "1531420618";
         let body = br#"{"type":"event_callback","event":{"type":"message","user":"U1","channel":"C1","text":"beep","bot_id":"B999","ts":"1.0"}}"#;
         let headers = signed_headers(ts, body);
-        let out = parse_webhook(SECRET, &headers, body, 1531420618).unwrap();
+        let out = parse_webhook(SECRET, "POST", &headers, body, 1531420618).unwrap();
         assert_eq!(out, WebhookOutcome::Messages(Vec::new()));
     }
 
@@ -561,7 +554,7 @@ mod tests {
         let ts = "1531420618";
         let body = br#"{"type":"event_callback","event":{"type":"message","subtype":"message_changed","user":"U1","channel":"C1","text":"edited","ts":"1.0"}}"#;
         let headers = signed_headers(ts, body);
-        let out = parse_webhook(SECRET, &headers, body, 1531420618).unwrap();
+        let out = parse_webhook(SECRET, "POST", &headers, body, 1531420618).unwrap();
         assert_eq!(out, WebhookOutcome::Messages(Vec::new()));
     }
 
@@ -570,7 +563,7 @@ mod tests {
         let ts = "1531420618";
         let body = br#"{"type":"event_callback","event":{"type":"message","user":"U1","channel":"C1","text":"","ts":"1.0"}}"#;
         let headers = signed_headers(ts, body);
-        let out = parse_webhook(SECRET, &headers, body, 1531420618).unwrap();
+        let out = parse_webhook(SECRET, "POST", &headers, body, 1531420618).unwrap();
         assert_eq!(out, WebhookOutcome::Messages(Vec::new()));
     }
 
@@ -580,7 +573,7 @@ mod tests {
         let body =
             br#"{"type":"event_callback","event":{"type":"reaction_added","user":"U1","item":{}}}"#;
         let headers = signed_headers(ts, body);
-        let out = parse_webhook(SECRET, &headers, body, 1531420618).unwrap();
+        let out = parse_webhook(SECRET, "POST", &headers, body, 1531420618).unwrap();
         assert_eq!(out, WebhookOutcome::Messages(Vec::new()));
     }
 
@@ -589,7 +582,7 @@ mod tests {
         let ts = "1531420618";
         let body = br#"{"type":"app_rate_limited","minute_rate_limited":1518467820}"#;
         let headers = signed_headers(ts, body);
-        let out = parse_webhook(SECRET, &headers, body, 1531420618).unwrap();
+        let out = parse_webhook(SECRET, "POST", &headers, body, 1531420618).unwrap();
         assert_eq!(out, WebhookOutcome::Messages(Vec::new()));
     }
 
@@ -598,7 +591,7 @@ mod tests {
         let ts = "1531420618";
         let body = br#"{"type":"event_callback","event":{"type":"message","channel":"C1","text":"hi","ts":"1.0"}}"#;
         let headers = signed_headers(ts, body);
-        let out = parse_webhook(SECRET, &headers, body, 1531420618).unwrap();
+        let out = parse_webhook(SECRET, "POST", &headers, body, 1531420618).unwrap();
         assert_eq!(out, WebhookOutcome::Messages(Vec::new()));
     }
 
@@ -606,22 +599,16 @@ mod tests {
     fn missing_signature_header_errs() {
         let ts = "1531420618";
         let body = br#"{"type":"url_verification","challenge":"x"}"#;
-        let headers = vec![
-            ("x-webhook-method".to_string(), "POST".to_string()),
-            ("x-slack-request-timestamp".to_string(), ts.to_string()),
-        ];
-        let err = parse_webhook(SECRET, &headers, body, 1531420618).unwrap_err();
+        let headers = vec![("x-slack-request-timestamp".to_string(), ts.to_string())];
+        let err = parse_webhook(SECRET, "POST", &headers, body, 1531420618).unwrap_err();
         assert!(err.contains("X-Slack-Signature"), "{err}");
     }
 
     #[test]
     fn missing_timestamp_header_errs() {
         let body = br#"{"type":"url_verification","challenge":"x"}"#;
-        let headers = vec![
-            ("x-webhook-method".to_string(), "POST".to_string()),
-            ("x-slack-signature".to_string(), "v0=ab".to_string()),
-        ];
-        let err = parse_webhook(SECRET, &headers, body, 1531420618).unwrap_err();
+        let headers = vec![("x-slack-signature".to_string(), "v0=ab".to_string())];
+        let err = parse_webhook(SECRET, "POST", &headers, body, 1531420618).unwrap_err();
         assert!(err.contains("X-Slack-Request-Timestamp"), "{err}");
     }
 
@@ -630,7 +617,7 @@ mod tests {
         let ts = "1531420618";
         let body = b"{not valid json";
         let headers = signed_headers(ts, body);
-        let err = parse_webhook(SECRET, &headers, body, 1531420618).unwrap_err();
+        let err = parse_webhook(SECRET, "POST", &headers, body, 1531420618).unwrap_err();
         assert!(err.contains("invalid JSON"), "{err}");
     }
 
@@ -642,7 +629,7 @@ mod tests {
         let body = br#"{"type":"url_verification","challenge":"secret-value"}"#;
         // Sign a *different* body, so the signature mismatches the one received.
         let headers = signed_headers(ts, br#"{"type":"url_verification","challenge":"other"}"#);
-        assert!(parse_webhook(SECRET, &headers, body, 1531420618).is_err());
+        assert!(parse_webhook(SECRET, "POST", &headers, body, 1531420618).is_err());
     }
 
     // ── ts_to_millis ────────────────────────────────────────────────────────

@@ -5,7 +5,7 @@
 # HMAC-SHA256 (hex) via pure-Rust `hmac`/`sha2`/`hex` (host + wasm).
 [package]
 name = "linq"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 description = "Linq (Partner V3 API: iMessage/RCS/SMS) channel plugin for ZeroClaw: signed webhook ingress + text send over wasi:http."
