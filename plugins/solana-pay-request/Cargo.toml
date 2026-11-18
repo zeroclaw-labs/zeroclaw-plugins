@@ -1,0 +1,23 @@
+[package]
+name = "solana-pay-request"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "ZeroClaw WIT tool plugin: build Solana Pay transfer/transaction-request URLs and QR-ready payloads. Tier 1 — zero secrets, human or host signs."
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+wit-bindgen = "0.46"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true
+codegen-units = 1
+
+[workspace]
