@@ -1,6 +1,6 @@
 //! ZeroClaw WeCom AI Bot WebSocket channel plugin.
 //!
-//! The host owns the TLS socket through the unstable `ws-client` WIT import.
+//! The host owns the TLS socket through the `websocket` WIT import.
 //! The plugin drives the WeCom subscribe, ping, callback, response, and
 //! proactive-send text protocol without blocking in `poll-message`.
 
@@ -9,7 +9,7 @@ pub mod wecom_ws;
 #[cfg(target_family = "wasm")]
 mod component {
     wit_bindgen::generate!({
-        path: "../../wit/unstable",
+        path: "../../wit/v0",
         world: "channel-plugin",
         features: ["plugins-wit-v0", "plugins-wit-v0-websocket"],
     });
@@ -26,12 +26,15 @@ mod component {
     };
     use exports::zeroclaw::plugin::channel::{
         ApprovalRequest, ApprovalResponse, ChannelCapabilities, Guest as Channel, InboundMessage,
-        SendMessage, WebhookRejection,
+        SendMessage, WebhookRejection, WebhookRequest, WebhookResponse,
     };
     use exports::zeroclaw::plugin::plugin_info::Guest as PluginInfo;
-    use zeroclaw::plugin::ws_client::{self, WsEvent};
+    use zeroclaw::plugin::websocket::{
+        self, ConnectOptions, Connection as WsConnection, Event, Message,
+    };
+    use zeroclaw::plugin::{config, secrets};
 
-    const PLUGIN_VERSION: &str = "0.1.0";
+    const PLUGIN_VERSION: &str = env!("CARGO_PKG_VERSION");
     const INITIAL_BACKOFF: Duration = Duration::from_secs(5);
     const MAX_BACKOFF: Duration = Duration::from_secs(60);
     const SUBSCRIBE_TIMEOUT: Duration = Duration::from_secs(10);
@@ -43,23 +46,14 @@ mod component {
     enum Connection {
         Disconnected,
         Subscribing {
-            handle: u64,
+            handle: WsConnection,
             request_id: String,
             sent_at: Instant,
         },
         Ready {
-            handle: u64,
+            handle: WsConnection,
             last_ping: Instant,
         },
-    }
-
-    impl Connection {
-        fn handle(&self) -> Option<u64> {
-            match self {
-                Self::Disconnected => None,
-                Self::Subscribing { handle, .. } | Self::Ready { handle, .. } => Some(*handle),
-            }
-        }
     }
 
     struct RuntimeState {
@@ -142,8 +136,7 @@ mod component {
         }
     }
 
-    fn schedule_reconnect(state: &mut RuntimeState, handle: u64, immediate: bool) {
-        ws_client::ws_close(handle);
+    fn schedule_reconnect(state: &mut RuntimeState, immediate: bool) {
         state.connection = Connection::Disconnected;
         state.draft_requests.clear();
         if immediate {
@@ -164,15 +157,20 @@ mod component {
         }
         state.retry_at = None;
 
-        let Ok(handle) = ws_client::ws_connect(WECOM_WS_URL, &[]) else {
+        let Ok(handle) = websocket::connect(&ConnectOptions {
+            url: WECOM_WS_URL.into(),
+            headers: vec![],
+            subprotocols: vec![],
+            tls_profile: None,
+        }) else {
             state.retry_at = Some(Instant::now() + state.backoff);
             state.backoff = (state.backoff * 2).min(MAX_BACKOFF);
             return;
         };
         let request_id = random_id();
         let subscribe = build_subscribe_frame(config, &request_id);
-        if ws_client::ws_send_text(handle, &subscribe).is_err() {
-            schedule_reconnect(state, handle, false);
+        if handle.send(&Message::Text(subscribe)).is_err() {
+            schedule_reconnect(state, false);
             return;
         }
         state.connection = Connection::Subscribing {
@@ -197,12 +195,12 @@ mod component {
                 sent_at,
             } => {
                 if sent_at.elapsed() >= SUBSCRIBE_TIMEOUT {
-                    schedule_reconnect(state, handle, false);
+                    schedule_reconnect(state, false);
                     return;
                 }
                 for _ in 0..MAX_DRAIN_PER_POLL {
-                    match ws_client::ws_receive(handle) {
-                        Ok(WsEvent::Text(text)) => {
+                    match handle.receive() {
+                        Ok(Some(Event::Message(Message::Text(text)))) => {
                             let Ok(ServerFrame::CommandAck(ack)) = decode_server_frame(&text)
                             else {
                                 continue;
@@ -218,13 +216,14 @@ mod component {
                                 state.retry_at = None;
                                 state.backoff = INITIAL_BACKOFF;
                             } else {
-                                schedule_reconnect(state, handle, false);
+                                schedule_reconnect(state, false);
                             }
                             return;
                         }
-                        Ok(WsEvent::Idle) => break,
-                        Ok(WsEvent::Closed(_)) | Err(_) => {
-                            schedule_reconnect(state, handle, false);
+                        Ok(Some(Event::Message(Message::Binary(_)))) => continue,
+                        Ok(None) => break,
+                        Ok(Some(Event::Closed(_) | Event::Failed(_))) | Err(_) => {
+                            schedule_reconnect(state, false);
                             return;
                         }
                     }
@@ -240,41 +239,47 @@ mod component {
                 mut last_ping,
             } => {
                 if last_ping.elapsed() >= PING_INTERVAL {
-                    if ws_client::ws_send_text(handle, &build_ping_frame(&random_id())).is_err() {
-                        schedule_reconnect(state, handle, false);
+                    if handle
+                        .send(&Message::Text(build_ping_frame(&random_id())))
+                        .is_err()
+                    {
+                        schedule_reconnect(state, false);
                         return;
                     }
                     last_ping = Instant::now();
                 }
 
                 for _ in 0..MAX_DRAIN_PER_POLL {
-                    match ws_client::ws_receive(handle) {
-                        Ok(WsEvent::Text(text)) => match decode_server_frame(&text) {
-                            Ok(ServerFrame::Text(message)) => {
-                                if !state.seen_messages.record_if_new(&message.id) {
-                                    continue;
+                    match handle.receive() {
+                        Ok(Some(Event::Message(Message::Text(text)))) => {
+                            match decode_server_frame(&text) {
+                                Ok(ServerFrame::Text(message)) => {
+                                    if !state.seen_messages.record_if_new(&message.id) {
+                                        continue;
+                                    }
+                                    if access_decision(config, &message) == AccessDecision::Allowed
+                                        && state.inbound.len() < MAX_INBOUND_QUEUE
+                                    {
+                                        state.inbound.push_back(message);
+                                    }
                                 }
-                                if access_decision(config, &message) == AccessDecision::Allowed
-                                    && state.inbound.len() < MAX_INBOUND_QUEUE
-                                {
-                                    state.inbound.push_back(message);
+                                Ok(ServerFrame::Event(WeComEvent::Disconnected)) => {
+                                    schedule_reconnect(state, true);
+                                    return;
                                 }
+                                Ok(
+                                    ServerFrame::CommandAck(_)
+                                    | ServerFrame::UnsupportedMessage { .. }
+                                    | ServerFrame::Event(WeComEvent::Other(_))
+                                    | ServerFrame::Unknown,
+                                )
+                                | Err(_) => {}
                             }
-                            Ok(ServerFrame::Event(WeComEvent::Disconnected)) => {
-                                schedule_reconnect(state, handle, true);
-                                return;
-                            }
-                            Ok(
-                                ServerFrame::CommandAck(_)
-                                | ServerFrame::UnsupportedMessage { .. }
-                                | ServerFrame::Event(WeComEvent::Other(_))
-                                | ServerFrame::Unknown,
-                            )
-                            | Err(_) => {}
-                        },
-                        Ok(WsEvent::Idle) => break,
-                        Ok(WsEvent::Closed(_)) | Err(_) => {
-                            schedule_reconnect(state, handle, false);
+                        }
+                        Ok(Some(Event::Message(Message::Binary(_)))) => continue,
+                        Ok(None) => break,
+                        Ok(Some(Event::Closed(_) | Event::Failed(_))) | Err(_) => {
+                            schedule_reconnect(state, false);
                             return;
                         }
                     }
@@ -287,14 +292,14 @@ mod component {
     fn transmit(frames: Vec<String>) -> Result<(), String> {
         STATE.with(|state| {
             let mut state = state.borrow_mut();
-            let handle = match state.connection {
+            let handle = match &state.connection {
                 Connection::Ready { handle, .. } => handle,
                 _ => return Err("wecom-ws: WebSocket is not subscribed".to_string()),
             };
             for frame in frames {
-                if let Err(error) = ws_client::ws_send_text(handle, &frame) {
-                    schedule_reconnect(&mut state, handle, false);
-                    return Err(format!("wecom-ws: WebSocket send failed: {error}"));
+                if let Err(error) = handle.send(&Message::Text(frame)) {
+                    schedule_reconnect(&mut state, false);
+                    return Err(format!("wecom-ws: WebSocket send failed: {error:?}"));
                 }
             }
             Ok(())
@@ -339,13 +344,20 @@ mod component {
             CHANNEL.to_string()
         }
 
-        fn configure(config: String) -> Result<(), String> {
+        fn configure() -> Result<(), String> {
+            let public = config::get().map_err(|error| format!("wecom-ws: config: {error:?}"))?;
+            let mut settings: serde_json::Map<String, serde_json::Value> =
+                serde_json::from_str(&public)
+                    .map_err(|_| "wecom-ws: invalid public configuration")?;
+            settings.entry("enabled").or_insert(true.into());
+            let secret =
+                secrets::get("secret").map_err(|error| format!("wecom-ws: secret: {error:?}"))?;
+            settings.insert("secret".into(), secret.into());
+            let config = serde_json::Value::Object(settings).to_string();
             let config = WeComWsConfig::from_json(&config)?;
             STATE.with(|state| {
                 let mut state = state.borrow_mut();
-                if let Some(handle) = state.connection.handle() {
-                    ws_client::ws_close(handle);
-                }
+
                 *state = RuntimeState::default();
             });
             CONFIG.with(|current| *current.borrow_mut() = config);
@@ -576,10 +588,7 @@ mod component {
             None
         }
 
-        fn parse_webhook(
-            _headers: Vec<(String, String)>,
-            _body: Vec<u8>,
-        ) -> Result<Vec<InboundMessage>, WebhookRejection> {
+        fn parse_webhook(_request: WebhookRequest) -> Result<WebhookResponse, WebhookRejection> {
             Err(WebhookRejection::BadRequest(
                 "wecom-ws uses WebSocket ingress and does not serve webhooks".to_string(),
             ))

@@ -1,20 +1,21 @@
 //! A ZeroClaw WIT channel plugin for QQ Official Bot text messaging.
 //!
 //! OAuth, gateway discovery, and text sends use `wasi:http`; the gateway uses
-//! the host-mediated `ws-client` import.
+//! the host-mediated `websocket` import.
 
 pub mod qq;
 
 #[cfg(target_family = "wasm")]
 mod component {
     wit_bindgen::generate!({
-        path: "../../wit/unstable",
+        path: "../../wit/v0",
         world: "channel-plugin",
         features: ["plugins-wit-v0", "plugins-wit-v0-websocket"],
     });
 
     use std::cell::{Cell, RefCell};
     use std::collections::{HashSet, VecDeque};
+    use std::rc::Rc;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use serde_json::Value;
@@ -26,19 +27,22 @@ mod component {
     };
     use exports::zeroclaw::plugin::channel::{
         ApprovalRequest, ApprovalResponse, ChannelCapabilities, Guest as Channel, InboundMessage,
-        SendMessage, WebhookRejection,
+        SendMessage, WebhookRejection, WebhookRequest, WebhookResponse,
     };
     use exports::zeroclaw::plugin::plugin_info::Guest as PluginInfo;
-    use zeroclaw::plugin::ws_client::{self, WsEvent};
+    use zeroclaw::plugin::websocket::{
+        self, ConnectOptions, Connection as WsConnection, Event, Message,
+    };
+    use zeroclaw::plugin::{config, secrets};
 
-    const PLUGIN_VERSION: &str = "0.1.0";
+    const PLUGIN_VERSION: &str = env!("CARGO_PKG_VERSION");
     const MAX_DRAIN_PER_POLL: usize = 200;
     const SEEN_CAP: usize = 10_000;
 
     thread_local! {
         static CONFIG: RefCell<QQConfig> = RefCell::new(QQConfig::default());
         static TOKEN: RefCell<Option<(String, u64)>> = const { RefCell::new(None) };
-        static CONNECTION: Cell<u64> = const { Cell::new(0) };
+        static CONNECTION: RefCell<Option<Rc<WsConnection>>> = const { RefCell::new(None) };
         static IDENTIFIED: Cell<bool> = const { Cell::new(false) };
         static HEARTBEAT_INTERVAL_MS: Cell<u64> = const { Cell::new(DEFAULT_HEARTBEAT_MS) };
         static NEXT_HEARTBEAT_MS: Cell<u64> = const { Cell::new(0) };
@@ -128,7 +132,7 @@ mod component {
         let value = public_post_json(AUTH_URL, &auth_body(cfg))?;
         let token = parse_access_token(&value)
             .ok_or_else(|| "qq auth response has no access_token".to_string())?;
-        let expiry = now_secs() + token.expires_in.saturating_sub(60);
+        let expiry = now_secs().saturating_add(token.expires_in.saturating_sub(60));
         Ok((token.value, expiry))
     }
 
@@ -148,37 +152,48 @@ mod component {
         Ok(token)
     }
 
-    fn open_connection(cfg: &QQConfig) -> Result<u64, String> {
+    fn open_connection(cfg: &QQConfig) -> Result<Rc<WsConnection>, String> {
         let token = get_token(cfg)?;
         let value = authorized_get_json(&format!("{API_BASE}/gateway"), &token)?;
         let url = gateway_url(&value)
             .ok_or_else(|| "qq gateway response has no WebSocket URL".to_string())?;
-        let handle = ws_client::ws_connect(&url, &[])?;
-        CONNECTION.with(|state| state.set(handle));
+        let handle = websocket::connect(&ConnectOptions {
+            url,
+            headers: vec![],
+            subprotocols: vec![],
+            tls_profile: None,
+        })
+        .map(Rc::new)
+        .map_err(|error| format!("WebSocket connect: {error:?}"))?;
+        CONNECTION.with(|state| *state.borrow_mut() = Some(handle.clone()));
         IDENTIFIED.with(|state| state.set(false));
         NEXT_HEARTBEAT_MS.with(|state| state.set(0));
         Ok(handle)
     }
 
-    fn drop_connection(handle: u64) {
-        ws_client::ws_close(handle);
-        CONNECTION.with(|state| state.set(0));
+    fn drop_connection() {
+        CONNECTION.with(|state| *state.borrow_mut() = None);
         IDENTIFIED.with(|state| state.set(false));
         NEXT_HEARTBEAT_MS.with(|state| state.set(0));
     }
 
-    fn send_heartbeat(handle: u64) -> Result<(), String> {
+    fn send_heartbeat(handle: &WsConnection) -> Result<(), String> {
         let sequence = SEQUENCE.with(Cell::get);
-        ws_client::ws_send_text(
-            handle,
-            &heartbeat_frame((sequence >= 0).then_some(sequence)),
-        )?;
+        handle
+            .send(&Message::Text(heartbeat_frame(
+                (sequence >= 0).then_some(sequence),
+            )))
+            .map_err(|error| format!("qq: heartbeat: {error:?}"))?;
         let interval = HEARTBEAT_INTERVAL_MS.with(Cell::get);
         NEXT_HEARTBEAT_MS.with(|state| state.set(now_millis().saturating_add(interval)));
         Ok(())
     }
 
-    fn identify_or_resume(handle: u64, cfg: &QQConfig, interval: u64) -> Result<(), String> {
+    fn identify_or_resume(
+        handle: &WsConnection,
+        cfg: &QQConfig,
+        interval: u64,
+    ) -> Result<(), String> {
         let token = get_token(cfg)?;
         let sequence = SEQUENCE.with(Cell::get);
         let session = SESSION_ID.with(|state| state.borrow().clone());
@@ -186,7 +201,9 @@ mod component {
             (Some(session_id), true) => resume_frame(&token, &session_id, sequence),
             _ => identify_frame(&token),
         };
-        ws_client::ws_send_text(handle, &frame)?;
+        handle
+            .send(&Message::Text(frame))
+            .map_err(|error| format!("qq: gateway identify: {error:?}"))?;
         HEARTBEAT_INTERVAL_MS.with(|state| state.set(interval.max(1_000)));
         NEXT_HEARTBEAT_MS.with(|state| state.set(now_millis().saturating_add(interval.max(1_000))));
         IDENTIFIED.with(|state| state.set(true));
@@ -207,7 +224,11 @@ mod component {
         })
     }
 
-    fn handle_frame(handle: u64, cfg: &QQConfig, decoded: DecodedFrame) -> Result<bool, String> {
+    fn handle_frame(
+        handle: &WsConnection,
+        cfg: &QQConfig,
+        decoded: DecodedFrame,
+    ) -> Result<bool, String> {
         if let Some(sequence) = decoded.sequence.filter(|sequence| *sequence >= 0) {
             SEQUENCE.with(|state| state.set(sequence));
         }
@@ -228,13 +249,13 @@ mod component {
                 }
             }
             GatewayEvent::Reconnect => {
-                drop_connection(handle);
+                drop_connection();
                 return Ok(false);
             }
             GatewayEvent::InvalidSession => {
                 SESSION_ID.with(|state| *state.borrow_mut() = None);
                 SEQUENCE.with(|state| state.set(-1));
-                drop_connection(handle);
+                drop_connection();
                 return Ok(false);
             }
         }
@@ -274,15 +295,15 @@ mod component {
             CHANNEL.to_string()
         }
 
-        fn configure(config: String) -> Result<(), String> {
-            let cfg = QQConfig::from_json(&config);
-            let handle = CONNECTION.with(Cell::get);
-            if handle != 0 {
-                ws_client::ws_close(handle);
-            }
+        fn configure() -> Result<(), String> {
+            let public = config::get().map_err(|error| format!("qq: config: {error:?}"))?;
+            let mut cfg: QQConfig =
+                serde_json::from_str(&public).map_err(|_| "qq: invalid public configuration")?;
+            cfg.app_secret =
+                secrets::get("app_secret").map_err(|error| format!("qq: app_secret: {error:?}"))?;
             CONFIG.with(|state| *state.borrow_mut() = cfg);
             TOKEN.with(|state| *state.borrow_mut() = None);
-            CONNECTION.with(|state| state.set(0));
+            CONNECTION.with(|state| *state.borrow_mut() = None);
             IDENTIFIED.with(|state| state.set(false));
             HEARTBEAT_INTERVAL_MS.with(|state| state.set(DEFAULT_HEARTBEAT_MS));
             NEXT_HEARTBEAT_MS.with(|state| state.set(0));
@@ -323,32 +344,33 @@ mod component {
             if !cfg.is_configured() {
                 return None;
             }
-            let mut handle = CONNECTION.with(Cell::get);
-            if handle == 0 {
-                handle = open_connection(&cfg).ok()?;
-            }
+            let handle = match CONNECTION.with(|state| state.borrow().clone()) {
+                Some(handle) => handle,
+                None => open_connection(&cfg).ok()?,
+            };
             if IDENTIFIED.with(Cell::get)
                 && now_millis() >= NEXT_HEARTBEAT_MS.with(Cell::get)
-                && send_heartbeat(handle).is_err()
+                && send_heartbeat(&handle).is_err()
             {
-                drop_connection(handle);
+                drop_connection();
                 return None;
             }
             for _ in 0..MAX_DRAIN_PER_POLL {
-                match ws_client::ws_receive(handle) {
-                    Ok(WsEvent::Text(frame)) => {
-                        match handle_frame(handle, &cfg, decode_gateway_frame(&frame)) {
+                match handle.receive() {
+                    Ok(Some(Event::Message(Message::Text(frame)))) => {
+                        match handle_frame(&handle, &cfg, decode_gateway_frame(&frame)) {
                             Ok(true) => {}
                             Ok(false) => break,
                             Err(_) => {
-                                drop_connection(handle);
+                                drop_connection();
                                 break;
                             }
                         }
                     }
-                    Ok(WsEvent::Idle) => break,
-                    Ok(WsEvent::Closed(_)) | Err(_) => {
-                        drop_connection(handle);
+                    Ok(Some(Event::Message(Message::Binary(_)))) => continue,
+                    Ok(None) => break,
+                    Ok(Some(Event::Closed(_) | Event::Failed(_))) | Err(_) => {
+                        drop_connection();
                         break;
                     }
                 }
@@ -440,10 +462,7 @@ mod component {
         fn webhook_path() -> Option<String> {
             None
         }
-        fn parse_webhook(
-            _headers: Vec<(String, String)>,
-            _body: Vec<u8>,
-        ) -> Result<Vec<InboundMessage>, WebhookRejection> {
+        fn parse_webhook(_request: WebhookRequest) -> Result<WebhookResponse, WebhookRejection> {
             Err(WebhookRejection::BadRequest(
                 "qq does not serve webhooks".to_string(),
             ))

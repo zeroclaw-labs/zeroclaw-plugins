@@ -19,12 +19,10 @@ pub mod line;
 #[cfg(target_family = "wasm")]
 mod component {
     wit_bindgen::generate!({
-        path: "../../wit/unstable",
+        path: "../../wit/v0",
         world: "channel-plugin",
         features: ["plugins-wit-v0"],
     });
-
-    use std::cell::RefCell;
 
     use serde_json::Value;
 
@@ -35,16 +33,39 @@ mod component {
 
     use exports::zeroclaw::plugin::channel::{
         ApprovalRequest, ApprovalResponse, ChannelCapabilities, Guest as Channel, InboundMessage,
-        SendMessage, WebhookRejection,
+        SendMessage, WebhookRejection, WebhookRequest, WebhookResponse,
     };
     use exports::zeroclaw::plugin::plugin_info::Guest as PluginInfo;
 
-    const PLUGIN_NAME: &str = "line";
-    const PLUGIN_VERSION: &str = "0.1.0";
+    use zeroclaw::plugin::{config, secrets};
 
-    thread_local! {
-        static CONFIG: RefCell<LineConfig> = RefCell::new(LineConfig::default());
+    fn public_config() -> Result<LineConfig, String> {
+        let public = config::get().map_err(|_| "line: public configuration unavailable")?;
+        Ok(LineConfig::from_json(&public))
     }
+
+    fn optional_secret(key: &str) -> Result<Option<String>, String> {
+        match secrets::get(key) {
+            Ok(value) => Ok(Some(value)),
+            Err(secrets::SecretError::NotFound) => Ok(None),
+            Err(_) => Err(format!("line: cannot read {key}")),
+        }
+    }
+
+    fn send_config() -> Result<LineConfig, String> {
+        let mut cfg = public_config()?;
+        cfg.channel_access_token = optional_secret("channel_access_token")?.unwrap_or_default();
+        Ok(cfg)
+    }
+
+    fn inbound_config() -> Result<LineConfig, String> {
+        let mut cfg = public_config()?;
+        cfg.channel_secret = optional_secret("channel_secret")?.unwrap_or_default();
+        Ok(cfg)
+    }
+
+    const PLUGIN_NAME: &str = "line";
+    const PLUGIN_VERSION: &str = env!("CARGO_PKG_VERSION");
 
     fn post_json_bearer(url: &str, token: &str, body: &Value) -> Result<u16, String> {
         let resp = waki::Client::new()
@@ -88,13 +109,12 @@ mod component {
             PLUGIN_NAME.to_string()
         }
 
-        fn configure(config: String) -> Result<(), String> {
-            CONFIG.with(|c| *c.borrow_mut() = LineConfig::from_json(&config));
-            Ok(())
+        fn configure() -> Result<(), String> {
+            public_config().map(|_| ())
         }
 
         fn send(message: SendMessage) -> Result<(), String> {
-            let cfg = CONFIG.with(|c| c.borrow().clone());
+            let cfg = send_config()?;
             if cfg.channel_access_token.is_empty() {
                 return Err("line: no channel_access_token configured".to_string());
             }
@@ -119,21 +139,18 @@ mod component {
         }
 
         fn health_check() -> bool {
-            CONFIG.with(|c| {
-                let cfg = c.borrow();
-                !cfg.channel_access_token.is_empty() && !cfg.channel_secret.is_empty()
-            })
+            send_config().is_ok_and(|cfg| !cfg.channel_access_token.is_empty())
+                && inbound_config().is_ok_and(|cfg| !cfg.channel_secret.is_empty())
         }
 
         fn webhook_path() -> Option<String> {
             Some("line".to_string())
         }
 
-        fn parse_webhook(
-            headers: Vec<(String, String)>,
-            body: Vec<u8>,
-        ) -> Result<Vec<InboundMessage>, WebhookRejection> {
-            let cfg = CONFIG.with(|c| c.borrow().clone());
+        fn parse_webhook(request: WebhookRequest) -> Result<WebhookResponse, WebhookRejection> {
+            let headers = request.headers;
+            let body = request.body;
+            let cfg = inbound_config().map_err(WebhookRejection::Unauthorized)?;
             // Headers are lower-cased by the host. The plugin owns the check:
             // reject an absent/invalid signature so the gateway replies 401 and
             // enqueues nothing.
@@ -150,7 +167,9 @@ mod component {
             serde_json::from_slice::<Value>(&body).map_err(|e| {
                 WebhookRejection::BadRequest(format!("line: invalid JSON payload: {e}"))
             })?;
-            Ok(parse_events(&body).into_iter().map(to_wit).collect())
+            Ok(WebhookResponse::Messages(
+                parse_events(&body).into_iter().map(to_wit).collect(),
+            ))
         }
 
         // ── capability-gated stubs (documented WIT defaults) ──

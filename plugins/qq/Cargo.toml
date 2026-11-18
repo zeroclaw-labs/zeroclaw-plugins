@@ -3,7 +3,7 @@
 # cargo test. HTTP and WebSocket transport dependencies are WASM-only.
 [package]
 name = "qq"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 description = "QQ Official Bot channel plugin for ZeroClaw: OAuth, gateway WebSocket, and text send."

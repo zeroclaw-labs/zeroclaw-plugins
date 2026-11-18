@@ -1,16 +1,52 @@
 name = "mqtt"
-version = "0.1.0"
+version = "0.2.0"
 description = "MQTT 3.1.1 channel plugin for ZeroClaw over host-mediated TCP/TLS."
 author = "JordanTheJet"
 wasm_path = "mqtt.wasm"
 capabilities = ["channel"]
 sender_match = "exact"
-# Real implementation, kept source-only until ZeroClaw's socket-client host
-# capability reaches upstream master.
 registry = false
-# socket_client: the host owns TCP/TLS while this plugin owns MQTT framing.
-# config_read: read [channels.mqtt.*] when loaded as a mirror plugin.
 permissions = ["socket_client", "config_read"]
-# provides: mirror the built-in `mqtt` channel — read the existing
-# channel config as the single source of truth and honor native-wins.
 provides = "mqtt"
+
+[config_schema]
+"$schema" = "https://json-schema.org/draft/2020-12/schema"
+type = "object"
+additionalProperties = false
+required = ["broker_url", "client_id", "topics"]
+
+[config_schema.properties.broker_url]
+type = "string"
+minLength = 1
+
+[config_schema.properties.client_id]
+type = "string"
+minLength = 1
+
+[config_schema.properties.username]
+type = "string"
+
+[config_schema.properties.password]
+type = "string"
+x-secret = true
+
+[config_schema.properties.enabled]
+type = "boolean"
+
+[config_schema.properties.use_tls]
+type = "boolean"
+
+[config_schema.properties.topics]
+type = "array"
+items = { type = "string" }
+minItems = 1
+
+[config_schema.properties.qos]
+type = "integer"
+minimum = 0
+maximum = 2
+
+[config_schema.properties.keep_alive_secs]
+type = "integer"
+minimum = 0
+maximum = 65535
