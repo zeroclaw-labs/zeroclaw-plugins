@@ -1,16 +1,129 @@
 name = "irc"
-version = "0.1.0"
-description = "IRC channel plugin for ZeroClaw: TLS, registration, SASL, and text chat."
+version = "0.2.0"
+description = "IRC channel plugin for ZeroClaw: TLS, IRCv3 SASL (PLAIN or EXTERNAL), NickServ, paced text chat."
 author = "JordanTheJet"
 wasm_path = "irc.wasm"
 capabilities = ["channel"]
+# Needs ZeroClaw v0.8.6 or later: it binds the plugin contract first released
+# in v0.8.6 (the host sockets resource, typed config through config.get,
+# credentials through secrets.get).
+registry = true
+# IRC nicks are case-insensitive. The plugin reports senders lowercased, so
+# peer-group entries match when written in lowercase.
 sender_match = "case_insensitive"
-# Real text implementation, kept source-only until ZeroClaw's socket-client
-# host capability reaches upstream master.
-registry = false
-# socket_client: IRC registration and chat over host-mediated TLS.
-# config_read: read [channels.irc.*] when loaded as a mirror plugin.
+# socket_client: the IRC connection, dialed by the host over direct TLS after
+#   it checks the server against this instance's egress grant.
+# config_read: the typed config below through config.get; the passwords are
+#   x-secret and reach the plugin only through secrets.get.
 permissions = ["socket_client", "config_read"]
-# provides: mirror the built-in `irc` channel — read the existing
-# channel config as the single source of truth and honor native-wins.
+# provides: the built-in channel this package stands in for. Hosts construct
+# this plugin only from an explicit [channels.plugin.<alias>] binding, so it
+# never reads [channels.irc.*].
 provides = "irc"
+
+# No [egress] declaration: the IRC server is deployment configuration, not
+# something this package can name. Grant it on the instance's egress_hosts.
+
+[config_schema]
+"$schema" = "https://json-schema.org/draft/2020-12/schema"
+type = "object"
+additionalProperties = false
+required = ["server", "nickname"]
+
+# Hostname of the IRC server. Grant the same host in egress_hosts.
+[config_schema.properties.server]
+type = "string"
+minLength = 1
+maxLength = 253
+pattern = '^[^\s:/]+$'
+
+# TLS port. Unset means 6697. Plaintext IRC is not supported.
+[config_schema.properties.port]
+type = "integer"
+minimum = 1
+maximum = 65535
+
+[config_schema.properties.nickname]
+type = "string"
+minLength = 1
+pattern = '^[^\s#&$+!\-0-9,*?@.:][^\s,*?!@.:]*$'
+
+# The USER ident. Unset means the nickname.
+[config_schema.properties.username]
+type = "string"
+minLength = 1
+pattern = '^[^\s:]+$'
+
+# Joined after every registration.
+[config_schema.properties.channels]
+type = "array"
+items = { type = "string", pattern = '^[#&+!][^\s,:]+$' }
+
+# Answer channel messages only when they mention the nickname. Direct
+# messages are always answered.
+[config_schema.properties.mention_only]
+type = "boolean"
+
+# "plain" authenticates as sasl_username with the sasl_password secret.
+# "external" uses the client certificate of tls_profile (CertFP).
+# Unset means no SASL. A configured mechanism that fails disconnects.
+[config_schema.properties.sasl_mechanism]
+type = "string"
+enum = ["plain", "external"]
+
+# The services account for SASL. Unset means the nickname.
+[config_schema.properties.sasl_username]
+type = "string"
+minLength = 1
+pattern = '^[^\s:]+$'
+
+# A TLS profile configured on this instance's plugins.entries row: a private
+# CA for a self-signed server, or a client certificate for SASL EXTERNAL.
+[config_schema.properties.tls_profile]
+type = "string"
+minLength = 1
+
+# "nick" (default) reports the sender's nickname. "account" reports the
+# sender's services account via the IRCv3 account-tag capability and drops
+# messages from users who are not logged in.
+[config_schema.properties.sender_identity]
+type = "string"
+enum = ["nick", "account"]
+
+# Sent as PASS before registration, for bouncers such as ZNC.
+[config_schema.properties.server_password]
+type = "string"
+minLength = 1
+x-secret = true
+
+# Sent as PRIVMSG NickServ :IDENTIFY after registration.
+[config_schema.properties.nickserv_password]
+type = "string"
+minLength = 1
+x-secret = true
+
+[config_schema.properties.sasl_password]
+type = "string"
+minLength = 1
+x-secret = true
+
+# Certificate material for a TLS profile on this instance. The plugin never
+# reads these: a profile names them (custom_ca_secret = "tls_ca_pem", and so
+# on) and the host loads them when it builds the connection.
+# PEM CA certificates to trust, for a server with a private or self-signed CA.
+[config_schema.properties.tls_ca_pem]
+type = "string"
+minLength = 1
+x-secret = true
+
+# PEM client certificate chain, for SASL EXTERNAL (CertFP).
+[config_schema.properties.tls_client_certificate_pem]
+type = "string"
+minLength = 1
+x-secret = true
+
+# PEM private key matching tls_client_certificate_pem.
+[config_schema.properties.tls_client_key_pem]
+type = "string"
+minLength = 1
+x-secret = true

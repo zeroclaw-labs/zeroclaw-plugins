@@ -1,5 +1,5 @@
 name = "notion"
-version = "0.4.0"
+version = "0.4.1"
 description = "Notion task-queue channel plugin for ZeroClaw: poll a database for pending tasks and write results back over wasi:http."
 author = "JordanTheJet"
 wasm_path = "notion.wasm"
@@ -35,6 +35,7 @@ type = "string"
 minLength = 1
 [config_schema.properties.poll_interval_secs]
 type = "integer"
+minimum = 0
 [config_schema.properties.status_property]
 type = "string"
 [config_schema.properties.input_property]
@@ -43,6 +44,9 @@ type = "string"
 type = "string"
 [config_schema.properties.max_concurrent]
 type = "integer"
+minimum = 0
+# The channel reads this value as a wasm32 usize.
+maximum = 4294967295
 [config_schema.properties.recover_stale]
 type = "boolean"
 [config_schema.properties.api_base_url]
