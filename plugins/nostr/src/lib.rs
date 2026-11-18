@@ -1,9 +1,11 @@
 //! Receive signed public Nostr notes over a host-owned WebSocket.
 //! The guest verifies NIP-01 authorship before emitting a channel message.
+pub mod direct;
 pub mod nostr;
 
 #[cfg(target_family = "wasm")]
 mod component {
+    mod direct;
     wit_bindgen::generate!({
         path: "../../wit/v0",
         world: "channel-plugin",
@@ -130,11 +132,6 @@ mod component {
         SUBSCRIBED.with(|s| s.set(false));
     }
 
-    fn load_config() -> Result<NostrConfig, String> {
-        let public = config::get().map_err(|error| format!("nostr: config: {error:?}"))?;
-        Ok(NostrConfig::from_json(&public))
-    }
-
     fn next_inbound() -> Option<InboundMessage> {
         let message = BUFFER.with(|queue| queue.borrow_mut().pop_front())?;
         let now = std::time::SystemTime::now()
@@ -163,20 +160,39 @@ mod component {
         }
 
         fn configure() -> Result<(), String> {
-            let cfg = load_config()?;
+            let public = config::get().map_err(|error| format!("nostr: config: {error:?}"))?;
+            #[derive(serde::Deserialize)]
+            struct Options {
+                mode: Option<String>,
+            }
+            let options: Options = serde_json::from_str(&public)
+                .map_err(|_| "nostr: invalid channel configuration")?;
+            direct::reset();
             drop_connection();
             BUFFER.with(|queue| queue.borrow_mut().clear());
             SEEN.with(|seen| seen.borrow_mut().clear());
             CURSOR.with(|cursor| *cursor.borrow_mut() = None);
-            CONFIG.with(|c| *c.borrow_mut() = cfg);
+            match options.mode.as_deref() {
+                None | Some("public_notes") => {
+                    CONFIG.with(|c| *c.borrow_mut() = NostrConfig::from_json(&public))
+                }
+                Some("direct_messages") => return direct::configure(&public),
+                _ => return Err("nostr: unsupported mode".into()),
+            }
             Ok(())
         }
 
-        fn send(_message: SendMessage) -> Result<(), String> {
+        fn send(message: SendMessage) -> Result<(), String> {
+            if direct::active() {
+                return direct::send(message);
+            }
             Err("nostr: public-note subscriptions are receive-only".into())
         }
 
         fn poll_message() -> Option<InboundMessage> {
+            if direct::active() {
+                return direct::poll_message();
+            }
             // 1) Anything already decoded?
             if let Some(message) = next_inbound() {
                 return Some(message);
@@ -257,12 +273,18 @@ mod component {
         }
 
         fn health_check() -> bool {
+            if direct::active() {
+                return direct::health_check();
+            }
             CONN.with(|connection| connection.borrow().is_some())
         }
 
         /// Our own hex pubkey, when configured — lets the runtime's self-loop
         /// guard drop notes we authored ourselves.
         fn self_handle() -> Option<String> {
+            if direct::active() {
+                return direct::self_handle();
+            }
             CONFIG.with(|c| c.borrow().pubkey.clone())
         }
 

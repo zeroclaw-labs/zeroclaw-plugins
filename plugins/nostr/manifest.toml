@@ -1,6 +1,6 @@
 name = "nostr"
-version = "0.2.0"
-description = "Nostr channel plugin for ZeroClaw: subscribe to a relay over a host-mediated WebSocket and receive plaintext notes (kind 1) as inbound messages."
+version = "0.3.0"
+description = "Nostr channel plugin for ZeroClaw: receive verified public notes or exchange NIP-04 / NIP-17 private messages through host-mediated WebSockets."
 author = "JordanTheJet"
 wasm_path = "nostr.wasm"
 capabilities = ["channel"]
@@ -59,3 +59,7 @@ x-secret = true
 [config_schema.properties.secret_key]
 type = "string"
 x-secret = true
+
+[config_schema.properties.mode]
+type = "string"
+enum = ["public_notes", "direct_messages"]
