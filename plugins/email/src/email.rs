@@ -43,6 +43,7 @@ pub struct EmailConfig {
     pub imap_port: u16,
     #[serde(default = "default_imap_folder")]
     pub imap_folder: String,
+    #[serde(default)]
     pub smtp_host: String,
     #[serde(default = "default_smtp_port")]
     pub smtp_port: u16,
@@ -54,6 +55,7 @@ pub struct EmailConfig {
     pub smtp_password: Option<String>,
     pub username: String,
     pub password: String,
+    #[serde(default)]
     pub from_address: String,
     #[serde(default = "default_idle_timeout_secs")]
     pub idle_timeout_secs: u64,
@@ -113,7 +115,6 @@ impl EmailConfig {
             return Ok(());
         }
         validate_host("imap_host", &self.imap_host)?;
-        validate_host("smtp_host", &self.smtp_host)?;
         if self.imap_port == 0 {
             return Err("email: imap_port must be greater than zero".to_string());
         }
@@ -126,8 +127,6 @@ impl EmailConfig {
         if self.username.trim().is_empty() || self.password.is_empty() {
             return Err("email: username and password are required".to_string());
         }
-        validate_mailbox(&self.from_address)
-            .map_err(|error| format!("email: invalid from_address: {error}"))?;
         validate_header_value("default_subject", &self.default_subject)?;
         if self.poll_interval_secs == 0 {
             return Err("email: poll_interval_secs must be greater than zero".to_string());
@@ -138,6 +137,12 @@ impl EmailConfig {
                     .to_string(),
             );
         }
+        if !self.outbound_configured()? {
+            return Ok(());
+        }
+        validate_host("smtp_host", &self.smtp_host)?;
+        validate_mailbox(&self.from_address)
+            .map_err(|error| format!("email: invalid from_address: {error}"))?;
         let (smtp_username, smtp_password) = self.smtp_credentials();
         validate_imap_value("smtp_username", smtp_username)?;
         validate_imap_value("smtp_password", smtp_password)?;
@@ -145,6 +150,15 @@ impl EmailConfig {
             return Err("email: SMTP credentials must not be empty".to_string());
         }
         Ok(())
+    }
+
+    fn outbound_configured(&self) -> Result<bool, String> {
+        let host = !self.smtp_host.trim().is_empty();
+        let address = !self.from_address.trim().is_empty();
+        if host != address {
+            return Err("email: configure smtp_host and from_address together, or leave both unset for inbound-only mail".into());
+        }
+        Ok(host)
     }
 
     pub fn smtp_credentials(&self) -> (&str, &str) {
@@ -871,6 +885,9 @@ pub fn build_outbound_email(
     timestamp_secs: u64,
     sequence: u64,
 ) -> Result<OutboundEmail, String> {
+    if !config.outbound_configured()? {
+        return Err("email: this channel is inbound-only; configure smtp_host and from_address to send mail".into());
+    }
     validate_mailbox(&config.from_address)
         .map_err(|error| format!("email: invalid from_address: {error}"))?;
     validate_mailbox(recipient).map_err(|error| format!("email: invalid recipient: {error}"))?;

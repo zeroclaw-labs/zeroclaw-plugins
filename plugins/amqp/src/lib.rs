@@ -1,6 +1,6 @@
 //! ZeroClaw AMQP 0-9-1 channel plugin.
 //!
-//! The host owns TCP/TLS through the feature-gated `socket` WIT import. The
+//! The host owns TCP/TLS through the `sockets` WIT import. The
 //! guest owns AMQP framing, authentication, topology setup, consumption,
 //! acknowledgements, publishing, heartbeats, and reconnect progression.
 
@@ -9,7 +9,7 @@ pub mod amqp;
 #[cfg(target_family = "wasm")]
 mod component {
     wit_bindgen::generate!({
-        path: "../../wit/unstable",
+        path: "../../wit/v0",
         world: "channel-plugin",
         features: ["plugins-wit-v0", "plugins-wit-v0-sockets"],
     });
@@ -25,10 +25,11 @@ mod component {
 
     use exports::zeroclaw::plugin::channel::{
         ApprovalRequest, ApprovalResponse, ChannelCapabilities, Guest as Channel, InboundMessage,
-        SendMessage, WebhookRejection,
+        SendMessage, WebhookRejection, WebhookRequest, WebhookResponse,
     };
     use exports::zeroclaw::plugin::plugin_info::Guest as PluginInfo;
-    use zeroclaw::plugin::socket::{self, SocketEvent};
+    use zeroclaw::plugin::sockets::{self, ConnectMode, ConnectRequest, Connection, ReceiveEvent};
+    use zeroclaw::plugin::{config, secrets};
 
     const PLUGIN_VERSION: &str = env!("CARGO_PKG_VERSION");
     const INITIAL_BACKOFF: Duration = Duration::from_secs(1);
@@ -45,7 +46,7 @@ mod component {
     /// Socket/timer state that cannot live in the pure protocol session.
     struct TransportState {
         session: Session,
-        handle: Option<u64>,
+        handle: Option<Connection>,
         last_rx: Option<Instant>,
         last_tx: Option<Instant>,
         next_connect_at: Option<Instant>,
@@ -82,7 +83,7 @@ mod component {
 
     fn clear_connection(state: &mut TransportState) {
         if let Some(handle) = state.handle.take() {
-            socket::tcp_close(handle);
+            sockets::close(handle);
         }
         state.session = Session::new();
         state.last_rx = None;
@@ -96,8 +97,16 @@ mod component {
         schedule_backoff(state);
     }
 
-    fn send_bytes(state: &mut TransportState, handle: u64, bytes: &[u8]) -> Result<(), String> {
-        socket::tcp_send(handle, bytes).map_err(|error| format!("amqp socket send: {error}"))?;
+    fn send_bytes(state: &mut TransportState, bytes: &[u8]) -> Result<(), String> {
+        let handle = state
+            .handle
+            .as_ref()
+            .ok_or("amqp: socket is disconnected")?;
+        for chunk in bytes.chunks(16 * 1024) {
+            handle
+                .send(chunk)
+                .map_err(|error| format!("amqp socket send: {error:?}"))?;
+        }
         state.last_tx = Some(Instant::now());
         Ok(())
     }
@@ -117,7 +126,16 @@ mod component {
             schedule_backoff(state);
             return;
         };
-        match socket::tcp_connect(&endpoint.host, endpoint.port, endpoint.tls) {
+        match sockets::connect(&ConnectRequest {
+            host: endpoint.host,
+            port: endpoint.port,
+            mode: if endpoint.tls {
+                ConnectMode::DirectTls
+            } else {
+                ConnectMode::Plaintext
+            },
+            tls_profile: config.tls_profile.clone(),
+        }) {
             Ok(handle) => {
                 let now = Instant::now();
                 state.handle = Some(handle);
@@ -125,7 +143,7 @@ mod component {
                 state.last_rx = Some(now);
                 state.last_tx = Some(now);
                 state.generation = state.generation.wrapping_add(1);
-                if send_bytes(state, handle, PROTOCOL_HEADER).is_err() {
+                if send_bytes(state, PROTOCOL_HEADER).is_err() {
                     teardown_with_backoff(state);
                 }
             }
@@ -133,7 +151,7 @@ mod component {
         }
     }
 
-    fn maintain_heartbeat(state: &mut TransportState, handle: u64) -> bool {
+    fn maintain_heartbeat(state: &mut TransportState) -> bool {
         let heartbeat_secs = state.session.heartbeat_secs();
         if heartbeat_secs == 0 {
             return true;
@@ -150,7 +168,7 @@ mod component {
         if state
             .last_tx
             .is_none_or(|last_tx| last_tx.elapsed() >= send_interval)
-            && send_bytes(state, handle, &encode_heartbeat()).is_err()
+            && send_bytes(state, &encode_heartbeat()).is_err()
         {
             teardown_with_backoff(state);
             return false;
@@ -181,13 +199,12 @@ mod component {
     fn apply_actions(
         state: &mut TransportState,
         config: &AmqpConfig,
-        handle: u64,
         actions: Vec<Action>,
     ) -> bool {
         for action in actions {
             match action {
                 Action::Send(bytes) => {
-                    if send_bytes(state, handle, &bytes).is_err() {
+                    if send_bytes(state, &bytes).is_err() {
                         teardown_with_backoff(state);
                         return false;
                     }
@@ -204,7 +221,7 @@ mod component {
                 }
                 Action::Reconnect { reply, reason: _ } => {
                     if let Some(reply) = reply {
-                        let _ = send_bytes(state, handle, &reply);
+                        let _ = send_bytes(state, &reply);
                     }
                     teardown_with_backoff(state);
                     return false;
@@ -220,10 +237,10 @@ mod component {
         STATE.with(|state| {
             let mut state = state.borrow_mut();
             ensure_connected(&mut state, config);
-            let Some(handle) = state.handle else {
+            if state.handle.is_none() {
                 return;
-            };
-            if !maintain_heartbeat(&mut state, handle) {
+            }
+            if !maintain_heartbeat(&mut state) {
                 return;
             }
             if BUFFER.with(|buffer| !buffer.borrow().is_empty()) {
@@ -231,8 +248,11 @@ mod component {
             }
 
             for _ in 0..DRAIN_BATCH {
-                match socket::tcp_receive(handle) {
-                    Ok(SocketEvent::Data(bytes)) => {
+                let Some(handle) = state.handle.as_ref() else {
+                    break;
+                };
+                match handle.receive() {
+                    Ok(ReceiveEvent::Data(bytes)) => {
                         state.last_rx = Some(Instant::now());
                         let actions = match state.session.receive(config, &bytes) {
                             Ok(actions) => actions,
@@ -241,15 +261,15 @@ mod component {
                                 break;
                             }
                         };
-                        if !apply_actions(&mut state, config, handle, actions) {
+                        if !apply_actions(&mut state, config, actions) {
                             break;
                         }
                         if BUFFER.with(|buffer| !buffer.borrow().is_empty()) {
                             break;
                         }
                     }
-                    Ok(SocketEvent::Idle) => break,
-                    Ok(SocketEvent::Closed(_)) | Err(_) => {
+                    Ok(ReceiveEvent::Idle) => break,
+                    Ok(ReceiveEvent::Closed(_)) | Err(_) => {
                         teardown_with_backoff(&mut state);
                         break;
                     }
@@ -299,10 +319,10 @@ mod component {
             if state.generation != generation || !state.session.is_ready() {
                 return;
             }
-            let Some(handle) = state.handle else {
+            if state.handle.is_none() {
                 return;
-            };
-            if send_bytes(&mut state, handle, &encode_ack(delivery_tag)).is_err() {
+            }
+            if send_bytes(&mut state, &encode_ack(delivery_tag)).is_err() {
                 teardown_with_backoff(&mut state);
             }
         });
@@ -325,7 +345,15 @@ mod component {
             PLUGIN_NAME.to_string()
         }
 
-        fn configure(config: String) -> Result<(), String> {
+        fn configure() -> Result<(), String> {
+            let public = config::get().map_err(|error| format!("amqp: config: {error:?}"))?;
+            let mut settings: serde_json::Map<String, serde_json::Value> =
+                serde_json::from_str(&public).map_err(|_| "amqp: invalid public configuration")?;
+            settings.entry("enabled").or_insert(true.into());
+            let amqp_url =
+                secrets::get("amqp_url").map_err(|error| format!("amqp: amqp_url: {error:?}"))?;
+            settings.insert("amqp_url".into(), amqp_url.into());
+            let config = serde_json::Value::Object(settings).to_string();
             let config = AmqpConfig::from_json(&config)?;
             STATE.with(|state| {
                 let mut state = state.borrow_mut();
@@ -353,9 +381,6 @@ mod component {
             drive(&config);
             STATE.with(|state| {
                 let mut state = state.borrow_mut();
-                let handle = state
-                    .handle
-                    .ok_or_else(|| "amqp: broker connection is not ready".to_string())?;
                 let correlation_id = message
                     .in_reply_to
                     .as_deref()
@@ -367,7 +392,7 @@ mod component {
                     message.subject.as_deref(),
                     correlation_id,
                 )?;
-                if let Err(error) = send_bytes(&mut state, handle, &payload) {
+                if let Err(error) = send_bytes(&mut state, &payload) {
                     teardown_with_backoff(&mut state);
                     return Err(error);
                 }
@@ -527,10 +552,7 @@ mod component {
             None
         }
 
-        fn parse_webhook(
-            _headers: Vec<(String, String)>,
-            _body: Vec<u8>,
-        ) -> Result<Vec<InboundMessage>, WebhookRejection> {
+        fn parse_webhook(_request: WebhookRequest) -> Result<WebhookResponse, WebhookRejection> {
             Err(WebhookRejection::BadRequest(
                 "amqp: webhook ingress is unsupported; use the socket consumer".to_string(),
             ))

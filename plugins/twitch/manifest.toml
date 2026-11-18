@@ -1,15 +1,56 @@
 name = "twitch"
-version = "0.1.0"
-description = "Twitch channel plugin for ZeroClaw: nonblocking IRC chat over a host-mediated TLS socket."
+version = "0.2.0"
+description = "Twitch channel plugin for ZeroClaw: Twitch chat over IRC on a host-mediated TLS socket."
 author = "JordanTheJet"
 wasm_path = "twitch.wasm"
 capabilities = ["channel"]
-# Real implementation, kept source-only until ZeroClaw's socket-client host
-# capability reaches upstream master.
-registry = false
-# socket_client: Twitch IRC at irc.chat.twitch.tv:6697 over host-managed TLS.
-# config_read: read [channels.twitch.*] when loaded as a mirror plugin.
+# Needs ZeroClaw v0.8.6 or later: it binds the plugin contract first released
+# in v0.8.6 (the host sockets resource, typed config through config.get,
+# credentials through secrets.get).
+registry = true
+# Twitch logins are case-insensitive. The plugin reports senders as lowercase
+# logins, so peer-group entries match when written in lowercase.
+sender_match = "case_insensitive"
+# socket_client: Twitch chat at irc.chat.twitch.tv:6697, dialed by the host
+#   over direct TLS after it checks the destination against the egress grant.
+# config_read: the typed config below through config.get; oauth_token is
+#   x-secret and reaches the plugin only through secrets.get.
 permissions = ["socket_client", "config_read"]
-# provides: mirror the built-in `twitch` channel — read the existing
-# channel config as the single source of truth and honor native-wins.
+# provides: the built-in channel this package stands in for. Hosts construct
+# this plugin only from an explicit [channels.plugin.<alias>] binding, so it
+# never reads [channels.twitch.*].
 provides = "twitch"
+
+# The host this plugin contacts. A declaration grants nothing: an operator
+# grants it with `zeroclaw plugin bind twitch --channel-alias <alias>
+# --egress declared`.
+[egress]
+hosts = ["irc.chat.twitch.tv"]
+
+[config_schema]
+"$schema" = "https://json-schema.org/draft/2020-12/schema"
+type = "object"
+additionalProperties = false
+required = ["bot_username", "oauth_token"]
+
+# The bot account's Twitch login. Case-insensitive; lowercased before use.
+[config_schema.properties.bot_username]
+type = "string"
+minLength = 1
+pattern = '^\s*[A-Za-z0-9_]+\s*$'
+
+# A user access token for the bot account with the chat:read and chat:edit
+# scopes. The `oauth:` prefix is added when omitted.
+[config_schema.properties.oauth_token]
+type = "string"
+minLength = 1
+x-secret = true
+
+# Channels to join, by login, with or without the leading `#`.
+[config_schema.properties.channels]
+type = "array"
+items = { type = "string", pattern = '^\s*#?[A-Za-z0-9_]+\s*$' }
+
+# Answer only messages that mention the bot's login.
+[config_schema.properties.mention_only]
+type = "boolean"

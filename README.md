@@ -8,13 +8,13 @@ on demand. This is what `zeroclaw plugin search` and
 ```bash
 zeroclaw plugin search redact
 zeroclaw plugin install redact-text
-zeroclaw plugin install redact-text@0.1.0    # pin a version
+zeroclaw plugin install redact-text@0.4.1    # pin a version
 ```
 
 ## What's in this repo
 
 ```
-plugins/<name>/        # published plugins — one wit-bindgen component per directory
+plugins/<name>/        # one component per directory, including source-only plugins
   Cargo.toml           # cdylib + rlib, wit-bindgen, standalone [workspace]
   src/lib.rs           # thin #[cfg(target_family = "wasm")] component shim
   src/<core>.rs        # pure logic, no wasm deps — host-testable
@@ -30,9 +30,9 @@ tools/build-registry.py
 .github/workflows/publish.yml
 ```
 
-Plugins are **WebAssembly components** built for `wasm32-wasip2` against the WIT
-world `tool-plugin` (`wit/v0/`). They run sandboxed and deny-by-default: the
-host grants only the capabilities a plugin's `manifest.toml` declares.
+Published plugins are **WebAssembly components** built for `wasm32-wasip2`.
+Tool packages implement the `tool-plugin` WIT world and channel packages
+implement `channel-plugin`. The host enforces the permissions granted to each instance.
 
 `wit/v0/` is vendored **unmodified** from
 [zeroclaw `wit/v0`](https://github.com/zeroclaw-labs/zeroclaw/tree/master/wit/v0)
@@ -40,7 +40,7 @@ host grants only the capabilities a plugin's `manifest.toml` declares.
 deny-by-default: a plugin reaches only the hosts an operator grants its
 instance, for example with `--egress declared` when binding it.
 
-`wit/v0/` matches the contract ZeroClaw v0.8.6 ships: typed config through
+`wit/v0/` matches the contract shipped by ZeroClaw v0.8.6 and v0.9.0, including typed config through
 `config.get`, schema-designated secrets through `secrets.get`, the host
 `websocket` resource, sockets and durable `state`. Channel packages built
 against an earlier `wit/v0` or `wit/unstable/`, and redact-text before 0.3.0,
@@ -72,12 +72,12 @@ channel package returns to the registry at a new version once it is ported.
   "plugins": [
     {
       "name": "redact-text",
-      "version": "0.1.0",
+      "version": "0.4.1",
       "description": "Redact secrets and PII from text: emails, bearer/API tokens, and configured patterns",
       "author": "ZeroClaw Labs",
       "capabilities": ["tool"],
-      "url": "https://github.com/zeroclaw-labs/zeroclaw-plugins/releases/download/plugins/redact-text-0.1.0.zip",
-      "sha256": "<hex digest of the zip>"
+      "url": "https://github.com/zeroclaw-labs/zeroclaw-plugins/releases/download/plugins/redact-text-0.4.1.zip",
+      "sha256": "1302aff40ec8c71d6ec182454cbc375815ad52ba3b185dc9ca166a524f38353e"
     }
   ]
 }
@@ -88,9 +88,9 @@ directly from their `manifest.toml`. The registry never carries a second,
 hand-maintained channel mapping.
 
 `registry.json` is **generated** — the [publish workflow](./.github/workflows/publish.yml)
-builds every `plugins/*`, packages the zips, uploads them to the `plugins`
-release, and commits a refreshed index. The checked-in copy is a seed; the
-`sha256`/`url` become live once the publish workflow uploads the release assets.
+uploads validated archives for new registry-enabled versions to the `plugins`
+release and commits the refreshed index. The checked-in index is the catalog
+used by `zeroclaw plugin search` and named installs.
 
 Published `<name>@<version>` identities are immutable. The workflow verifies an
 existing asset's digest and reuses its registry entry, but never uploads over
@@ -130,9 +130,10 @@ and its layout is the required format:
 4. **Manifest.** `manifest.toml` with `name` (kebab-case, says what it does),
    `version`, `wasm_path`, `capabilities`, and only permissions the host
    actually supports (`http_client`, `file_read`, `file_write`, `config_read`,
-   `memory_read`, `memory_write`, `socket_client`, `websocket_client`).
-   `state_read` and `state_write` are host-gated: released hosts reject them,
-   so CI accepts them only in a `registry = false` plugin.
+   `memory_read`, `memory_write`, `socket_client`, `websocket_client`,
+   `state_read`, `state_write`). Packages that request `config_read` must
+   declare their settings in a `[config_schema]` table. Declaring that table
+   requires the same permission.
 5. Build it:
    ```bash
    rustup target add wasm32-wasip2
@@ -159,15 +160,13 @@ set `registry = false` in `manifest.toml`:
 registry = false
 ```
 
-The publish workflow skips those plugins entirely: no build, no zip, and no
-`registry.json` entry. Remove the guard only when stock hosts can run the
+CI still tests and builds source-only plugins. Publication skips their release
+archives and registry entries. Remove the guard only when stock hosts can run the
 plugin and the protocol parity tests are in place.
 
-A plugin that needs an interface only an unreleased host provides binds
-`wit/next/` instead of `wit/v0/`, and it may request the host-gated
-`state_read` and `state_write` permissions. Both require `registry = false`:
-CI rejects a host-gated permission in a plugin headed for the registry, and
-builds such a plugin without `wit/next/`.
+A plugin that needs an interface from `wit/next/` must set
+`registry = false`. CI builds registry-enabled plugins with `wit/v0/` and
+withholds the pre-release interface tree.
 
 ## Run your own registry
 

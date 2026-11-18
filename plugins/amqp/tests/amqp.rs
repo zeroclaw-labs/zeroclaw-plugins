@@ -249,12 +249,23 @@ fn validates_native_config_and_rejects_unrepresentable_modes() {
     let mtls = config_json(",\n\"client_cert\": \"client.pem\", \"client_key\": \"key.pem\"");
     assert!(AmqpConfig::from_json(&mtls)
         .unwrap_err()
-        .contains("mutual TLS"));
+        .contains("host TLS profile"));
 
-    let tls_without_ca = config_json("").replace("amqp://", "amqps://");
-    assert!(AmqpConfig::from_json(&tls_without_ca)
+    let tls = config_json("").replace("amqp://", "amqps://");
+    assert!(AmqpConfig::from_json(&tls).unwrap().endpoint().unwrap().tls);
+
+    let profiled = config_json(",\n\"tls_profile\": \"broker\"");
+    assert!(AmqpConfig::from_json(&profiled)
         .unwrap_err()
-        .contains("ca_cert"));
+        .contains("requires amqps://"));
+    let secure = profiled.replace("amqp://", "amqps://");
+    assert_eq!(
+        AmqpConfig::from_json(&secure)
+            .unwrap()
+            .tls_profile
+            .as_deref(),
+        Some("broker")
+    );
 }
 
 #[test]

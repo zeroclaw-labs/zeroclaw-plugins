@@ -2,7 +2,7 @@
 # while the component uses the host-mediated ws-client import on wasm32-wasip2.
 [package]
 name = "wecom-ws"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 description = "WeCom AI Bot WebSocket channel plugin for ZeroClaw with nonblocking host-mediated text transport."
