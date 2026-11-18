@@ -1,21 +1,30 @@
 name = "nextcloud"
-version = "0.1.0"
+version = "0.2.0"
 description = "Nextcloud Talk channel plugin for ZeroClaw: bot-webhook ingest (HMAC-SHA256 verified) + OCS chat send over wasi:http."
 author = "JordanTheJet"
 wasm_path = "nextcloud.wasm"
 capabilities = ["channel"]
-# Source-only until ZeroClaw exposes webhook ingress to channel plugins.
 registry = false
-# http_client: outbound OCS API calls to the Nextcloud server (TLS is performed
-# host-side).
-# config_read: read base_url + app_token + webhook_secret + bot_name from this
-# channel's config section. Inbound webhook ingest is gated by the
-# `webhook-ingress` channel capability (get-channel-capabilities), not a
-# permission — the host runs the listener and hands raw POSTs to parse-webhook.
 permissions = ["http_client", "config_read"]
-# provides: mirror the built-in `nextcloud_talk` channel — read
-# [channels.nextcloud_talk.*]
-# and honor native-wins. Inert on hosts without the `provides` feature (they load
-# this as a novel channel named `nextcloud`, configured from
-# [[plugins.entries.nextcloud]]).
 provides = "nextcloud_talk"
+
+[config_schema]
+"$schema" = "https://json-schema.org/draft/2020-12/schema"
+type = "object"
+additionalProperties = false
+
+[config_schema.properties.base_url]
+type = "string"
+
+[config_schema.properties.bot_name]
+type = "string"
+
+[config_schema.properties.app_token]
+type = "string"
+x-secret = true
+minLength = 1
+
+[config_schema.properties.webhook_secret]
+type = "string"
+x-secret = true
+minLength = 1

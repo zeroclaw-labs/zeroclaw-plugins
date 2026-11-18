@@ -10,7 +10,6 @@ use serde::Deserialize;
 pub const CHANNEL: &str = "twitch";
 pub const IRC_HOST: &str = "irc.chat.twitch.tv";
 pub const IRC_PORT: u16 = 6697;
-pub const IRC_TLS: bool = true;
 
 const REQUIRED_CAPABILITIES: &str = "twitch.tv/tags twitch.tv/commands";
 const MAX_IRC_WIRE_BYTES: usize = 512;
@@ -24,18 +23,17 @@ Never use triple backtick code fences. Use a single blank line to separate block
 Be terse and concise. \
 Use short lines. Avoid walls of text.]\n";
 
-/// The canonical host-injected `[channels.twitch.<alias>]` section.
+/// Name of the `x-secret` config property holding the OAuth token.
+pub const OAUTH_TOKEN: &str = "oauth_token";
+
+/// The public, schema-validated config object from `config.get`. The OAuth
+/// token is not part of it: it is read through `secrets.get` when registering.
 ///
 /// Derived wire values are intentionally computed on demand instead of being
 /// cached beside these fields.
 #[derive(Default, Deserialize)]
 pub struct TwitchConfig {
-    #[serde(default)]
-    pub enabled: bool,
-    #[serde(default)]
     pub bot_username: String,
-    #[serde(default)]
-    pub oauth_token: String,
     #[serde(default)]
     pub channels: Vec<String>,
     #[serde(default)]
@@ -43,17 +41,15 @@ pub struct TwitchConfig {
 }
 
 impl TwitchConfig {
-    pub fn from_json(input: &str) -> Result<Self, String> {
-        serde_json::from_str(input)
-            .map_err(|error| format!("twitch: invalid channel configuration: {error}"))
+    pub fn from_public_json(input: &str) -> Result<Self, String> {
+        let config: Self = serde_json::from_str(input)
+            .map_err(|error| format!("twitch: invalid channel configuration: {error}"))?;
+        config.validate()?;
+        Ok(config)
     }
 
     pub fn validate(&self) -> Result<(), String> {
-        if !self.enabled {
-            return Ok(());
-        }
         self.normalized_username()?;
-        self.normalized_oauth_token()?;
         self.normalized_channels()?;
         Ok(())
     }
@@ -67,19 +63,6 @@ impl TwitchConfig {
             );
         }
         Ok(username)
-    }
-
-    pub fn normalized_oauth_token(&self) -> Result<String, String> {
-        let token = normalize_oauth_token(&self.oauth_token);
-        let secret = token.strip_prefix("oauth:").unwrap_or_default();
-        if secret.is_empty()
-            || secret
-                .chars()
-                .any(|ch| ch.is_control() || ch.is_whitespace())
-        {
-            return Err("twitch: oauth_token is missing or malformed".to_string());
-        }
-        Ok(token)
     }
 
     pub fn normalized_channels(&self) -> Result<Vec<String>, String> {
@@ -96,6 +79,21 @@ impl TwitchConfig {
             })
             .collect()
     }
+}
+
+/// The `PASS` value for a raw OAuth token, refusing one that is empty or could
+/// inject another IRC command.
+pub fn oauth_pass(raw: &str) -> Result<String, String> {
+    let token = normalize_oauth_token(raw);
+    let secret = token.strip_prefix("oauth:").unwrap_or_default();
+    if secret.is_empty()
+        || secret
+            .chars()
+            .any(|ch| ch.is_control() || ch.is_whitespace())
+    {
+        return Err("twitch: oauth_token is missing or malformed".to_string());
+    }
+    Ok(token)
 }
 
 /// Normalize a raw OAuth token into the PASS value Twitch expects.
@@ -127,11 +125,8 @@ fn is_twitch_login(value: &str) -> bool {
 }
 
 /// Encode Twitch IRCv3 capabilities followed by PASS and NICK registration.
-pub fn registration_frame(config: &TwitchConfig) -> Result<Vec<u8>, String> {
-    if !config.enabled {
-        return Err("twitch: channel is disabled".to_string());
-    }
-    let token = config.normalized_oauth_token()?;
+pub fn registration_frame(config: &TwitchConfig, oauth_token: &str) -> Result<Vec<u8>, String> {
+    let token = oauth_pass(oauth_token)?;
     let username = config.normalized_username()?;
     encode_lines(&[
         format!("CAP REQ :{REQUIRED_CAPABILITIES}"),
@@ -324,7 +319,13 @@ pub fn privmsg_to_inbound(message: &IrcMessage, config: &TwitchConfig) -> Option
     if message.command != "PRIVMSG" {
         return None;
     }
-    let target = normalize_twitch_channel(message.params.first()?)?;
+    // Twitch chat delivers channel messages only; whispers are not carried
+    // over IRC, and a reply to anything else would land in `#<bot login>`.
+    let target = message
+        .params
+        .first()
+        .filter(|target| target.starts_with('#'))?;
+    let target = normalize_twitch_channel(target)?;
     let text = message.params.get(1)?;
     let sender = message.nick()?.to_ascii_lowercase();
     if !is_twitch_login(&sender) {
@@ -485,7 +486,17 @@ pub enum ProtocolAction {
     Send(Vec<u8>),
     Inbound(Inbound),
     Ready,
+    /// Drop the connection and reconnect with backoff.
     Disconnect(String),
+    /// Twitch rejected the credentials or capabilities: reconnecting soon
+    /// cannot help and risks a ban for login flooding.
+    Rejected(String),
+}
+
+impl ProtocolAction {
+    fn ends_connection(&self) -> bool {
+        matches!(self, Self::Disconnect(_) | Self::Rejected(_))
+    }
 }
 
 /// Stateful IRC registration/framing machine with no transport dependency.
@@ -514,10 +525,7 @@ impl ProtocolSession {
                 continue;
             };
             self.handle_message(&message, config, &mut actions);
-            if actions
-                .last()
-                .is_some_and(|action| matches!(action, ProtocolAction::Disconnect(_)))
-            {
+            if actions.last().is_some_and(ProtocolAction::ends_connection) {
                 break;
             }
         }
@@ -549,21 +557,18 @@ impl ProtocolSession {
             "RECONNECT" | "ERROR" => actions.push(ProtocolAction::Disconnect(
                 "twitch: IRC server requested reconnect".to_string(),
             )),
-            "464" => actions.push(ProtocolAction::Disconnect(
+            "464" => actions.push(ProtocolAction::Rejected(
                 "twitch: IRC authentication failed".to_string(),
             )),
             "NOTICE" if is_authentication_failure(message) => {
-                actions.push(ProtocolAction::Disconnect(
+                actions.push(ProtocolAction::Rejected(
                     "twitch: IRC authentication failed".to_string(),
                 ));
             }
             _ => {}
         }
 
-        if !actions
-            .last()
-            .is_some_and(|action| matches!(action, ProtocolAction::Disconnect(_)))
-        {
+        if !actions.last().is_some_and(ProtocolAction::ends_connection) {
             self.activate_if_ready(config, actions);
         }
     }
@@ -579,7 +584,7 @@ impl ProtocolSession {
                 .iter()
                 .any(|token| matches!(*token, "twitch.tv/tags" | "twitch.tv/commands"))
         {
-            actions.push(ProtocolAction::Disconnect(
+            actions.push(ProtocolAction::Rejected(
                 "twitch: IRC server rejected required tags/commands capabilities".to_string(),
             ));
             return;

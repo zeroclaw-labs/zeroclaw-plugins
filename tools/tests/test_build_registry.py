@@ -27,7 +27,7 @@ def write_plugin(
     wasm: bytes = b"wasm-v1",
     provides: str | None = "telegram",
     sender_match: str | None = "exact",
-    permissions: tuple[str, ...] = ("config_read",),
+    permissions: tuple[str, ...] = (),
     registry: bool | None = None,
     name: str = "bridge",
 ) -> None:
@@ -285,10 +285,10 @@ class BuildRegistryTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
 
         archive = out / "bridge-0.1.0.zip"
-        self.assertEqual(archive.stat().st_size, 133_159)
+        self.assertEqual(archive.stat().st_size, 133_151)
         self.assertEqual(
             hashlib.sha256(archive.read_bytes()).hexdigest(),
-            "9aca4adc50bc7ae03b10d216dfa9206e104c73366c6f98564b9f9a9090b2afa8",
+            "4c7909fb405994276ede6a2142b75d6373403ad9f23d58c02c4398da24e21ff7",
         )
 
     def test_publication_files_exactly_match_new_ledger_identities(self) -> None:
@@ -349,56 +349,58 @@ class BuildRegistryTests(unittest.TestCase):
         self.assertNotEqual(checked.returncode, 0)
         self.assertIn("does not match canonical manifest version", checked.stderr)
 
-    def test_host_gated_permissions_require_the_registry_opt_out(self) -> None:
+    def test_published_config_permissions_and_schema_must_match(self) -> None:
         registry = self.root / "registry.json"
-        registry.write_text('{"plugins": []}\n')
-        gated = ("state_read", "state_write")
+        write_registry(registry, [])
+        for permission in ("config_read", "env_read"):
+            with self.subTest(permission=permission):
+                staged = self.root / permission
+                write_plugin(staged, permissions=(permission,))
+                refused = self.build(staged, self.root / f"refused-{permission}")
+                self.assertNotEqual(refused.returncode, 0)
+                self.assertIn("requests config_read but declares no config_schema", refused.stderr)
 
-        opted_out = self.root / "opted-out"
-        write_plugin(opted_out, permissions=gated, registry=False)
-        accepted = run_registry(
-            "--source-plugins", opted_out, "--check-metadata", registry
-        )
-        self.assertEqual(accepted.returncode, 0, accepted.stderr)
+                manifest = staged / "bridge" / "manifest.toml"
+                original = manifest.read_text()
+                manifest.write_text(original + 'config_schema = "object"\n')
+                wrong_type = run_registry("--source-plugins", staged, "--check-metadata", registry)
+                self.assertNotEqual(wrong_type.returncode, 0)
+                self.assertIn("config_schema must be a table", wrong_type.stderr)
 
-        published = self.root / "published"
-        write_plugin(published, permissions=gated)
-        refused = run_registry(
-            "--source-plugins", published, "--check-metadata", registry
-        )
-        self.assertNotEqual(refused.returncode, 0)
-        for permission in gated:
-            self.assertIn(
-                f"permission {permission!r} is rejected by released hosts",
-                refused.stderr,
-            )
+                manifest.write_text(
+                    original
+                    + '[config_schema]\ntype = "object"\n'
+                    'additionalProperties = false\n[config_schema.properties]\n'
+                )
+                accepted = run_registry("--source-plugins", staged, "--check-metadata", registry)
+                self.assertEqual(accepted.returncode, 0, accepted.stderr)
+
+                manifest.write_text(manifest.read_text().replace(f'["{permission}"]', "[]"))
+                refused = run_registry("--source-plugins", staged, "--check-metadata", registry)
+                self.assertNotEqual(refused.returncode, 0)
+                self.assertIn("declares config_schema without requesting config_read", refused.stderr)
+
+    def test_draft_config_manifest_remains_source_only(self) -> None:
+        staged = self.root / "staged"
+        write_plugin(staged, permissions=("config_read",), registry=False)
+        out = self.root / "out"
+        skipped = self.build(staged, out)
+        self.assertEqual(skipped.returncode, 0, skipped.stderr)
+        self.assertFalse((out / "bridge-0.1.0.zip").exists())
+
+    def test_published_packages_can_request_released_state_permissions(self) -> None:
+        staged = self.root / "staged"
+        write_plugin(staged, permissions=("state_read", "state_write"))
+        out = self.root / "out"
+        published = self.build(staged, out)
+        self.assertEqual(published.returncode, 0, published.stderr)
+        self.assertTrue((out / "bridge-0.1.0.zip").is_file())
 
         misspelled = self.root / "misspelled"
-        write_plugin(misspelled, permissions=("state_admin",), registry=False)
-        unknown = run_registry(
-            "--source-plugins", misspelled, "--check-metadata", registry
-        )
+        write_plugin(misspelled, permissions=("state_admin",))
+        unknown = self.build(misspelled, self.root / "invalid")
         self.assertNotEqual(unknown.returncode, 0)
         self.assertIn("unknown permissions value 'state_admin'", unknown.stderr)
-
-    def test_packaging_never_publishes_host_gated_permissions(self) -> None:
-        staged = self.root / "staged"
-        write_plugin(staged, permissions=("state_read",))
-        refused_out = self.root / "refused"
-        refused = self.build(staged, refused_out)
-        self.assertNotEqual(refused.returncode, 0)
-        self.assertIn(
-            "permission 'state_read' is rejected by released hosts", refused.stderr
-        )
-        self.assertFalse((refused_out / "bridge-0.1.0.zip").exists())
-
-        gated = self.root / "gated"
-        write_plugin(gated, permissions=("state_read",), registry=False)
-        skipped_out = self.root / "skipped"
-        skipped = self.build(gated, skipped_out)
-        self.assertEqual(skipped.returncode, 0, skipped.stderr)
-        self.assertIn("skipping bridge (registry = false", skipped.stdout)
-        self.assertFalse((skipped_out / "bridge-0.1.0.zip").exists())
 
     def test_new_version_is_appended_to_registry_history(self) -> None:
         staged = self.root / "staged"
