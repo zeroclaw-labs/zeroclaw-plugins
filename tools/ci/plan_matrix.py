@@ -326,16 +326,21 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repository", type=Path, default=Path.cwd())
     parser.add_argument("--event", default=os.environ.get("GITHUB_EVENT_NAME", "workflow_dispatch"))
-    parser.add_argument(
-        "--base",
-        default=os.environ.get("GITHUB_EVENT_BEFORE") or "origin/main",
-    )
+    parser.add_argument("--base")
     parser.add_argument("--shard-size", type=int, default=DEFAULT_SHARD_SIZE)
     parser.add_argument("--max-shards", type=int, default=DEFAULT_MAX_SHARDS)
     parser.add_argument("--matrix-json")
     parser.add_argument("--verify-staged", type=Path)
     parser.add_argument("--output", type=Path, default=None)
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    if args.base is None:
+        if args.event == "pull_request":
+            # On synchronize, event.before is the previous contributor head.
+            target = os.environ.get("GITHUB_BASE_REF") or "main"
+            args.base = os.environ.get("GITHUB_PR_BASE_SHA") or f"origin/{target}"
+        else:
+            args.base = os.environ.get("GITHUB_EVENT_BEFORE") or "origin/main"
+    return args
 
 
 def main(argv: list[str] | None = None) -> int:

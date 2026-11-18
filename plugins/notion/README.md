@@ -84,8 +84,8 @@ example `'["a","b"]'`. The schema rejects keys it does not list.
 | `status_property` | string | `Status` | The `select` or `status` property that holds the task state (`pending`, `running`, `done`). The plugin detects which kind it is. |
 | `input_property` | string | `Input` | The `title` or `rich_text` property that holds the task prompt. |
 | `result_property` | string | `Result` | The `rich_text` property the answer is written back into. |
-| `poll_interval_secs` | integer | `5` | Poll cadence in seconds. |
-| `max_concurrent` | integer | `4` | Most rows claimed (flipped to `running`) per poll. |
+| `poll_interval_secs` | integer | `5` | Poll cadence in nonnegative seconds. |
+| `max_concurrent` | integer | `4` | Most rows claimed (flipped to `running`) per poll, from 0 through 4,294,967,295. |
 | `recover_stale` | boolean | `true` | On load, reset rows a crash left in `running` back to `pending`. |
 | `api_base_url` | URL | `https://api.notion.com` | API origin. Override for a test mock, and grant that host. |
 

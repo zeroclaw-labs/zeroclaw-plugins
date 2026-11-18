@@ -98,11 +98,9 @@ KNOWN_PERMISSIONS = {
     "memory_write",
     "socket_client",
     "websocket_client",
+    "state_read",
+    "state_write",
 }
-# Accepted by the host at wit/NEXT_REF, but released hosts reject a manifest
-# that requests them, so only a `registry = false` plugin may. Move them into
-# KNOWN_PERMISSIONS when wit/UPSTREAM_REF reaches a release that accepts them.
-HOST_GATED_PERMISSIONS = {"state_read", "state_write"}
 KNOWN_SENDER_MATCH = {"exact", "case_insensitive", "handle", "email"}
 
 # `manifest.toml` is canonical. These are the manifest-owned fields projected
@@ -240,16 +238,18 @@ def validate(
     permissions, permission_errors = validate_known_array(
         meta,
         "permissions",
-        KNOWN_PERMISSIONS | HOST_GATED_PERMISSIONS,
+        KNOWN_PERMISSIONS,
         required=False,
     )
     errors.extend(permission_errors)
     if registry is not False:
-        errors.extend(
-            f"permission {permission!r} is rejected by released hosts; "
-            "set registry = false until a host release accepts it"
-            for permission in sorted(set(permissions) & HOST_GATED_PERMISSIONS)
-        )
+        requests_config = "config_read" in permissions or "env_read" in permissions
+        if requests_config and "config_schema" not in meta:
+            errors.append("requests config_read but declares no config_schema")
+        elif not requests_config and "config_schema" in meta:
+            errors.append("declares config_schema without requesting config_read")
+        elif requests_config and not isinstance(meta["config_schema"], dict):
+            errors.append("config_schema must be a table")
 
     caps = meta.get("capabilities")
     if not isinstance(caps, list):
