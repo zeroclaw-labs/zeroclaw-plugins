@@ -1,16 +1,70 @@
 name = "amqp"
-version = "0.1.0"
+version = "0.2.0"
 description = "AMQP 0-9-1 channel plugin for ZeroClaw over host-mediated TCP/TLS."
 author = "JordanTheJet"
 wasm_path = "amqp.wasm"
 capabilities = ["channel"]
 sender_match = "exact"
-# Real implementation, kept source-only until ZeroClaw's socket-client host
-# capability reaches upstream master.
 registry = false
-# socket_client: AMQP handshake, consumption, and publishing over host TCP/TLS.
-# config_read: read [channels.amqp.*] when loaded as a mirror plugin.
 permissions = ["socket_client", "config_read"]
-# provides: mirror the built-in `amqp` channel — read the existing
-# channel config as the single source of truth and honor native-wins.
 provides = "amqp"
+
+[config_schema]
+"$schema" = "https://json-schema.org/draft/2020-12/schema"
+type = "object"
+additionalProperties = false
+required = ["amqp_url", "exchange", "routing_keys"]
+
+[config_schema.properties.amqp_url]
+type = "string"
+minLength = 1
+x-secret = true
+
+[config_schema.properties.exchange]
+type = "string"
+minLength = 1
+
+[config_schema.properties.queue]
+type = "string"
+
+[config_schema.properties.sender_label]
+type = "string"
+
+[config_schema.properties.content_template]
+type = "string"
+
+[config_schema.properties.thread_id_field]
+type = "string"
+
+[config_schema.properties.tls_profile]
+type = "string"
+
+[config_schema.properties.enabled]
+type = "boolean"
+
+[config_schema.properties.durable_ack]
+type = "boolean"
+
+[config_schema.properties.routing_keys]
+type = "array"
+items = { type = "string" }
+minItems = 1
+
+[config_schema.properties.dispatch]
+type = "string"
+enum = ["agent_loop"]
+
+[config_schema.properties.tls_ca_pem]
+type = "string"
+minLength = 1
+x-secret = true
+
+[config_schema.properties.tls_client_certificate_pem]
+type = "string"
+minLength = 1
+x-secret = true
+
+[config_schema.properties.tls_client_key_pem]
+type = "string"
+minLength = 1
+x-secret = true
