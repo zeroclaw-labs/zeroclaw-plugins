@@ -139,12 +139,26 @@ pub struct PubSubMessage {
     pub publish_time: String,
 }
 
+// Pub/Sub examples encode historyId numerically; the Gmail REST API returns a decimal string.
+fn deserialize_history_id<'de, D: serde::Deserializer<'de>>(de: D) -> Result<u64, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Id {
+        Number(u64),
+        Decimal(String),
+    }
+    match Id::deserialize(de)? {
+        Id::Number(n) => Ok(n),
+        Id::Decimal(n) => n.parse().map_err(serde::de::Error::custom),
+    }
+}
+
 /// The decoded payload inside `PubSubMessage.data`.
 #[derive(Debug, Deserialize, PartialEq, Eq)]
 pub struct GmailNotification {
     #[serde(rename = "emailAddress")]
     pub email_address: String,
-    #[serde(rename = "historyId")]
+    #[serde(rename = "historyId", deserialize_with = "deserialize_history_id")]
     pub history_id: u64,
 }
 
@@ -162,12 +176,55 @@ pub fn parse_envelope(body: &[u8]) -> Result<PubSubEnvelope, String> {
     serde_json::from_slice(body).map_err(|e| format!("gmail_push: invalid Pub/Sub envelope: {e}"))
 }
 
+/// Gmail can return JSON error envelopes on failure. Only a successful response
+/// may be decoded as a history page or counted as a successful send or watch.
+pub fn check_api_status(status: u16) -> Result<(), String> {
+    if (200..300).contains(&status) {
+        Ok(())
+    } else {
+        Err(format!("gmail_push: Gmail API returned HTTP {status}"))
+    }
+}
+
+/// A webhook can increase the target while the listener is still delivering
+/// an older record. The two positions are independent and persist across guests.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, Deserialize)]
+pub struct HistoryCursor {
+    #[serde(alias = "prior")]
+    pub delivered: u64,
+    #[serde(alias = "latest")]
+    pub announced: u64,
+}
+
+impl HistoryCursor {
+    pub fn seed(tip: u64) -> Self {
+        Self {
+            delivered: tip,
+            announced: tip,
+        }
+    }
+
+    pub fn announce(self, tip: u64) -> Self {
+        Self {
+            announced: self.announced.max(tip),
+            ..self
+        }
+    }
+
+    pub fn confirm(self, tip: u64) -> Self {
+        Self {
+            delivered: self.delivered.max(tip.min(self.announced)),
+            ..self
+        }
+    }
+}
+
 // ── Gmail API response types ──────────────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
 pub struct HistoryResponse {
     pub history: Option<Vec<HistoryRecord>>,
-    #[serde(default, rename = "historyId")]
+    #[serde(rename = "historyId", deserialize_with = "deserialize_history_id")]
     pub history_id: u64,
     #[serde(default, rename = "nextPageToken")]
     pub next_page_token: Option<String>,
@@ -175,6 +232,8 @@ pub struct HistoryResponse {
 
 #[derive(Debug, Deserialize)]
 pub struct HistoryRecord {
+    #[serde(default, deserialize_with = "deserialize_history_id")]
+    pub id: u64,
     #[serde(default, rename = "messagesAdded")]
     pub messages_added: Vec<MessageAdded>,
 }
@@ -189,17 +248,56 @@ pub struct MessageRef {
     pub id: String,
 }
 
-/// Collect the message IDs added in a History-API page.
+/// Collect message IDs from the additions in a history page.
 pub fn history_message_ids(resp: &HistoryResponse) -> Vec<String> {
-    let mut ids = Vec::new();
-    if let Some(records) = &resp.history {
-        for r in records {
-            for added in &r.messages_added {
-                ids.push(added.message.id.clone());
-            }
+    resp.history
+        .iter()
+        .flatten()
+        .flat_map(|record| &record.messages_added)
+        .map(|added| added.message.id.clone())
+        .collect()
+}
+
+/// One history record at a time bounds work done before the listener can
+/// checkpoint. An empty final page can advance to the mailbox's current ID.
+pub struct HistoryBatch {
+    pub through: u64,
+    pub message_ids: std::collections::VecDeque<String>,
+}
+
+impl HistoryResponse {
+    pub fn next_batch(&self, cursor: HistoryCursor) -> Result<Option<HistoryBatch>, String> {
+        let end = cursor.announced.min(self.history_id);
+        if end <= cursor.delivered {
+            return Ok(None);
         }
+        if let Some(record) = self
+            .history
+            .as_deref()
+            .and_then(|records| records.first())
+            .filter(|record| record.id <= end)
+        {
+            if record.id <= cursor.delivered {
+                return Err("gmail_push: history page did not advance".into());
+            }
+            let mut seen = std::collections::HashSet::new();
+            let message_ids = record
+                .messages_added
+                .iter()
+                .map(|added| &added.message.id)
+                .filter(|id| seen.insert(*id))
+                .cloned()
+                .collect();
+            return Ok(Some(HistoryBatch {
+                through: record.id,
+                message_ids,
+            }));
+        }
+        Ok(Some(HistoryBatch {
+            through: end,
+            message_ids: Default::default(),
+        }))
     }
-    ids
 }
 
 #[derive(Debug, Deserialize)]
@@ -421,7 +519,7 @@ pub fn message_url(id: &str) -> String {
 /// The History-API URL for `startHistoryId`, with an optional page token.
 pub fn history_url(start_history_id: u64, page_token: Option<&str>) -> String {
     let mut url = format!(
-        "{GMAIL_API}/gmail/v1/users/me/history?startHistoryId={start_history_id}&historyTypes=messageAdded"
+        "{GMAIL_API}/gmail/v1/users/me/history?startHistoryId={start_history_id}&historyTypes=messageAdded&maxResults=1"
     );
     if let Some(pt) = page_token {
         url.push_str("&pageToken=");
@@ -440,6 +538,45 @@ mod tests {
             .replace('+', "-")
             .replace('/', "_")
             .replace('=', "")
+    }
+
+    #[test]
+    fn unsuccessful_responses_are_rejected_before_history_processing() {
+        assert!(check_api_status(200).is_ok());
+        assert!(check_api_status(204).is_ok());
+        for status in [301, 401, 403, 404, 429, 500] {
+            assert!(check_api_status(status).is_err());
+        }
+    }
+
+    #[test]
+    fn notifications_do_not_checkpoint_mail_before_listener_delivery() {
+        let first = HistoryCursor::seed(10).announce(20);
+        let saved = serde_json::to_vec(&first.announce(30)).unwrap();
+        let restarted: HistoryCursor = serde_json::from_slice(&saved).unwrap();
+        assert_eq!(restarted.announce(20), restarted);
+        assert_eq!(restarted.delivered, 10);
+        assert_eq!(
+            restarted.confirm(20),
+            HistoryCursor {
+                delivered: 20,
+                announced: 30
+            }
+        );
+        let old: HistoryCursor = serde_json::from_str(r#"{"prior":10,"latest":20}"#).unwrap();
+        assert_eq!(old, first);
+    }
+
+    #[test]
+    fn rest_history_ids_accept_decimal_strings_and_pubsub_numbers() {
+        let rest: HistoryResponse =
+            serde_json::from_str(r#"{"historyId":"18446744073709551615"}"#).unwrap();
+        assert_eq!(rest.history_id, u64::MAX);
+        let push: GmailNotification =
+            serde_json::from_str(r#"{"emailAddress":"fixture@example.com","historyId":42}"#)
+                .unwrap();
+        assert_eq!(push.history_id, 42);
+        assert!(serde_json::from_str::<HistoryResponse>(r#"{"historyId":"invalid"}"#).is_err());
     }
 
     #[test]
@@ -504,20 +641,29 @@ mod tests {
     }
 
     #[test]
-    fn history_ids_collected() {
-        let resp: HistoryResponse = serde_json::from_value(json!({
+    fn poll_batches_follow_history_records_and_preserve_the_notification_boundary() {
+        let cursor = HistoryCursor::seed(10).announce(30);
+        let page: HistoryResponse = serde_json::from_value(json!({
             "history": [
-                {"messagesAdded":[{"message":{"id":"a"}},{"message":{"id":"b"}}]},
-                {"messagesAdded":[{"message":{"id":"c"}}]}
-            ],
-            "historyId": 999
-        }))
-        .unwrap();
-        assert_eq!(history_message_ids(&resp), ["a", "b", "c"]);
-        assert_eq!(resp.history_id, 999);
-        // No history → empty.
-        let empty: HistoryResponse = serde_json::from_value(json!({"historyId": 1})).unwrap();
-        assert!(history_message_ids(&empty).is_empty());
+                {"id":"20","messagesAdded":[{"message":{"id":"a"}},{"message":{"id":"b"}},{"message":{"id":"a"}}]},
+                {"id":"40","messagesAdded":[{"message":{"id":"later"}}]}
+            ], "historyId":"45"
+        })).unwrap();
+        assert_eq!(history_message_ids(&page), ["a", "b", "a", "later"]);
+        let batch = page.next_batch(cursor).unwrap().unwrap();
+        assert_eq!(batch.through, 20);
+        assert_eq!(
+            batch.message_ids.into_iter().collect::<Vec<_>>(),
+            ["a", "b"]
+        );
+        let empty: HistoryResponse = serde_json::from_value(json!({"historyId":"25"})).unwrap();
+        assert_eq!(empty.next_batch(cursor).unwrap().unwrap().through, 25);
+        let future: HistoryResponse =
+            serde_json::from_value(json!({"history":[{"id":"40"}],"historyId":"45"})).unwrap();
+        let b = future.next_batch(cursor.confirm(20)).unwrap().unwrap();
+        assert_eq!(b.through, 30);
+        assert!(b.message_ids.is_empty());
+        assert!(empty.next_batch(cursor.confirm(30)).unwrap().is_none());
     }
 
     #[test]
@@ -627,11 +773,11 @@ mod tests {
         );
         assert_eq!(
             history_url(42, None),
-            "https://gmail.googleapis.com/gmail/v1/users/me/history?startHistoryId=42&historyTypes=messageAdded"
+            "https://gmail.googleapis.com/gmail/v1/users/me/history?startHistoryId=42&historyTypes=messageAdded&maxResults=1"
         );
         assert_eq!(
             history_url(42, Some("PT")),
-            "https://gmail.googleapis.com/gmail/v1/users/me/history?startHistoryId=42&historyTypes=messageAdded&pageToken=PT"
+            "https://gmail.googleapis.com/gmail/v1/users/me/history?startHistoryId=42&historyTypes=messageAdded&maxResults=1&pageToken=PT"
         );
     }
 }
