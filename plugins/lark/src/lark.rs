@@ -28,13 +28,6 @@ pub const FEISHU_BASE_URL: &str = "https://open.feishu.cn/open-apis";
 /// Kept in sync with the manifest / plugin version.
 pub const CHANNEL_VERSION: &str = "0.1.0";
 
-/// Reserved `channel` sentinel understood by the host webhook front door: an
-/// [`InboundMessage`](crate) carrying this channel is **not** enqueued as a
-/// message — instead its `content` is written back as the HTTP 200 response
-/// body. Used for the Lark URL-verification challenge echo (and a GET liveness
-/// ping). See the plugin authoring brief, section B.1.
-pub const WEBHOOK_REPLY_CHANNEL: &str = "__webhook_reply__";
-
 /// Lark event type identifying an inbound IM message (event schema 2.0).
 pub const EVENT_MESSAGE_RECEIVE: &str = "im.message.receive_v1";
 
@@ -164,8 +157,7 @@ pub struct Inbound {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WebhookOutcome {
     /// Echo `content` back as the HTTP 200 body and enqueue nothing (the
-    /// URL-verification challenge, or a GET liveness ping). The shim wraps this
-    /// as a single [`WEBHOOK_REPLY_CHANNEL`] inbound message.
+    /// URL-verification challenge, or a GET liveness ping). The shim returns it as a typed webhook reply.
     Reply(String),
     /// Real inbound events to enqueue for the agent.
     Events(Vec<Inbound>),
@@ -331,21 +323,17 @@ pub fn parse_webhook_body(method: &str, body: &[u8]) -> Result<Option<Value>, St
 
 /// Verify the token carried by an already-decoded challenge or event payload.
 pub fn authenticate_webhook(cfg: &LarkConfig, payload: &Value) -> Result<(), String> {
-    // URL-verification handshake.
-    if let Some((_, token)) = challenge_of(payload) {
-        if let (Some(expected), Some(got)) = (cfg.verification_token(), token.as_deref()) {
-            if got != expected {
-                return Err("lark: url_verification token mismatch".to_string());
-            }
-        }
-        return Ok(());
-    }
-
-    // Real event: authenticate against the configured verification token when
-    // both sides carry one, then decode.
-    if let (Some(expected), Some(got)) = (cfg.verification_token(), event_token_of(payload)) {
-        if got != expected {
-            return Err("lark: event verification token mismatch".to_string());
+    if let Some(expected) = cfg.verification_token() {
+        let (given, kind) = if let Some((_, token)) = challenge_of(payload) {
+            (token, "url_verification")
+        } else {
+            (
+                event_token_of(payload).map(str::to_owned),
+                "event verification",
+            )
+        };
+        if given.as_deref() != Some(expected) {
+            return Err(format!("lark: {kind} token mismatch"));
         }
     }
     Ok(())
@@ -551,6 +539,15 @@ mod tests {
             WebhookOutcome::Reply(r) => assert_eq!(r, r#"{"challenge":"abc123"}"#),
             other => panic!("expected reply, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn configured_token_is_required_in_the_request() {
+        let cfg = LarkConfig::from_json(r#"{"verification_token":"fixture-token"}"#);
+        let challenge = json!({"type":"url_verification","challenge":"example"});
+        assert!(authenticate_webhook(&cfg, &challenge).is_err());
+        let event = json!({"header":{"event_type":"im.message.receive_v1"}});
+        assert!(authenticate_webhook(&cfg, &event).is_err());
     }
 
     #[test]
