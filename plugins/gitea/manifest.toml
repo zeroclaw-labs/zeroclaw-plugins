@@ -1,5 +1,5 @@
 name = "gitea"
-version = "0.3.0"
+version = "0.3.1"
 description = "Gitea/Forgejo channel plugin for ZeroClaw: notifications long-poll + issue/PR comment replies over wasi:http."
 author = "JordanTheJet"
 wasm_path = "gitea.wasm"

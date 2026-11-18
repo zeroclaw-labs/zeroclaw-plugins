@@ -209,3 +209,14 @@ fn config_parses_and_defaults() {
     assert!(!TwitterConfig::from_json("{}").enabled);
     assert_eq!(TwitterConfig::from_json("not json").bearer_token, "");
 }
+
+#[test]
+fn mentions_preserve_event_time_and_use_zero_for_missing_time() {
+    let response = json!({"data": [
+        {"id":"2","text":"no time"},
+        {"id":"1","text":"known time","created_at":"1970-01-01T01:00:01.123456+01:00"}
+    ]});
+    let mentions = parse_mentions(&response);
+    assert_eq!(mentions[0].timestamp, 1123);
+    assert_eq!(mentions[1].timestamp, 0);
+}

@@ -319,3 +319,15 @@ fn config_parses_matches_native_fields_and_defaults() {
         "https://bsky.social"
     );
 }
+
+#[test]
+fn offset_timestamps_and_fractional_precisions_have_chronological_order() {
+    let latest = "1970-01-01T00:00:01.1234567891Z";
+    let earlier = "1970-01-01T05:30:01.123456789+05:30";
+    assert_eq!(iso8601_to_millis(earlier), 1123);
+    assert_eq!(iso8601_to_millis("1969-12-31T19:00:01.123-05:00"), 1123);
+    assert_eq!(
+        latest_indexed_at(&[json!({"indexedAt":latest}), json!({"indexedAt":earlier})]).as_deref(),
+        Some(latest)
+    );
+}

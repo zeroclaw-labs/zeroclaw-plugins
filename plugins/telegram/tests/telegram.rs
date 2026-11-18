@@ -28,7 +28,7 @@ fn parses_a_text_message() {
     assert_eq!(inb.sender, "alice");
     assert_eq!(inb.reply_target, "555");
     assert_eq!(inb.content, "hello");
-    assert_eq!(inb.timestamp, 1_700_000_000);
+    assert_eq!(inb.timestamp, 1_700_000_000_000);
     assert_eq!(inb.thread_ts, None);
 }
 

@@ -170,13 +170,8 @@ pub fn parse_post(post: &Value, self_user_id: &str, thread_replies: bool) -> Opt
         channel_id.to_string()
     };
 
-    // The native channel reports `timestamp` in seconds (`create_at / 1000`);
-    // mirror that so this plugin and the built-in channel are interchangeable.
-    let timestamp = if create_at > 0 {
-        (create_at / 1000) as u64
-    } else {
-        0
-    };
+    // Mattermost's create_at and the channel WIT timestamp are both epoch milliseconds.
+    let timestamp = u64::try_from(create_at).unwrap_or(0);
 
     Some(Inbound {
         id: format!("mattermost_{id}"),

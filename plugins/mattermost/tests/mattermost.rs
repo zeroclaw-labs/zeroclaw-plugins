@@ -23,7 +23,7 @@ fn post(id: &str, user: &str, message: &str, create_at: i64, root_id: &str) -> s
 fn parses_a_basic_post_into_a_threaded_reply_target() {
     // thread_replies=true → a top-level post threads on its own id.
     let inb = parse_post(
-        &post("p1", "user1", "hello world", 1_700_000_000_000, ""),
+        &post("p1", "user1", "hello world", 1_700_000_000_123, ""),
         "bot1",
         true,
     )
@@ -32,7 +32,7 @@ fn parses_a_basic_post_into_a_threaded_reply_target() {
     assert_eq!(inb.sender, "user1");
     assert_eq!(inb.content, "hello world");
     assert_eq!(inb.reply_target, "chan1:p1");
-    assert_eq!(inb.timestamp, 1_700_000_000); // create_at ms → seconds
+    assert_eq!(inb.timestamp, 1_700_000_000_123);
     assert_eq!(inb.thread_ts, None);
     assert_eq!(inb.channel_alias, None);
 }

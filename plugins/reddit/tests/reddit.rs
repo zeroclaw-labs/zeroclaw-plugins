@@ -20,7 +20,7 @@ fn item(
         "name": name,
         "author": author,
         "body": body,
-        "created_utc": 1_700_000_000.0_f64,
+        "created_utc": 1_700_000_000.123_f64,
     });
     if let Some(p) = parent_id {
         v["parent_id"] = json!(p);
@@ -50,7 +50,7 @@ fn parses_a_comment_reply_to_the_parent_thing() {
     assert_eq!(inb.content, "hello bot");
     assert_eq!(inb.reply_target, "t1_parent1");
     assert_eq!(inb.thread_ts.as_deref(), Some("t1_parent1"));
-    assert_eq!(inb.timestamp, 1_700_000_000);
+    assert_eq!(inb.timestamp, 1_700_000_000_123);
 }
 
 #[test]

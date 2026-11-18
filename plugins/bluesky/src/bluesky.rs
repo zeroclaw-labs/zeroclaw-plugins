@@ -150,16 +150,26 @@ pub fn notification_indexed_at(notif: &Value) -> &str {
     notif.get("indexedAt").and_then(Value::as_str).unwrap_or("")
 }
 
-/// The lexicographically-latest `indexedAt` across a batch (AT Protocol emits
-/// fixed-width RFC-3339 UTC timestamps, so lexical order == chronological
-/// order). This is tracked as the poll cursor / `updateSeen` marker.
+/// Compare notification cursors chronologically while keeping all fractional
+/// digits. The AT Protocol allows numeric timezone offsets and more than nine
+/// digits of fractional precision.
+pub fn indexed_time_key(s: &str) -> Option<(i64, &str)> {
+    let seconds = chrono::DateTime::parse_from_rfc3339(s).ok()?.timestamp();
+    let fraction = s.split_once('.').map_or("", |(_, suffix)| {
+        let digits = suffix.bytes().take_while(u8::is_ascii_digit).count();
+        suffix[..digits].trim_end_matches('0')
+    });
+    Some((seconds, fraction))
+}
+
+/// Preserve the provider's exact timestamp string when marking a batch seen.
 pub fn latest_indexed_at(notifs: &[Value]) -> Option<String> {
     notifs
         .iter()
         .map(notification_indexed_at)
-        .filter(|s| !s.is_empty())
-        .max()
-        .map(ToString::to_string)
+        .filter_map(|s| indexed_time_key(s).map(|key| (key, s)))
+        .max_by_key(|(key, _)| *key)
+        .map(|(_, s)| s.to_owned())
 }
 
 /// Encode a notification's parent + root strong refs into the `reply_target`
@@ -322,23 +332,7 @@ pub fn build_update_seen(seen_at: &str) -> Value {
     json!({ "seenAt": seen_at })
 }
 
-// ── RFC-3339 (UTC) ⇄ Unix-millis, dependency-free ──────────────────────────
-//
-// Bluesky stamps `indexedAt` / `createdAt` as RFC-3339 UTC (e.g.
-// `2026-01-15T10:00:00.000Z`). The host inbound `timestamp` is Unix
-// milliseconds, and outbound posts need a `createdAt` string, so we convert
-// both ways without pulling in `chrono`. Days ⇄ civil dates use Howard
-// Hinnant's algorithms.
-
-fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
-    let y = if m <= 2 { y - 1 } else { y };
-    let era = (if y >= 0 { y } else { y - 399 }) / 400;
-    let yoe = y - era * 400; // [0, 399]
-    let doy = (153 * (if m > 2 { m - 3 } else { m + 9 }) + 2) / 5 + d - 1; // [0, 365]
-    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy; // [0, 146096]
-    era * 146097 + doe - 719468
-}
-
+// RFC3339 input may include UTC offsets. Outbound posts use fixed-width UTC.
 fn civil_from_days(z: i64) -> (i64, i64, i64) {
     let z = z + 719468;
     let era = (if z >= 0 { z } else { z - 146096 }) / 146097;
@@ -352,60 +346,12 @@ fn civil_from_days(z: i64) -> (i64, i64, i64) {
     (if m <= 2 { y + 1 } else { y }, m, d)
 }
 
-/// Parse an RFC-3339 / ISO-8601 UTC timestamp into Unix epoch milliseconds.
-/// Handles the `…Z` form Bluesky emits (with optional fractional seconds); a
-/// trailing `+hh:mm` offset is ignored (treated as UTC). Returns `0` when the
-/// string can't be parsed, so a malformed timestamp is inert.
+/// Convert a provider RFC3339 timestamp to the channel WIT's epoch milliseconds.
 pub fn iso8601_to_millis(s: &str) -> u64 {
-    let Some((date, rest)) = s.split_once('T') else {
-        return 0;
-    };
-    let mut dparts = date.split('-');
-    let (Some(y), Some(m), Some(d)) = (
-        dparts.next().and_then(|v| v.parse::<i64>().ok()),
-        dparts.next().and_then(|v| v.parse::<i64>().ok()),
-        dparts.next().and_then(|v| v.parse::<i64>().ok()),
-    ) else {
-        return 0;
-    };
-
-    // Strip the zone (`Z` or a `+hh:mm` offset — assume UTC) before parsing.
-    let time = rest.trim_end_matches('Z');
-    let time = time.split('+').next().unwrap_or(time);
-    let (hms, frac) = match time.split_once('.') {
-        Some((a, b)) => (a, Some(b)),
-        None => (time, None),
-    };
-    let mut tparts = hms.split(':');
-    let hh = tparts
-        .next()
-        .and_then(|v| v.parse::<i64>().ok())
-        .unwrap_or(0);
-    let mm = tparts
-        .next()
-        .and_then(|v| v.parse::<i64>().ok())
-        .unwrap_or(0);
-    let ss = tparts
-        .next()
-        .and_then(|v| v.parse::<i64>().ok())
-        .unwrap_or(0);
-
-    let ms = frac
-        .map(|f| {
-            let digits: String = f.chars().take_while(char::is_ascii_digit).take(3).collect();
-            let mut n: u64 = digits.parse().unwrap_or(0);
-            for _ in digits.len()..3 {
-                n *= 10; // pad e.g. "1" → 100, "12" → 120
-            }
-            n
-        })
-        .unwrap_or(0);
-
-    let secs = days_from_civil(y, m, d) * 86_400 + hh * 3_600 + mm * 60 + ss;
-    if secs < 0 {
-        return 0;
-    }
-    (secs as u64) * 1_000 + ms
+    chrono::DateTime::parse_from_rfc3339(s)
+        .ok()
+        .and_then(|time| u64::try_from(time.timestamp_millis()).ok())
+        .unwrap_or(0)
 }
 
 /// Format Unix epoch milliseconds as an RFC-3339 UTC timestamp with millisecond
