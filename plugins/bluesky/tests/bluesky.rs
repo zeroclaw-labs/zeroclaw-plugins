@@ -95,13 +95,27 @@ fn reply_threads_on_the_conversation_root() {
 
 #[test]
 fn skips_read_notifications() {
-    let n = notif("mention", "u.bsky.social", "did:plc:u", "old", true, json!({}));
+    let n = notif(
+        "mention",
+        "u.bsky.social",
+        "did:plc:u",
+        "old",
+        true,
+        json!({}),
+    );
     assert!(parse_notification(&n, SELF_DID).is_none());
 }
 
 #[test]
 fn skips_own_posts() {
-    let n = notif("mention", "testbot.bsky.social", SELF_DID, "self", false, json!({}));
+    let n = notif(
+        "mention",
+        "testbot.bsky.social",
+        SELF_DID,
+        "self",
+        false,
+        json!({}),
+    );
     assert!(parse_notification(&n, SELF_DID).is_none());
 }
 
@@ -109,13 +123,23 @@ fn skips_own_posts() {
 fn skips_non_mention_reasons() {
     for reason in ["like", "repost", "follow", "quote"] {
         let n = notif(reason, "u.bsky.social", "did:plc:u", "x", false, json!({}));
-        assert!(parse_notification(&n, SELF_DID).is_none(), "{reason} should be skipped");
+        assert!(
+            parse_notification(&n, SELF_DID).is_none(),
+            "{reason} should be skipped"
+        );
     }
 }
 
 #[test]
 fn skips_empty_text() {
-    let n = notif("mention", "u.bsky.social", "did:plc:u", "", false, json!({}));
+    let n = notif(
+        "mention",
+        "u.bsky.social",
+        "did:plc:u",
+        "",
+        false,
+        json!({}),
+    );
     assert!(parse_notification(&n, SELF_DID).is_none());
 }
 
@@ -141,20 +165,36 @@ fn decode_reply_target_handles_all_forms() {
 
 #[test]
 fn send_body_top_level_has_no_reply() {
-    let body = build_send_body("did:plc:me", "hello world", "no-pipe", "2026-01-15T10:00:00.000Z");
+    let body = build_send_body(
+        "did:plc:me",
+        "hello world",
+        "no-pipe",
+        "2026-01-15T10:00:00.000Z",
+    );
     assert_eq!(body["repo"], json!("did:plc:me"));
     assert_eq!(body["collection"], json!("app.bsky.feed.post"));
     assert_eq!(body["record"]["$type"], json!("app.bsky.feed.post"));
     assert_eq!(body["record"]["text"], json!("hello world"));
-    assert_eq!(body["record"]["createdAt"], json!("2026-01-15T10:00:00.000Z"));
+    assert_eq!(
+        body["record"]["createdAt"],
+        json!("2026-01-15T10:00:00.000Z")
+    );
     assert!(body["record"].get("reply").is_none());
 }
 
 #[test]
 fn send_body_threads_a_reply() {
     let target = "at://p/uri|pcid|at://r/uri|rcid";
-    let body = build_send_body("did:plc:me", "reply text", target, "2026-01-15T10:00:00.000Z");
-    assert_eq!(body["record"]["reply"]["parent"]["uri"], json!("at://p/uri"));
+    let body = build_send_body(
+        "did:plc:me",
+        "reply text",
+        target,
+        "2026-01-15T10:00:00.000Z",
+    );
+    assert_eq!(
+        body["record"]["reply"]["parent"]["uri"],
+        json!("at://p/uri")
+    );
     assert_eq!(body["record"]["reply"]["parent"]["cid"], json!("pcid"));
     assert_eq!(body["record"]["reply"]["root"]["uri"], json!("at://r/uri"));
     assert_eq!(body["record"]["reply"]["root"]["cid"], json!("rcid"));
@@ -226,7 +266,10 @@ fn xrpc_url_joins_the_method() {
     );
     // A trailing slash on the base is trimmed.
     assert_eq!(
-        xrpc_url("https://pds.example.com/", "app.bsky.notification.listNotifications"),
+        xrpc_url(
+            "https://pds.example.com/",
+            "app.bsky.notification.listNotifications"
+        ),
         "https://pds.example.com/xrpc/app.bsky.notification.listNotifications"
     );
 }
@@ -234,7 +277,10 @@ fn xrpc_url_joins_the_method() {
 #[test]
 fn timestamp_conversion_round_trips() {
     // Known epoch: 2020-01-01T00:00:00Z == 1577836800 s.
-    assert_eq!(iso8601_to_millis("2020-01-01T00:00:00.000Z"), 1_577_836_800_000);
+    assert_eq!(
+        iso8601_to_millis("2020-01-01T00:00:00.000Z"),
+        1_577_836_800_000
+    );
     assert_eq!(iso8601_to_millis("1970-01-01T00:00:00.000Z"), 0);
     assert_eq!(iso8601_to_millis("1970-01-01T00:00:01.500Z"), 1_500);
     // Fractional padding: ".1" → 100 ms, ".12" → 120 ms.
@@ -260,11 +306,16 @@ fn config_parses_matches_native_fields_and_defaults() {
     assert!(cfg.has_credentials());
 
     // Explicit service override, trailing slash trimmed by base_url().
-    let cfg = BlueskyConfig::from_json(r#"{"handle":"h","app_password":"p","service":"https://pds.example.com/"}"#);
+    let cfg = BlueskyConfig::from_json(
+        r#"{"handle":"h","app_password":"p","service":"https://pds.example.com/"}"#,
+    );
     assert_eq!(cfg.base_url(), "https://pds.example.com");
 
     // A withheld ("{}") or malformed section yields inert defaults.
     assert!(!BlueskyConfig::from_json("{}").has_credentials());
     assert!(!BlueskyConfig::from_json("not json").has_credentials());
-    assert_eq!(BlueskyConfig::from_json("{}").base_url(), "https://bsky.social");
+    assert_eq!(
+        BlueskyConfig::from_json("{}").base_url(),
+        "https://bsky.social"
+    );
 }

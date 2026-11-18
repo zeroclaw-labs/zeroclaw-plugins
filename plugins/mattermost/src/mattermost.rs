@@ -8,7 +8,7 @@
 //! `cargo test`.
 
 use serde::Deserialize;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
 /// The plugin's config section (`[channels.mattermost.<alias>]` for a mirror, or
 /// `[[plugins.entries.mattermost]].config` as a novel plugin). Field names match
@@ -126,7 +126,7 @@ pub fn extract_posts(response: &Value) -> Vec<Value> {
         return Vec::new();
     };
     let mut list: Vec<Value> = posts.values().cloned().collect();
-    list.sort_by_key(|p| post_create_at(p));
+    list.sort_by_key(post_create_at);
     list
 }
 
@@ -232,4 +232,16 @@ pub fn posts_url(base_url: &str) -> String {
 /// `GET /api/v4/users/me` — the bot-identity endpoint.
 pub fn me_url(base_url: &str) -> String {
     format!("{}/api/v4/users/me", base_url.trim_end_matches('/'))
+}
+
+/// The path of a request URL, without scheme, host, query or fragment. Error
+/// messages reach host logs, so they name the request this way rather than by
+/// the operator's server address or query parameters.
+pub fn url_path(url: &str) -> &str {
+    let rest = url.split_once("://").map_or(url, |(_, rest)| rest);
+    let tail = &rest[rest.find(['/', '?', '#']).unwrap_or(rest.len())..];
+    if !tail.starts_with('/') {
+        return "/";
+    }
+    tail.split(['?', '#']).next().unwrap_or("/")
 }

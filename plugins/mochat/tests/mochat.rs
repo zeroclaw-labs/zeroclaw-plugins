@@ -2,11 +2,11 @@
 //! wasm component runs, exercised with plain `cargo test` (no token, no network,
 //! no wasm).
 
-use serde_json::json;
 use mochat::mochat::{
-    DedupSet, MochatConfig, build_send_body, extract_messages, health_url, is_send_ok, message_id,
-    parse_message, receive_url, send_error, send_url,
+    build_send_body, extract_messages, health_url, is_send_ok, message_id, parse_message,
+    receive_url, send_error, send_url, DedupSet, MochatConfig,
 };
+use serde_json::json;
 
 #[test]
 fn config_parses_and_defaults() {
@@ -61,7 +61,10 @@ fn receive_url_appends_since_id_when_present() {
 
 #[test]
 fn send_and_health_urls() {
-    assert_eq!(send_url("https://m.test"), "https://m.test/api/message/send");
+    assert_eq!(
+        send_url("https://m.test"),
+        "https://m.test/api/message/send"
+    );
     assert_eq!(health_url("https://m.test"), "https://m.test/api/health");
 }
 

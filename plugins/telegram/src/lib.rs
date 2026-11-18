@@ -29,24 +29,29 @@ mod component {
     use serde_json::Value;
 
     use crate::telegram::{
-        Inbound, TelegramConfig, build_send_payload, chunk_text, extract_updates, is_user_allowed,
-        next_offset, parse_update, split_recipient,
+        build_send_payload, chunk_text, extract_updates, is_user_allowed, next_offset,
+        parse_update, split_recipient, Inbound, TelegramConfig,
     };
 
     use exports::zeroclaw::plugin::channel::{
         ApprovalRequest, ApprovalResponse, ChannelCapabilities, Guest as Channel, InboundMessage,
-        SendMessage, WebhookRejection,
+        SendMessage, WebhookRejection, WebhookRequest, WebhookResponse,
     };
     use exports::zeroclaw::plugin::plugin_info::Guest as PluginInfo;
+    use zeroclaw::plugin::logging::{self, LogLevel, PluginAction, PluginEvent, PluginOutcome};
+    use zeroclaw::plugin::{config, secrets};
 
     const PLUGIN_NAME: &str = "telegram";
+    /// Bound each connect well inside the host's 30 s call deadline, so an
+    /// unreachable address fails the request instead of the whole call.
+    const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
     const PLUGIN_VERSION: &str = env!("CARGO_PKG_VERSION");
     const MAX_MESSAGE_CHARS: usize = 4096;
 
     thread_local! {
         static CONFIG: RefCell<TelegramConfig> = RefCell::new(TelegramConfig::default());
         static OFFSET: Cell<i64> = const { Cell::new(0) };
-        static BUFFER: RefCell<VecDeque<Inbound>> = RefCell::new(VecDeque::new());
+        static BUFFER: RefCell<VecDeque<Inbound>> = const { RefCell::new(VecDeque::new()) };
         static SELF_HANDLE: RefCell<Option<String>> = const { RefCell::new(None) };
     }
 
@@ -62,6 +67,7 @@ mod component {
     fn get_json(url: &str) -> Result<Value, String> {
         waki::Client::new()
             .get(url)
+            .connect_timeout(CONNECT_TIMEOUT)
             .send()
             .map_err(|e| e.to_string())?
             .json::<Value>()
@@ -71,6 +77,7 @@ mod component {
     fn post_json(url: &str, body: &Value) -> Result<Value, String> {
         waki::Client::new()
             .post(url)
+            .connect_timeout(CONNECT_TIMEOUT)
             .json(body)
             .send()
             .map_err(|e| e.to_string())?
@@ -107,6 +114,56 @@ mod component {
         }
     }
 
+    /// Report a config or secret read the host refused or could not serve,
+    /// naming the key and the error kind, never a value.
+    fn report_read_failure(key: &str, kind: &str) {
+        logging::log_record(
+            LogLevel::Warn,
+            &PluginEvent {
+                function_name: "telegram::configure".to_string(),
+                action: PluginAction::Fail,
+                outcome: Some(PluginOutcome::Failure),
+                duration_ms: None,
+                attrs: None,
+                message: format!("telegram: could not read {key}: {kind}"),
+            },
+        );
+    }
+
+    /// The fixed name of a `config.get` failure; the variants carry no payload.
+    fn config_error_kind(error: config::ConfigError) -> &'static str {
+        match error {
+            config::ConfigError::AccessDenied => "access denied",
+            config::ConfigError::Unavailable => "unavailable",
+        }
+    }
+
+    /// The fixed name of a `secrets.get` failure; the variants carry no payload.
+    fn secret_error_kind(error: secrets::SecretError) -> &'static str {
+        match error {
+            secrets::SecretError::AccessDenied => "access denied",
+            secrets::SecretError::NotFound => "not found",
+            secrets::SecretError::Unavailable => "unavailable",
+        }
+    }
+
+    /// The instance's typed config, read when the host configures the
+    /// instance. `config.get` serves the public settings; the schema's
+    /// `x-secret` values reach the plugin only through `secrets.get`. A read
+    /// the host refuses is logged and leaves its field at the default, so a
+    /// misconfigured instance stays inert rather than half-configured.
+    fn load_config() -> TelegramConfig {
+        let public = config::get().unwrap_or_else(|error| {
+            report_read_failure("config", config_error_kind(error));
+            String::new()
+        });
+        let mut cfg = TelegramConfig::from_json(&public);
+        cfg.bot_token = secrets::get("bot_token")
+            .map_err(|error| report_read_failure("bot_token", secret_error_kind(error)))
+            .unwrap_or_default();
+        cfg
+    }
+
     struct TelegramChannel;
 
     impl PluginInfo for TelegramChannel {
@@ -123,8 +180,8 @@ mod component {
             PLUGIN_NAME.to_string()
         }
 
-        fn configure(config: String) -> Result<(), String> {
-            let cfg = TelegramConfig::from_json(&config);
+        fn configure() -> Result<(), String> {
+            let cfg = load_config();
             let handle = fetch_self_handle(&cfg);
             SELF_HANDLE.with(|h| *h.borrow_mut() = handle);
             CONFIG.with(|c| *c.borrow_mut() = cfg);
@@ -139,8 +196,12 @@ mod component {
             let (chat_id, thread) = split_recipient(&message.recipient);
             let url = endpoint(&cfg, "sendMessage");
             for chunk in chunk_text(&message.content, MAX_MESSAGE_CHARS) {
-                let body =
-                    build_send_payload(&chat_id, &chunk, thread.as_deref(), cfg.parse_mode.as_deref());
+                let body = build_send_payload(
+                    &chat_id,
+                    &chunk,
+                    thread.as_deref(),
+                    cfg.parse_mode.as_deref(),
+                );
                 let resp = post_json(&url, &body)?;
                 if resp.get("ok").and_then(Value::as_bool) != Some(true) {
                     // A rejected parse_mode (bad HTML/Markdown) is the common
@@ -275,10 +336,7 @@ mod component {
             None
         }
 
-        fn parse_webhook(
-            _headers: Vec<(String, String)>,
-            _body: Vec<u8>,
-        ) -> Result<Vec<InboundMessage>, WebhookRejection> {
+        fn parse_webhook(_request: WebhookRequest) -> Result<WebhookResponse, WebhookRejection> {
             Err(WebhookRejection::BadRequest(
                 "this channel does not serve webhooks".to_string(),
             ))

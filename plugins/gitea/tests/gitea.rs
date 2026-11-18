@@ -141,3 +141,24 @@ fn long_reply_is_chunked() {
     assert!(chunks.iter().all(|c| c.chars().count() <= 60_000));
     assert_eq!(chunks.concat(), text);
 }
+
+#[test]
+fn url_path_drops_host_query_and_fragment() {
+    assert_eq!(
+        gitea::gitea::url_path("https://server.example.org/api/v1/notifications?since=1&token=x#f"),
+        "/api/v1/notifications"
+    );
+    assert_eq!(gitea::gitea::url_path("https://server.example.org"), "/");
+    assert_eq!(
+        gitea::gitea::url_path("/relative/path?q=1"),
+        "/relative/path"
+    );
+}
+
+#[test]
+fn url_path_ignores_a_slash_in_the_query_of_a_pathless_url() {
+    assert_eq!(
+        gitea::gitea::url_path("https://server.example.org?x=/y"),
+        "/"
+    );
+}

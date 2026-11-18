@@ -23,8 +23,6 @@ mod component {
         features: ["plugins-wit-v0"],
     });
 
-    use std::collections::HashMap;
-
     use crate::redact::{redact, RedactConfig};
     use exports::zeroclaw::plugin::plugin_info::Guest as PluginInfo;
     use exports::zeroclaw::plugin::tool::{Guest as Tool, ToolResult};
@@ -38,11 +36,16 @@ mod component {
     const PLUGIN_VERSION: &str = env!("CARGO_PKG_VERSION");
     const TOOL_NAME: &str = "redact";
 
+    /// The host merges this plugin's validated config object into the call
+    /// arguments under the reserved `__config` key, after deleting any
+    /// model-supplied value of that name. It is captured as a raw `Value` so a
+    /// config-shaped problem is reported as a config error rather than
+    /// collapsing the whole argument parse into "invalid arguments".
     #[derive(serde::Deserialize)]
     struct ExecuteArgs {
         text: String,
         #[serde(rename = "__config", default)]
-        config: HashMap<String, String>,
+        config: serde_json::Value,
     }
 
     impl PluginInfo for RedactText {
@@ -99,7 +102,22 @@ mod component {
                 }
             };
 
-            let cfg = RedactConfig::from_section(&parsed.config);
+            let cfg = match RedactConfig::from_json(&parsed.config) {
+                Ok(cfg) => cfg,
+                Err(e) => {
+                    emit(
+                        PluginAction::Fail,
+                        PluginOutcome::Failure,
+                        "invalid config",
+                        None,
+                    );
+                    return Ok(ToolResult {
+                        success: false,
+                        output: String::new(),
+                        error: Some(format!("invalid config: {e}")),
+                    });
+                }
+            };
             let (output, count) = redact(&parsed.text, &cfg);
 
             emit(

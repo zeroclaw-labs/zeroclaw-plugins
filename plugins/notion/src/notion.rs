@@ -11,7 +11,7 @@
 //! HTTP (blocking `waki` `wasi:http` calls) and reuses this logic verbatim.
 
 use serde::Deserialize;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
 /// Notion rich-text property content cap (characters). Results longer than this
 /// are truncated before being written back.

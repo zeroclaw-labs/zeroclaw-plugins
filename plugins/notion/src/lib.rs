@@ -35,18 +35,23 @@ mod component {
     use serde_json::Value;
 
     use crate::notion::{
-        Inbound, NOTION_VERSION, NotionConfig, build_complete_payload, build_query_body,
-        build_recover_payload, build_status_update_payload, database_url, detect_status_type,
-        page_url, parse_pending, query_url,
+        build_complete_payload, build_query_body, build_recover_payload,
+        build_status_update_payload, database_url, detect_status_type, page_url, parse_pending,
+        query_url, Inbound, NotionConfig, NOTION_VERSION,
     };
 
     use exports::zeroclaw::plugin::channel::{
         ApprovalRequest, ApprovalResponse, ChannelCapabilities, Guest as Channel, InboundMessage,
-        SendMessage, WebhookRejection,
+        SendMessage, WebhookRejection, WebhookRequest, WebhookResponse,
     };
     use exports::zeroclaw::plugin::plugin_info::Guest as PluginInfo;
+    use zeroclaw::plugin::logging::{self, LogLevel, PluginAction, PluginEvent, PluginOutcome};
+    use zeroclaw::plugin::{config, secrets};
 
     const PLUGIN_NAME: &str = "notion";
+    /// Bound each connect well inside the host's 30 s call deadline, so an
+    /// unreachable address fails the request instead of the whole call.
+    const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
     const PLUGIN_VERSION: &str = env!("CARGO_PKG_VERSION");
 
     thread_local! {
@@ -54,7 +59,7 @@ mod component {
         // Detected once from the database schema: "status" or "select". `None`
         // until probed; the filters/payloads differ between the two types.
         static STATUS_TYPE: RefCell<Option<String>> = const { RefCell::new(None) };
-        static BUFFER: RefCell<VecDeque<Inbound>> = RefCell::new(VecDeque::new());
+        static BUFFER: RefCell<VecDeque<Inbound>> = const { RefCell::new(VecDeque::new()) };
     }
 
     fn now_millis() -> u64 {
@@ -70,6 +75,7 @@ mod component {
     fn get_json(url: &str, api_key: &str) -> Result<(u16, Value), String> {
         let resp = waki::Client::new()
             .get(url)
+            .connect_timeout(CONNECT_TIMEOUT)
             .header("Authorization", format!("Bearer {api_key}"))
             .header("Notion-Version", NOTION_VERSION)
             .send()
@@ -83,6 +89,7 @@ mod component {
     fn post_json(url: &str, api_key: &str, body: &Value) -> Result<(u16, Value), String> {
         let resp = waki::Client::new()
             .post(url)
+            .connect_timeout(CONNECT_TIMEOUT)
             .header("Authorization", format!("Bearer {api_key}"))
             .header("Notion-Version", NOTION_VERSION)
             .json(body)
@@ -97,6 +104,7 @@ mod component {
     fn patch_json(url: &str, api_key: &str, body: &Value) -> Result<(u16, Value), String> {
         let resp = waki::Client::new()
             .patch(url)
+            .connect_timeout(CONNECT_TIMEOUT)
             .header("Authorization", format!("Bearer {api_key}"))
             .header("Notion-Version", NOTION_VERSION)
             .json(body)
@@ -163,6 +171,56 @@ mod component {
         }
     }
 
+    /// Report a config or secret read the host refused or could not serve,
+    /// naming the key and the error kind, never a value.
+    fn report_read_failure(key: &str, kind: &str) {
+        logging::log_record(
+            LogLevel::Warn,
+            &PluginEvent {
+                function_name: "notion::configure".to_string(),
+                action: PluginAction::Fail,
+                outcome: Some(PluginOutcome::Failure),
+                duration_ms: None,
+                attrs: None,
+                message: format!("notion: could not read {key}: {kind}"),
+            },
+        );
+    }
+
+    /// The fixed name of a `config.get` failure; the variants carry no payload.
+    fn config_error_kind(error: config::ConfigError) -> &'static str {
+        match error {
+            config::ConfigError::AccessDenied => "access denied",
+            config::ConfigError::Unavailable => "unavailable",
+        }
+    }
+
+    /// The fixed name of a `secrets.get` failure; the variants carry no payload.
+    fn secret_error_kind(error: secrets::SecretError) -> &'static str {
+        match error {
+            secrets::SecretError::AccessDenied => "access denied",
+            secrets::SecretError::NotFound => "not found",
+            secrets::SecretError::Unavailable => "unavailable",
+        }
+    }
+
+    /// The instance's typed config, read when the host configures the
+    /// instance. `config.get` serves the public settings; the schema's
+    /// `x-secret` values reach the plugin only through `secrets.get`. A read
+    /// the host refuses is logged and leaves its field at the default, so a
+    /// misconfigured instance stays inert rather than half-configured.
+    fn load_config() -> NotionConfig {
+        let public = config::get().unwrap_or_else(|error| {
+            report_read_failure("config", config_error_kind(error));
+            String::new()
+        });
+        let mut cfg = NotionConfig::from_json(&public);
+        cfg.api_key = secrets::get("api_key")
+            .map_err(|error| report_read_failure("api_key", secret_error_kind(error)))
+            .unwrap_or_default();
+        cfg
+    }
+
     struct NotionChannel;
 
     impl PluginInfo for NotionChannel {
@@ -179,8 +237,8 @@ mod component {
             PLUGIN_NAME.to_string()
         }
 
-        fn configure(config: String) -> Result<(), String> {
-            let cfg = NotionConfig::from_json(&config);
+        fn configure() -> Result<(), String> {
+            let cfg = load_config();
             // Warm the status-property type (best effort) and run crash recovery
             // once at load; a missing/unreachable token never fails configure.
             if cfg.has_credentials() {
@@ -249,7 +307,8 @@ mod component {
                 // in `send`. If the claim write fails, leave the row for a later
                 // poll rather than deliver a task we cannot mark in-flight.
                 let purl = page_url(&cfg.api_base_url, &inb.id);
-                let claim = build_status_update_payload(&cfg.status_property, &status_type, "running");
+                let claim =
+                    build_status_update_payload(&cfg.status_property, &status_type, "running");
                 match patch_json(&purl, &cfg.api_key, &claim) {
                     Ok((s, _)) if s < 400 => {}
                     _ => continue,
@@ -350,10 +409,7 @@ mod component {
             None
         }
 
-        fn parse_webhook(
-            _headers: Vec<(String, String)>,
-            _body: Vec<u8>,
-        ) -> Result<Vec<InboundMessage>, WebhookRejection> {
+        fn parse_webhook(_request: WebhookRequest) -> Result<WebhookResponse, WebhookRejection> {
             Err(WebhookRejection::BadRequest(
                 "this channel does not serve webhooks".to_string(),
             ))

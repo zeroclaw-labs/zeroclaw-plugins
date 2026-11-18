@@ -1,0 +1,5 @@
+# Full zeroclaw-labs/zeroclaw commit whose wit/v0 is byte-identical to wit/next.
+# No released host includes it yet, so a plugin that binds wit/next must set
+# registry = false. Advance this pin and wit/next together in one reviewed
+# change; remove both once wit/UPSTREAM_REF reaches a release that includes it.
+407dbc2a49ffff8a7186a70ad8b9c4a721b1e3ee

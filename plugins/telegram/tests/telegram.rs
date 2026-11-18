@@ -4,8 +4,8 @@
 
 use serde_json::json;
 use telegram::telegram::{
-    TelegramConfig, build_send_payload, chunk_text, extract_updates, is_user_allowed, next_offset,
-    parse_update, split_recipient,
+    build_send_payload, chunk_text, extract_updates, is_user_allowed, next_offset, parse_update,
+    split_recipient, TelegramConfig,
 };
 
 fn update(text: &str, chat_id: i64, message_id: i64, username: Option<&str>) -> serde_json::Value {
@@ -50,7 +50,8 @@ fn forum_topic_scopes_the_reply_target() {
 #[test]
 fn non_text_and_non_message_updates_are_skipped() {
     assert!(parse_update(&json!({ "update_id": 1, "poll": {} })).is_none());
-    let no_text = json!({ "update_id": 1, "message": { "message_id": 1, "chat": {"id": 1}, "date": 0 } });
+    let no_text =
+        json!({ "update_id": 1, "message": { "message_id": 1, "chat": {"id": 1}, "date": 0 } });
     assert!(parse_update(&no_text).is_none());
 }
 
@@ -64,7 +65,10 @@ fn allow_list_semantics() {
     assert!(is_user_allowed(&["alice".into()], &["*".into()]));
     assert!(!is_user_allowed(&["alice".into()], &[]));
     assert!(is_user_allowed(&["alice".into()], &["@Alice".into()]));
-    assert!(is_user_allowed(&["42".into()], &["alice".into(), "42".into()]));
+    assert!(is_user_allowed(
+        &["42".into()],
+        &["alice".into(), "42".into()]
+    ));
     assert!(!is_user_allowed(&["mallory".into()], &["alice".into()]));
 }
 
@@ -105,7 +109,10 @@ fn long_text_is_chunked_under_the_limit() {
 fn extract_updates_honors_ok_flag() {
     let ok = json!({ "ok": true, "result": [ { "update_id": 5 }, { "update_id": 6 } ] });
     let got = extract_updates(&ok);
-    assert_eq!(got.iter().map(|(id, _)| *id).collect::<Vec<_>>(), vec![5, 6]);
+    assert_eq!(
+        got.iter().map(|(id, _)| *id).collect::<Vec<_>>(),
+        vec![5, 6]
+    );
 
     let not_ok = json!({ "ok": false, "description": "unauthorized" });
     assert!(extract_updates(&not_ok).is_empty());

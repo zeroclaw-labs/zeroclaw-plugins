@@ -1,105 +1,71 @@
-//! Host integration tests for the private-message path driven by the WASM shim.
+//! Host integration test: exercise the pure core end-to-end (config → REQ frame
+//! → decode a relay EVENT → inbound), the exact path the wasm shim drives over
+//! the host WebSocket. No wasm, no sockets.
 
 use nostr::nostr::{
-    build_direct_message, build_event_frame, decode_direct_message, decode_relay_message,
-    DmProtocol, NostrConfig, NostrEvent, NostrKeys, RelayMessage, SUBSCRIPTION_ID,
+    decode_relay_message, event_to_inbound, should_emit, NostrConfig, RelayMessage,
 };
 
-const ALICE_SECRET: &str = "0000000000000000000000000000000000000000000000000000000000000001";
-const BOB_SECRET: &str = "0000000000000000000000000000000000000000000000000000000000000002";
-
-fn config(secret: &str) -> NostrConfig {
-    NostrConfig::from_json(&format!(
-        r#"{{"private_key":"{secret}","relays":["wss://relay.example"]}}"#
-    ))
-    .unwrap()
-}
-
 #[test]
-fn nip17_conversation_round_trips_through_relay_frames() {
-    let alice = config(ALICE_SECRET);
-    let bob = config(BOB_SECRET);
+fn subscribe_then_receive_a_note() {
+    let cfg = NostrConfig::from_json(r#"{"relays":["wss://relay.example"]}"#);
+    assert_eq!(cfg.first_relay(), Some("wss://relay.example"));
 
-    let outbound = build_direct_message(
-        &alice.keys,
-        &bob.keys.public_key(),
-        "hello bob",
-        DmProtocol::Nip17,
-        1_700_000_000,
-    )
-    .unwrap();
-    let event_frame = build_event_frame(&outbound).unwrap();
-    assert!(event_frame.starts_with("[\"EVENT\","));
+    // 2) The shim would send this REQ frame on connect.
+    let req: Vec<serde_json::Value> = serde_json::from_str(&cfg.build_req_frame()).unwrap();
+    assert_eq!(req[0], serde_json::json!("REQ"));
+    assert_eq!(req[2]["kinds"], serde_json::json!([1]));
 
-    let relay_frame =
-        serde_json::to_string(&serde_json::json!(["EVENT", SUBSCRIPTION_ID, outbound])).unwrap();
-    let event = match decode_relay_message(&relay_frame).unwrap() {
+    // 3) The relay streams back a matching plaintext note.
+    let frame = include_str!("signed-note.json");
+    let event = match decode_relay_message(frame) {
         RelayMessage::Event { event, .. } => event,
-        other => panic!("expected relay event, got {other:?}"),
+        other => panic!("expected an EVENT, got {other:?}"),
     };
-    let inbound = decode_direct_message(&bob.keys, &event, 1_699_999_999)
-        .unwrap()
-        .unwrap();
-    assert_eq!(inbound.sender, alice.keys.public_key());
-    assert_eq!(inbound.content, "hello bob");
-    assert_eq!(inbound.protocol, DmProtocol::Nip17);
 
-    let reply = build_direct_message(
-        &bob.keys,
-        &inbound.sender,
-        "hello alice",
-        inbound.protocol,
-        1_700_000_001,
-    )
-    .unwrap();
-    let received = decode_direct_message(&alice.keys, &reply, 1_699_999_999)
-        .unwrap()
-        .unwrap();
-    assert_eq!(received.sender, bob.keys.public_key());
-    assert_eq!(received.content, "hello alice");
+    // 4) It passes the emit gate and maps onto an inbound message.
+    assert!(should_emit(&cfg, &event));
+    let inbound = event_to_inbound(&event, None);
+    assert_eq!(
+        inbound.sender,
+        "5be5e9478209674a96e60f1f037f6176540fd001fa1d64694770c56a7709c42c"
+    );
+    assert_eq!(inbound.reply_target, inbound.sender);
+    assert_eq!(inbound.content, "gm nostr");
+    assert_eq!(inbound.timestamp, 1_700_000_000_000);
 }
 
 #[test]
-fn nip04_sender_gets_a_nip04_reply() {
-    let alice = NostrKeys::from_private_key(ALICE_SECRET).unwrap();
-    let bob = NostrKeys::from_private_key(BOB_SECRET).unwrap();
-    let incoming =
-        build_direct_message(&alice, &bob.public_key(), "legacy", DmProtocol::Nip04, 50).unwrap();
-    let decoded = decode_direct_message(&bob, &incoming, 49).unwrap().unwrap();
-    let reply =
-        build_direct_message(&bob, &decoded.sender, "legacy reply", decoded.protocol, 51).unwrap();
-    let decoded_reply = decode_direct_message(&alice, &reply, 49).unwrap().unwrap();
-    assert_eq!(decoded_reply.content, "legacy reply");
-    assert_eq!(decoded_reply.protocol, DmProtocol::Nip04);
-}
-
-#[test]
-fn control_frames_never_decode_as_events() {
+fn control_frames_do_not_produce_inbound() {
+    // EOSE / NOTICE / OK / CLOSED / AUTH are not events, so nothing is emitted.
     for frame in [
-        r#"["EOSE","zeroclaw-dms"]"#,
-        r#"["NOTICE","hello"]"#,
-        r#"["OK","id",true,""]"#,
-        r#"["CLOSED","zeroclaw-dms","bye"]"#,
-        r#"["AUTH","challenge"]"#,
+        r#"["EOSE","sub1"]"#,
+        r#"["NOTICE","hi"]"#,
+        r#"["OK","x",true,""]"#,
+        r#"["CLOSED","sub1","bye"]"#,
+        r#"["AUTH","c"]"#,
     ] {
         assert!(!matches!(
-            decode_relay_message(frame).unwrap(),
+            decode_relay_message(frame),
             RelayMessage::Event { .. }
         ));
     }
 }
 
 #[test]
-fn unsigned_or_invalid_events_cannot_cross_the_boundary() {
-    let bob = NostrKeys::from_private_key(BOB_SECRET).unwrap();
-    let forged = NostrEvent {
-        id: None,
-        pubkey: bob.public_key(),
-        created_at: 1,
-        kind: 4,
-        tags: vec![vec!["p".to_string(), bob.public_key()]],
-        content: "not ciphertext".to_string(),
-        sig: None,
-    };
-    assert!(decode_direct_message(&bob, &forged, 0).is_err());
+fn delivery_cursor_round_trips_and_narrows_the_subscription() {
+    use nostr::nostr::{decode_cursor, encode_cursor, NostrConfig};
+
+    assert_eq!(
+        decode_cursor(&encode_cursor(1_700_000_000)),
+        Some(1_700_000_000)
+    );
+    assert_eq!(decode_cursor(b"not-a-number"), None);
+
+    let config = NostrConfig::default();
+    let fresh: serde_json::Value = serde_json::from_str(&config.build_req_frame()).unwrap();
+    assert!(fresh[2].get("since").is_none());
+    let resumed: serde_json::Value =
+        serde_json::from_str(&config.build_req_frame_since(Some(1_700_000_000))).unwrap();
+    assert_eq!(resumed[2]["since"], 1_700_000_000);
 }

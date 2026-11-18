@@ -6,11 +6,6 @@ connects your agent to a personal WeChat account through the **iLink Bot** API
 sends the agent's replies with `sendmessage` — all from a sandboxed
 `wasm32-wasip2` WIT component, with no native build.
 
-```bash
-zeroclaw plugin install wechat \
-  --registry https://raw.githubusercontent.com/JordanTheJet/zeroclaw-plugins/main/registry.json
-```
-
 ## Session / login
 
 The iLink Bot API is authorized with a `bot_token` that is obtained by scanning
@@ -18,41 +13,102 @@ a **QR code** with the WeChat phone app. That login is interactive (render a QR
 to a terminal, then long-poll for the scan), which cannot run inside the wasm
 sandbox. So this plugin does **not** perform the QR login itself — you establish
 the session once with the native `zeroclaw` `wechat` channel (which renders the
-QR and persists the token to `~/.zeroclaw/wechat/account.json`), then copy that
-`bot_token` into this plugin's config.
+QR and persists the token to `~/.zeroclaw/wechat/account.json`), then set that
+`bot_token` as this instance's secret.
 
-Without a `bot_token` the plugin is inert: `poll` returns nothing and `send`
-returns a clear error telling you the session is missing. If the token later
-expires (iLink `errcode -14`), the plugin drops it and goes inert again until a
-fresh token is supplied.
+The schema requires `bot_token`, so an instance without one does not
+activate. If the token later expires (iLink `errcode -14`), the plugin drops
+it and goes inert: `poll` returns nothing and `send` reports the missing
+session. Run the native QR login again, set the new token with the secret
+prompt, and restart the instance; the plugin reads the token when the host
+configures it.
+
+## Host requirement
+
+The plugin binds the host contract first released in ZeroClaw v0.8.6: typed
+config through `config.get`, and its credentials through `secrets.get`. Released
+versions up to ZeroClaw v0.8.5 do not load it. The host also needs the Cranelift
+backend, which compiles `.wasm` components (`--features plugins-wasm-cranelift`
+in a source build).
+
+`zeroclaw plugin install` instantiates the component before it installs
+anything, and `zeroclaw plugin info wechat` repeats that check, so an
+incompatible host refuses the package with the reason instead of failing at
+startup.
+
+## Install and bind an instance
+
+The plugin runs only as a named channel instance, `plugin.<alias>`. For an
+instance named `main`:
+
+```bash
+zeroclaw plugin install wechat --channel-alias main --egress declared
+```
+
+`--channel-alias` writes the `[channels.plugin.main]` binding and creates the
+instance's config entry, and `--egress declared` grants the hosts the manifest
+declares: `ilinkai.weixin.qq.com`. `--egress none` binds with no network reach
+instead, and `zeroclaw plugin bind` binds an already installed package.
+
+The instance key is `zpi1_` followed by the unpadded base64url of the JSON
+array `["wechat","channel","<alias>"]`; for `main` it is:
+
+`zpi1_WyJ3ZWNoYXQiLCJjaGFubmVsIiwibWFpbiJd`
+
+Set the credentials and settings, then enable the plugin system:
+
+```bash
+# Each secret prompts without echo and is stored encrypted.
+zeroclaw config set plugins.entries.zpi1_WyJ3ZWNoYXQiLCJjaGFubmVsIiwibWFpbiJd.config.bot_token
+zeroclaw config set plugins.enabled true
+```
+
+Route the instance to an agent and admit the senders it may answer:
+
+```toml
+[agents.assistant]
+channels = ["plugin.main"]
+
+[peer_groups.wechat_main]
+channel = "plugin.main"
+external_peers = ["<sender>"]
+```
+
+Restart the daemon. Do not also run the built-in channel with the same
+credentials, or both answer.
+
+Upgrading from an earlier version: this version reads only its instance's config
+entry, never `[channels.wechat.<alias>]` or an older `[[plugins.entries]]`
+record named `wechat`. Bind an instance and set the values again under its key,
+the credentials through the secret prompt.
 
 ## Configuration
 
-Settings come from the plugin's config section (requires the `config_read`
-permission). Field names mirror the native `WeChatConfig`, so a
-`[channels.wechat.<alias>]` section is fed to the plugin verbatim.
+Set each non-secret value with
+`zeroclaw config set --no-interactive plugins.entries.<instance-key>.config.<key> <value>`;
+without `--no-interactive` the command prompts for the value instead. Set a
+credential without a value, so the command prompts for it without echo.
+Strings are written as is; booleans, integers, and lists as JSON text, for
+example `'["a","b"]'`. The schema rejects keys it does not list.
 
-- `bot_token` — the iLink session token from a one-time native QR login (see
-  above). Required for the plugin to do anything. This is the one key the native
-  config does not itself store in `config.toml` (it lives in the state dir); set
-  it here explicitly.
-- `api_base_url` — iLink API origin; defaults to `https://ilinkai.weixin.qq.com`.
-  Override for a test mock.
-- `cdn_base_url` — iLink CDN origin; defaults to
-  `https://novac2c.cdn.weixin.qq.com/c2c`. Accepted for parity (media transfer
-  is future work in this plugin).
-- `state_dir` / `enabled` / `excluded_tools` — accepted for native-section
-  parity; the sandboxed plugin does not act on them.
+| Key | Type | Default | Meaning |
+|---|---|---|---|
+| `bot_token` | string, secret, required |  | The iLink session token from a one-time native QR login (see [Session / login](#session--login)). |
+| `api_base_url` | URL | `https://ilinkai.weixin.qq.com` | iLink API origin. Override for a test mock, and grant that host. |
+| `cdn_base_url` | URL | `https://novac2c.cdn.weixin.qq.com/c2c` | iLink CDN origin. Accepted for compatibility; media transfer is not implemented. |
+| `state_dir` | string |  | Accepted for compatibility; the plugin does not act on it. |
+| `enabled` | boolean |  | Accepted for compatibility; the plugin does not act on it. |
+| `excluded_tools` | list of strings |  | Accepted for compatibility; the plugin does not act on it. |
 
-On a host with the `provides` feature this plugin **mirrors** the built-in
-`wechat` channel and reads `[channels.wechat.<alias>]`; on older hosts it loads
-as a novel channel configured from `[[plugins.entries.wechat]].config`.
+The plugin reads its config and credentials when the host configures the
+instance, so a change takes effect after the instance restarts.
 
 ## Permissions
 
 - `http_client` — outbound calls to the iLink Bot API (TLS is performed
   host-side).
-- `config_read` — read the settings + session token above.
+- `config_read` — read the typed config through `config.get`; the credentials
+  arrive only through `secrets.get`.
 
 ## What's covered
 

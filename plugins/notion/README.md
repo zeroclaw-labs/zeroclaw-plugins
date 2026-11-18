@@ -9,44 +9,95 @@ all from a sandboxed `wasm32-wasip2` WIT component, with no native build.
 Unlike the chat channels, Notion is a **task queue**: inbound "messages" are
 pending rows and an outbound reply is a page update, not a chat post.
 
+## Host requirement
+
+The plugin binds the host contract first released in ZeroClaw v0.8.6: typed
+config through `config.get`, and its credentials through `secrets.get`. Released
+versions up to ZeroClaw v0.8.5 do not load it. The host also needs the Cranelift
+backend, which compiles `.wasm` components (`--features plugins-wasm-cranelift`
+in a source build).
+
+`zeroclaw plugin install` instantiates the component before it installs
+anything, and `zeroclaw plugin info notion` repeats that check, so an
+incompatible host refuses the package with the reason instead of failing at
+startup.
+
+## Install and bind an instance
+
+The plugin runs only as a named channel instance, `plugin.<alias>`. For an
+instance named `main`:
+
 ```bash
-zeroclaw plugin install notion \
-  --registry https://raw.githubusercontent.com/JordanTheJet/zeroclaw-plugins/main/registry.json
+zeroclaw plugin install notion --channel-alias main --egress declared
 ```
+
+`--channel-alias` writes the `[channels.plugin.main]` binding and creates the
+instance's config entry, and `--egress declared` grants the hosts the manifest
+declares: `api.notion.com`. `--egress none` binds with no network reach instead,
+and `zeroclaw plugin bind` binds an already installed package.
+
+The instance key is `zpi1_` followed by the unpadded base64url of the JSON
+array `["notion","channel","<alias>"]`; for `main` it is:
+
+`zpi1_WyJub3Rpb24iLCJjaGFubmVsIiwibWFpbiJd`
+
+Set the credentials and settings, then enable the plugin system:
+
+```bash
+# Each secret prompts without echo and is stored encrypted.
+zeroclaw config set plugins.entries.zpi1_WyJub3Rpb24iLCJjaGFubmVsIiwibWFpbiJd.config.api_key
+zeroclaw config set --no-interactive plugins.entries.zpi1_WyJub3Rpb24iLCJjaGFubmVsIiwibWFpbiJd.config.database_id YOUR_DATABASE_ID
+zeroclaw config set plugins.enabled true
+```
+
+Route the instance to an agent and admit the senders it may answer:
+
+```toml
+[agents.assistant]
+channels = ["plugin.main"]
+
+[peer_groups.notion_main]
+channel = "plugin.main"
+external_peers = ["<sender>"]
+```
+
+Restart the daemon.
+
+Upgrading from an earlier version: this version reads only its instance's config
+entry, never an older `[[plugins.entries]]` record named `notion`. Bind an
+instance and set the values again under its key, the credentials through the
+secret prompt.
 
 ## Configuration
 
-The token and settings come from the `[[plugins.entries]]` record named
-`notion` (requires the `config_read` permission). Fields are snake_case:
+Set each non-secret value with
+`zeroclaw config set --no-interactive plugins.entries.<instance-key>.config.<key> <value>`;
+without `--no-interactive` the command prompts for the value instead. Set a
+credential without a value, so the command prompts for it without echo.
+Strings are written as is; booleans, integers, and lists as JSON text, for
+example `'["a","b"]'`. The schema rejects keys it does not list.
 
-- `api_key` (required) — a Notion internal-integration token. Sent as
-  `Authorization: Bearer`.
-- `database_id` (required) — the database whose rows form the queue. The
-  integration must be shared with this database.
-- `status_property` — name of the `select`/`status` property holding the task
-  state (`pending` / `running` / `done`). Default `Status`. The plugin probes
-  the database schema to detect whether it is a `select` or `status` property
-  and adapts its filters and updates accordingly.
-- `input_property` — name of the `title`/`rich_text` property holding the task
-  prompt. Default `Input`.
-- `result_property` — name of the `rich_text` property the answer is written
-  back into. Default `Result`.
-- `poll_interval_secs` — poll cadence in seconds. Default `5`.
-- `max_concurrent` — maximum rows claimed (flipped to `running`) per poll tick.
-  Default `4`.
-- `recover_stale` — on load, reset rows stranded in `running` by a prior crash
-  back to `pending`. Default `true`.
-Notion is a novel channel because current ZeroClaw has no canonical
-`channels.notion` config family. Configure it under
-`[[plugins.entries]].config` and bind `plugin.notion` to the owning agent; the
-package intentionally omits `provides` so the host does not reject it as an
-unknown mirror.
+| Key | Type | Default | Meaning |
+|---|---|---|---|
+| `api_key` | string, secret, required |  | A Notion internal-integration token, sent as `Authorization: Bearer`. |
+| `database_id` | string, required |  | The database whose rows form the queue. Share the integration with this database. |
+| `status_property` | string | `Status` | The `select` or `status` property that holds the task state (`pending`, `running`, `done`). The plugin detects which kind it is. |
+| `input_property` | string | `Input` | The `title` or `rich_text` property that holds the task prompt. |
+| `result_property` | string | `Result` | The `rich_text` property the answer is written back into. |
+| `poll_interval_secs` | integer | `5` | Poll cadence in seconds. |
+| `max_concurrent` | integer | `4` | Most rows claimed (flipped to `running`) per poll. |
+| `recover_stale` | boolean | `true` | On load, reset rows a crash left in `running` back to `pending`. |
+| `api_base_url` | URL | `https://api.notion.com` | API origin. Override for a test mock, and grant that host. |
+
+The plugin reads its config and credentials when the host configures the
+instance, so a change takes effect after the instance restarts.
 
 ## Permissions
 
 - `http_client` — outbound calls to `api.notion.com` (TLS is performed
   host-side).
-- `config_read` — read the token, database id, and property names above.
+- `config_read` — read the typed config through `config.get`; the credentials
+  arrive only through `secrets.get`.
 
 ## Endpoints
 

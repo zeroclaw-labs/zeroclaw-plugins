@@ -1,14 +1,16 @@
 # Standalone crate (own [workspace]): built for wasm32-wasip2 as a channel
-# plugin component; the pure `discord` core (rlib) is host-tested with plain
-# `cargo test`. `waki` (blocking wasi:http) is a wasm-only dep so the host test
-# build never compiles it; the host `ws-client` import is only available in the
-# wasm component, so the gateway state machine lives in `lib.rs`, not the core.
+# plugin component; the pure `discord` core (rlib), including the gateway state
+# machine and the reply rules, is host-tested with plain `cargo test`. `wasip2`
+# provides the wasi:http bindings, used directly so every request carries
+# connect, first-byte, and between-bytes timeouts; it is a wasm-only dep so the
+# host test build never compiles it. The host `websocket` import exists only in
+# the wasm component, so `lib.rs` performs the I/O the core decides on.
 [package]
 name = "discord"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 license = "MIT OR Apache-2.0"
-description = "Discord channel plugin for ZeroClaw: Gateway WebSocket (host ws-client) + REST send over wasi:http."
+description = "Discord channel plugin for ZeroClaw: the Gateway over the host websocket resource, replies over REST through wasi:http."
 publish = false
 
 [lib]
@@ -19,9 +21,9 @@ wit-bindgen = "0.46"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
-# wasi:http client — only compiled for the wasm component, never on the host.
+# wasi:http bindings: only compiled for the wasm component, never on the host.
 [target.'cfg(target_family = "wasm")'.dependencies]
-waki = { version = "0.5.1", features = ["json"] }
+wasip2 = "1"
 
 [profile.release]
 opt-level = "s"
