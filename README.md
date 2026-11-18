@@ -21,9 +21,11 @@ plugins/<name>/        # published plugins — one wit-bindgen component per dir
   tests/               # host-run tests over the pure core (`cargo test`)
   manifest.toml        # name, version, wasm_path, capabilities, permissions
   README.md
-wit/v0/                # vendored ZeroClaw plugin WIT contract (the ABI plugins build against)
-wit/next/              # the unmerged host branch's contract (sockets, WebSocket, TLS profiles)
+wit/v0/                # vendored ZeroClaw plugin WIT contract, as ZeroClaw v0.8.6 ships it (pinned by wit/UPSTREAM_REF)
+wit/next/              # an earlier pre-release snapshot, kept for source-only plugins (pinned by wit/NEXT_REF)
+wit/unstable/          # the pre-v0.8.6 draft tree; plugins built against it do not install on v0.8.6
 registry.json          # GENERATED index — published by CI, do not hand-edit
+registry-retirements.json  # reviewed list of versions withdrawn from the index
 tools/build-registry.py
 .github/workflows/publish.yml
 ```
@@ -34,9 +36,23 @@ host grants only the capabilities a plugin's `manifest.toml` declares.
 
 `wit/v0/` is vendored **unmodified** from
 [zeroclaw `wit/v0`](https://github.com/zeroclaw-labs/zeroclaw/tree/master/wit/v0)
-— it is the contract the host actually implements. Plugins requiring host
-capabilities beyond it (e.g. HTTP egress) are blocked on the upstream host
-capability interface ([zeroclaw#8135](https://github.com/zeroclaw-labs/zeroclaw/issues/8135)).
+— it is the contract the host actually implements. Network access is
+deny-by-default: a plugin reaches only the hosts an operator grants its
+instance, for example with `--egress declared` when binding it.
+
+`wit/v0/` matches the contract ZeroClaw v0.8.6 ships: typed config through
+`config.get`, schema-designated secrets through `secrets.get`, the host
+`websocket` resource, sockets and durable `state`. Channel packages built
+against an earlier `wit/v0` or `wit/unstable/`, and redact-text before 0.3.0,
+do not install on v0.8.6. Their published versions are withdrawn through
+[`registry-retirements.json`](./registry-retirements.json), and each such
+channel package returns to the registry at a new version once it is ported.
+
+`wit/next/` is an earlier pre-release snapshot of the same contract, pinned by
+`wit/NEXT_REF`. It remains only for source plugins that have not moved to
+`wit/v0/` yet, and CI still withholds it from plugins headed for the registry
+(see [Host-gated source plugins](#host-gated-source-plugins)). CI checks
+`wit/v0/` and `wit/next/` byte for byte against their pins.
 
 ## How install works
 
@@ -82,6 +98,14 @@ it. Any source, manifest, compiler, or WIT change that changes the package bytes
 requires a new manifest version; new versions are appended so pinned installs
 continue resolving to their original artifact.
 
+A version that no supported host can run can be withdrawn from the index by
+listing it, with its archive digest and a reason, in
+[`registry-retirements.json`](./registry-retirements.json). The next
+publication drops it from `registry.json`; its release asset stays, and the
+version can never be published again: validation keeps the ledger
+append-only. See
+[Retiring a published version](./docs/ci.md#retiring-a-published-version).
+
 ## Add a plugin
 
 Start with the **plugin authoring guide series** in the ZeroClaw book
@@ -107,6 +131,8 @@ and its layout is the required format:
    `version`, `wasm_path`, `capabilities`, and only permissions the host
    actually supports (`http_client`, `file_read`, `file_write`, `config_read`,
    `memory_read`, `memory_write`, `socket_client`, `websocket_client`).
+   `state_read` and `state_write` are host-gated: released hosts reject them,
+   so CI accepts them only in a `registry = false` plugin.
 5. Build it:
    ```bash
    rustup target add wasm32-wasip2
@@ -115,7 +141,7 @@ and its layout is the required format:
 6. Run the repository validation:
    ```bash
    python3 -m unittest discover -s tools/tests -p 'test_*.py'
-   python3 tools/build-registry.py \
+   python3 tools/build-registry.py --retirements registry-retirements.json \
      --source-plugins plugins --check-metadata registry.json
    ```
 7. Open a PR. PR validation host-tests and builds every component against the
@@ -137,9 +163,26 @@ The publish workflow skips those plugins entirely: no build, no zip, and no
 `registry.json` entry. Remove the guard only when stock hosts can run the
 plugin and the protocol parity tests are in place.
 
+A plugin that needs an interface only an unreleased host provides binds
+`wit/next/` instead of `wit/v0/`, and it may request the host-gated
+`state_read` and `state_write` permissions. Both require `registry = false`:
+CI rejects a host-gated permission in a plugin headed for the registry, and
+builds such a plugin without `wit/next/`.
+
 ## Run your own registry
 
 ```bash
 zeroclaw plugin install <name> --registry https://my-host/registry.json
 export ZEROCLAW_PLUGIN_REGISTRY_URL=https://my-host/registry.json
 ```
+
+## Contributing
+
+See [CONTRIBUTING.md](./CONTRIBUTING.md), including how contributions are
+licensed under the ZeroClaw Contributor License Agreement.
+
+## License
+
+Dual-licensed under [MIT](./LICENSE-MIT) OR [Apache 2.0](./LICENSE-APACHE), at
+your option, except [`plugins/redact-text`](./plugins/redact-text), which is
+Apache 2.0 only. See [NOTICE](./NOTICE) for attribution.

@@ -1,12 +1,11 @@
-# wit/next
+# wit/v0 — zeroclaw:plugin@0.x
 
-The plugin contract of the unmerged zeroclaw host branch that adds
-host-mediated sockets (`sockets.wit`), WebSocket (`websocket.wit`), and TLS
-profiles. It is a byte copy of that branch's `wit/v0`; `NEXT_REF` pins the
-commit.
+Status: **Experimental** — This version is currently experimental and can be freely modified until the Component Model ABI ships; no `wit/v0/.frozen` marker is present.
 
-`wit/v0` stays byte-identical to released hosts, and `wit/unstable` keeps the
-older transport drafts the existing channel plugins bind to. A plugin binds
-here only while it is being ported to the new transport contract, and stays
-`registry = false` until the host ships it. When the host branch merges, these
-files become `wit/v0` and this directory goes away.
+Gated behind the `plugins-wit-v0` feature (see `@unstable` annotations).
+
+**Stability fence**: `wit/v0/.frozen` does not yet exist. It is created in a
+dedicated PR when `zeroclaw-plugins` ships the first 0.1.0 stable release with
+the Component Model path enabled. After that point only additive changes via
+`@since(version = 0.x.0)` are accepted in this directory. See `wit/VERSIONING.md`
+for how to create a stabilizing PR.
