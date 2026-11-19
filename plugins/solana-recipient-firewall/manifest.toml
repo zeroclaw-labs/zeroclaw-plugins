@@ -1,0 +1,42 @@
+name = "solana-recipient-firewall"
+version = "0.1.0"
+description = "Verify Solana recipients against an operator-pinned address book. Detects address poisoning (prefix+suffix lookalikes) and blocks unknown or claimed-but-mismatched destinations before any transaction is built."
+author = "infser"
+wasm_path = "solana_recipient_firewall.wasm"
+capabilities = ["tool"]
+# config_read and config_schema are a biconditional: the host rejects the
+# manifest if either appears without the other. The host validates the
+# operator's values against the schema below, materializes them as typed JSON,
+# and injects that object into execute args as `__config`.
+permissions = ["config_read"]
+
+# Every property is optional. Contacts and blocked list default to empty,
+# which means every recipient is REJECTED (fail-closed).
+[config_schema]
+"$schema" = "https://json-schema.org/draft/2020-12/schema"
+type = "object"
+additionalProperties = false
+
+[config_schema.properties.contacts]
+type = "string"
+description = "Semicolon-separated label=address pairs forming the operator's address book. Format: 'treasury=Addr1;validator=Addr2'. Every label must be unique; every address must be a valid base58 Solana pubkey."
+
+[config_schema.properties.blocked]
+type = "string"
+description = "Semicolon-separated Solana addresses that are always rejected, even if they appear in contacts. Format: 'Addr1;Addr2'."
+
+[config_schema.properties.allow_unknown]
+type = "boolean"
+description = "When true, valid but unknown addresses receive a HOLD verdict instead of REJECT. Does NOT bypass blocked, invalid, or lookalike checks. Defaults to false."
+
+[config_schema.properties.collision_prefix]
+type = "integer"
+minimum = 3
+maximum = 12
+description = "Number of leading characters compared during lookalike detection. Defaults to 4."
+
+[config_schema.properties.collision_suffix]
+type = "integer"
+minimum = 3
+maximum = 12
+description = "Number of trailing characters compared during lookalike detection. Defaults to 4."
