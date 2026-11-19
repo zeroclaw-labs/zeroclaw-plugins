@@ -1,0 +1,9 @@
+name = "sns-resolve"
+version = "0.1.0"
+description = "Resolve a Solana Name Service .sol domain to its owner's wallet address. Read-only; derives the on-chain name account and reads the owner. Fails closed on unregistered/unresolvable names."
+author = "Ertan Yeni"
+wasm_path = "sns_resolve.wasm"
+capabilities = ["tool"]
+# http_client: one read-only getAccountInfo over wasi:http. No writes, no keys.
+# config_read: optional operator-set rpc_url (defaults to public mainnet).
+permissions = ["http_client", "config_read"]
