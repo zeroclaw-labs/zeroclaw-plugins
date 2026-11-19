@@ -1,0 +1,7 @@
+name = "autopay-charge"
+version = "0.1.0"
+description = "Autonomously charge a user's wallet using delegated spending power, enforcing daily spend caps"
+author = "Terry"
+wasm_path = "autopay_charge.wasm"
+capabilities = ["tool"]
+permissions = ["http_client", "config_read"]

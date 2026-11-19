@@ -1,0 +1,29 @@
+[package]
+name = "autopay-charge"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Solana Agentic Autopay Suite: Enforce daily caps, sign and autonomously submit transfer transactions (T2)"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+wit-bindgen = "0.46"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+bs58 = "0.5"
+solana-plugin-core = { path = "../solana-plugin-core" }
+ed25519-dalek = { version = "2.1.1", default-features = false, features = ["alloc"] }
+
+[target.'cfg(target_family = "wasm")'.dependencies]
+waki = { version = "0.5.1", features = ["json"] }
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true
+codegen-units = 1
+
+[workspace]
