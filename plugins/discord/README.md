@@ -111,8 +111,9 @@ The default intents leave out `GUILDS`, which the built-in channel requests
 ## Behavior
 
 - **One network step per poll.** Discovery (`GET /gateway/bot`) and the
-  gateway dial never share a `poll-message` call. Nothing touches the network
-  in `configure`.
+  gateway dial never share a `poll-message` call, and a channel check shares
+  one only with reading the gateway. Nothing touches the network in
+  `configure`.
 - **Bounded requests.** Every REST request carries a 3 s connect timeout, 5 s
   to the first response byte, and 2 s between bytes, and reads at most 2 s of
   body. Discovery and each reply part therefore finish in about 12 s. A
@@ -162,12 +163,26 @@ The default intents leave out `GUILDS`, which the built-in channel requests
   more than 15 s into a send, so a long reply ends inside the host's default
   call deadline and reports how many parts were delivered. Errors carry the
   status and Discord's error code and message, nothing else from the response.
+- **Channel checks.** Discord sends no events from a channel the bot cannot
+  view, so such a `channel_ids` entry would stay silent. After READY, the plugin
+  checks each entry once with `GET /channels/{id}`: one entry per call, at least
+  1 s apart, only in a call that read every queued gateway event and has no
+  message waiting for the host, and with the health check's shorter timeouts. A
+  403 logs a warning naming the channel and the fix (View Channel for the bot's
+  role or member, or adding the bot to the server); a 404 or a 400 logs that
+  Discord knows no such channel. A rate-limited check waits as long as Discord
+  asks. A check that gets no response or a 5xx is tried twice more, 30 s and
+  then 60 s later; if it still fails, or fails any other way, an info record
+  says the entry is checked again in the next session. A resume continues the
+  checks, a new session starts them over (keeping any pending wait), and an
+  entry added by an edit is checked on a later call.
 - **Health.** Unhealthy while stopped, refused, or unable to read config.
   Healthy while a session is established. Before that, the check asks Discord
   whether the token works (`GET /users/@me`), as the built-in channel does, so
   `zeroclaw channel doctor` reports a rejected token.
 - **Logging.** State changes only: configuration, discovery, dials, handshakes,
-  sessions, disconnects with their close code, stops with their hint, and send
+  sessions, disconnects with their close code, stops with their hint,
+  configured channels the bot cannot use or could not check, and send
   failures. Never the token, a payload, or message content.
 
 ## Limits

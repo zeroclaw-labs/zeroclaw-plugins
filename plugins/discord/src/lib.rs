@@ -35,10 +35,10 @@ mod component {
     use serde_json::{json, Value};
 
     use crate::discord::{
-        bot_user_id_from_token, chunk_text, deliver, effective_recipient, gateway_ws_url,
-        parse_gateway_bot, url_host, Beat, ConnectFailure, Disconnect, DiscordConfig, Discovery,
-        FrameAction, Gateway, Handshake, Health, Inbound, Phase, ReplyTransport, Step,
-        MAX_MESSAGE_CHARS,
+        bot_user_id_from_token, chunk_text, classify_channel, deliver, effective_recipient,
+        gateway_ws_url, parse_gateway_bot, url_host, Beat, ChannelAccess, ChannelChecks,
+        CheckReport, ConnectFailure, Disconnect, DiscordConfig, Discovery, FrameAction, Gateway,
+        Handshake, Health, Inbound, Phase, ReplyTransport, Step, MAX_MESSAGE_CHARS,
     };
 
     use exports::zeroclaw::plugin::channel::{
@@ -93,6 +93,8 @@ mod component {
         /// `config.get` failed on the last poll; the gateway is paused.
         config_unavailable: bool,
         binary_frame_logged: bool,
+        /// Which `channel_ids` entries this session has checked.
+        channel_checks: ChannelChecks,
     }
 
     thread_local! {
@@ -180,7 +182,8 @@ mod component {
             max_body: 64 * 1024,
         };
 
-        /// The health probe: inside `channel doctor`'s 10 s limit.
+        /// The health probe, inside `channel doctor`'s 10 s limit, and the
+        /// channel checks, which share a call with a gateway pump.
         pub const PROBE: Limits = Limits {
             connect: Duration::from_secs(2),
             first_byte: Duration::from_secs(3),
@@ -393,7 +396,10 @@ mod component {
                         self.pump(cfg);
                     }
                 }
-                Step::Pump => self.pump(cfg),
+                Step::Pump => {
+                    let caught_up = self.pump(cfg);
+                    self.check_channel(cfg, caught_up);
+                }
             }
             self.report_stop(&before, cfg);
         }
@@ -524,18 +530,19 @@ mod component {
             }
         }
 
-        /// Read queued events, send any owed handshake, and heartbeat.
-        fn pump(&mut self, cfg: &DiscordConfig) {
+        /// Read queued events, send any owed handshake, and heartbeat. Returns
+        /// whether every queued event was read.
+        fn pump(&mut self, cfg: &DiscordConfig) -> bool {
             if self.connection.is_none() {
                 self.disconnect(Disconnect::Transport);
-                return;
+                return false;
             }
             let mut events = 0;
             let mut waits = 0;
             let mut caught_up = false;
             while events < MAX_EVENTS_PER_POLL && self.inbox.len() < MAX_QUEUED_MESSAGES {
                 let Some(connection) = self.connection.as_ref() else {
-                    return;
+                    return false;
                 };
                 match connection.receive() {
                     Ok(Some(Event::Message(Message::Text(text)))) => {
@@ -548,7 +555,7 @@ mod component {
                     }
                     Ok(Some(event @ (Event::Closed(_) | Event::Failed(_)))) => {
                         self.terminal(event);
-                        return;
+                        return false;
                     }
                     Ok(None) if events > 0 && waits < MAX_FLOW_WAITS => {
                         waits += 1;
@@ -562,18 +569,18 @@ mod component {
                     Err(WebsocketError::Unavailable) => break,
                     Err(_) => {
                         self.disconnect(Disconnect::Transport);
-                        return;
+                        return false;
                     }
                 }
                 if self.connection.is_none() {
-                    return;
+                    return false;
                 }
             }
             if let Some(handshake) = self.gateway.owed_handshake().cloned() {
                 self.send_handshake(&handshake, cfg);
             }
             if self.connection.is_none() {
-                return;
+                return false;
             }
             if self.gateway.handshake_overdue(now_ms()) {
                 log(
@@ -584,7 +591,7 @@ mod component {
                     json!({}),
                 );
                 self.disconnect(Disconnect::HandshakeTimeout);
-                return;
+                return false;
             }
             match self.gateway.heartbeat_step(now_ms(), caught_up) {
                 Beat::Idle => {}
@@ -604,6 +611,7 @@ mod component {
                     self.disconnect(Disconnect::Zombie);
                 }
             }
+            caught_up
         }
 
         fn on_text(&mut self, text: &str, cfg: &DiscordConfig) {
@@ -621,7 +629,8 @@ mod component {
             }
         }
 
-        fn identified(&self, resumed: bool) {
+        fn identified(&mut self, resumed: bool) {
+            self.channel_checks.on_identified(now_ms(), resumed);
             log(
                 LogLevel::Info,
                 PluginAction::Connect,
@@ -641,6 +650,55 @@ mod component {
                     "discord: the gateway reports a different bot id than the token",
                     json!({}),
                 );
+            }
+        }
+
+        /// Check one `channel_ids` entry, when one is due, with
+        /// `GET /channels/{id}`. Only in a call that pumped, never beside
+        /// discovery or a dial; [`ChannelChecks::due`] also requires a session,
+        /// a pump that caught up, and no message waiting for the host.
+        fn check_channel(&mut self, cfg: &DiscordConfig, caught_up: bool) {
+            let idle = caught_up && self.inbox.is_empty();
+            let Some(id) = self.channel_checks.due(now_ms(), cfg, &self.gateway, idle) else {
+                return;
+            };
+            let url = format!("{}/channels/{id}", cfg.api_base);
+            let response = match bot_token() {
+                Ok(token) => authorized_get(&url, &token, &http::PROBE),
+                // Retried on a later call.
+                Err(SecretError::Unavailable) => return,
+                Err(error) => Err(format!("bot_token unavailable ({})", error.name())),
+            };
+            let (access, error) = match response {
+                Ok((status, body)) => (classify_channel(status, &body), None),
+                Err(error) => (ChannelAccess::Failed { status: 0 }, Some(error)),
+            };
+            match self.channel_checks.on_checked(now_ms(), id, &access) {
+                CheckReport::Quiet => {}
+                CheckReport::Unusable => log(
+                    LogLevel::Warn,
+                    PluginAction::Validate,
+                    Some(PluginOutcome::Failure),
+                    if access == ChannelAccess::Hidden {
+                        "discord: the bot cannot view a configured channel"
+                    } else {
+                        "discord: a configured channel does not exist"
+                    },
+                    json!({ "channel_id": id, "hint": access.hint() }),
+                ),
+                CheckReport::GaveUp => {
+                    let status = match access {
+                        ChannelAccess::Failed { status } => status,
+                        _ => 0,
+                    };
+                    log(
+                        LogLevel::Info,
+                        PluginAction::Validate,
+                        Some(PluginOutcome::Failure),
+                        "discord: could not check a configured channel; it is checked again in the next session",
+                        json!({ "channel_id": id, "status": status, "error": error }),
+                    );
+                }
             }
         }
 
@@ -877,6 +935,7 @@ mod component {
                 self_id,
                 config_unavailable: false,
                 binary_frame_logged: false,
+                channel_checks: ChannelChecks::default(),
             };
             INSTANCE.with(|cell| *cell.borrow_mut() = Some(instance));
             log(
