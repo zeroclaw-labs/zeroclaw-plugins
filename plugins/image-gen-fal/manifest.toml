@@ -1,0 +1,13 @@
+name = "image-gen-fal"
+version = "0.2.0"
+description = "Generate images from text prompts using fal.ai Flux models"
+author = "ZeroClaw Labs"
+wasm_path = "image_gen_fal.wasm"
+capabilities = ["tool"]
+# http_client: POST to https://fal.run/<model>; TLS is performed host-side.
+# config_read: the host injects this plugin's own config section (api_key) into
+# execute args as `__config`. The 0.1.0 release used `env_read` to pull
+# FAL_API_KEY straight from the process environment; raw env access was removed
+# from plugins in zeroclaw#8137, so the credential is now config-scoped per
+# alias and the plugin cannot see the host's wider environment.
+permissions = ["http_client", "config_read"]
