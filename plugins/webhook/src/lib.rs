@@ -22,12 +22,11 @@ pub mod webhook;
 #[cfg(target_family = "wasm")]
 mod component {
     wit_bindgen::generate!({
-        path: "../../wit/unstable",
+        path: "../../wit/v0",
         world: "channel-plugin",
         features: ["plugins-wit-v0"],
     });
 
-    use std::cell::{Cell, RefCell};
     use std::time::Duration;
 
     use crate::webhook::{
@@ -36,19 +35,67 @@ mod component {
 
     use exports::zeroclaw::plugin::channel::{
         ApprovalRequest, ApprovalResponse, ChannelCapabilities, Guest as Channel, InboundMessage,
-        SendMessage, WebhookRejection,
+        SendMessage, WebhookRejection, WebhookRequest, WebhookResponse,
     };
     use exports::zeroclaw::plugin::plugin_info::Guest as PluginInfo;
+    use zeroclaw::plugin::logging::{self, LogLevel, PluginAction, PluginEvent, PluginOutcome};
+    use zeroclaw::plugin::{config, secrets};
 
     const PLUGIN_NAME: &str = "webhook";
-    const PLUGIN_VERSION: &str = "0.1.0";
+    const PLUGIN_VERSION: &str = env!("CARGO_PKG_VERSION");
     const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
-    thread_local! {
-        static CONFIG: RefCell<WebhookConfig> = RefCell::new(WebhookConfig::default());
-        /// Monotonic inbound counter for the message id (`webhook_<seq>`),
-        /// mirroring the native channel's sequence.
-        static SEQ: Cell<u64> = const { Cell::new(0) };
+    /// Report a config or secret read the host refused or could not serve,
+    /// naming the key and the error kind, never a value.
+    fn report_read_failure(key: &str, kind: &str) {
+        logging::log_record(
+            LogLevel::Warn,
+            &PluginEvent {
+                function_name: "webhook::read_config".to_string(),
+                action: PluginAction::Fail,
+                outcome: Some(PluginOutcome::Failure),
+                duration_ms: None,
+                attrs: None,
+                message: format!("webhook: could not read {key}: {kind}"),
+            },
+        );
+    }
+
+    /// The fixed name of a `config.get` failure; the variants carry no payload.
+    fn config_error_kind(error: config::ConfigError) -> &'static str {
+        match error {
+            config::ConfigError::AccessDenied => "access denied",
+            config::ConfigError::Unavailable => "unavailable",
+        }
+    }
+
+    /// The fixed name of a `secrets.get` failure; the variants carry no payload.
+    fn secret_error_kind(error: secrets::SecretError) -> &'static str {
+        match error {
+            secrets::SecretError::AccessDenied => "access denied",
+            secrets::SecretError::NotFound => "not found",
+            secrets::SecretError::Unavailable => "unavailable",
+        }
+    }
+
+    fn public_config() -> Result<WebhookConfig, String> {
+        let public = config::get().map_err(|error| {
+            report_read_failure("config", config_error_kind(error));
+            "webhook: public configuration unavailable"
+        })?;
+        serde_json::from_str(&public)
+            .map_err(|_| "webhook: invalid public configuration".to_string())
+    }
+
+    fn optional_secret(key: &str) -> Result<Option<String>, String> {
+        match secrets::get(key) {
+            Ok(value) => Ok(Some(value)),
+            Err(secrets::SecretError::NotFound) => Ok(None),
+            Err(error) => {
+                report_read_failure(key, secret_error_kind(error));
+                Err(format!("webhook: cannot read {key}"))
+            }
+        }
     }
 
     fn header_get(headers: &[(String, String)], name: &str) -> Option<String> {
@@ -59,13 +106,8 @@ mod component {
     }
 
     fn to_wit(inb: Inbound) -> InboundMessage {
-        let seq = SEQ.with(|c| {
-            let v = c.get();
-            c.set(v.wrapping_add(1));
-            v
-        });
         InboundMessage {
-            id: format!("webhook_{seq}"),
+            id: inb.id,
             sender: inb.sender,
             reply_target: inb.reply_target,
             content: inb.content,
@@ -95,18 +137,18 @@ mod component {
             PLUGIN_NAME.to_string()
         }
 
-        fn configure(config: String) -> Result<(), String> {
-            CONFIG.with(|c| *c.borrow_mut() = WebhookConfig::from_json(&config));
-            Ok(())
+        fn configure() -> Result<(), String> {
+            public_config().map(|_| ())
         }
 
         fn send(message: SendMessage) -> Result<(), String> {
-            let cfg = CONFIG.with(|c| c.borrow().clone());
+            let cfg = public_config()?;
             // No outbound URL configured → drop silently (matches the native
             // channel, which logs and returns Ok).
             let Some(url) = cfg.send_url().map(str::to_string) else {
                 return Ok(());
             };
+            let auth_header = optional_secret("auth_header")?;
             let body = build_outgoing(
                 &message.content,
                 message.thread_ts.as_deref(),
@@ -120,7 +162,7 @@ mod component {
             }
             .header("Content-Type", "application/json")
             .connect_timeout(CONNECT_TIMEOUT);
-            if let Some(auth) = cfg.auth_header() {
+            if let Some(auth) = WebhookConfig::auth_header_value(auth_header.as_deref()) {
                 req = req.header("Authorization", auth);
             }
 
@@ -152,26 +194,29 @@ mod component {
             Some(WEBHOOK_PATH.to_string())
         }
 
-        fn parse_webhook(
-            headers: Vec<(String, String)>,
-            body: Vec<u8>,
-        ) -> Result<Vec<InboundMessage>, WebhookRejection> {
-            let method = header_get(&headers, "x-webhook-method").unwrap_or_default();
+        fn parse_webhook(request: WebhookRequest) -> Result<WebhookResponse, WebhookRejection> {
+            let headers = request.headers;
+            let body = request.body;
+            let method = &request.method;
             // Generic webhook has no GET verification; ack a GET with nothing.
             if method.eq_ignore_ascii_case("GET") {
-                return Ok(Vec::new());
+                return Ok(WebhookResponse::Reply(String::new()));
             }
 
-            let cfg = CONFIG.with(|c| c.borrow().clone());
+            let secret = optional_secret("secret").map_err(WebhookRejection::Unauthorized)?;
             let signature = header_get(&headers, "x-webhook-signature");
-            if !verify_signature(cfg.secret(), &body, signature.as_deref()) {
+            if !verify_signature(
+                WebhookConfig::secret_value(secret.as_deref()),
+                &body,
+                signature.as_deref(),
+            ) {
                 return Err(WebhookRejection::Unauthorized(
                     "webhook: X-Webhook-Signature verification failed".to_string(),
                 ));
             }
 
             let inbound = parse_incoming(&body).map_err(WebhookRejection::BadRequest)?;
-            Ok(vec![to_wit(inbound)])
+            Ok(WebhookResponse::Messages(vec![to_wit(inbound)]))
         }
 
         // ── capability-gated stubs (documented WIT defaults) ──
