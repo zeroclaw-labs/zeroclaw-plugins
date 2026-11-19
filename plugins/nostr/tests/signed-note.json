@@ -1,0 +1,13 @@
+[
+  "EVENT",
+  "sub1",
+  {
+    "content": "gm nostr",
+    "created_at": 1700000000,
+    "id": "5bfd53c5af5f55f4690b7c910d018e40f6713d33237641f8aa03f3d6a062d45d",
+    "kind": 1,
+    "pubkey": "5be5e9478209674a96e60f1f037f6176540fd001fa1d64694770c56a7709c42c",
+    "sig": "8aaf99302ef9dbe194f7586ee4b8e7a61d74886dee9e4399d8a65a0f2aa341bb8bbe92304263242c84bbeca7dc9b884949fec9dda41ae26fa64220f5f2c6c049",
+    "tags": []
+  }
+]
