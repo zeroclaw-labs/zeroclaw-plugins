@@ -1,0 +1,20 @@
+name = "iris-chat"
+version = "0.2.0"
+description = "Iris Chat: Signal-like Nostr Double Ratchet messaging without phone numbers or signup. https://irischat.org"
+author = "Iris"
+wasm_path = "iris_chat.wasm"
+capabilities = ["channel"]
+permissions = ["config_read", "http_client"]
+
+[config_schema]
+type = "object"
+additionalProperties = false
+required = ["owner"]
+
+[config_schema.properties.owner]
+type = "string"
+pattern = "^[0-9a-f]{64}$"
+description = "Approved Iris contact, matching the separately paired loopback bridge."
+
+# This local bridge is an explicit operator grant, not an Internet destination.
+# Grant 127.0.0.1 under both egress_hosts and egress_allow_private for this instance.
