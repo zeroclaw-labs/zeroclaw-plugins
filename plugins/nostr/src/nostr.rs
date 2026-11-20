@@ -1,26 +1,9 @@
-//! Pure Nostr relay-protocol logic — no wasm, no sockets, no host deps.
-//!
-//! This is the `rlib` half of the plugin. It knows only how to:
-//!   * parse the plugin's config section (`[channels.nostr.<alias>]`),
-//!   * build the `["REQ", ...]` subscription frame sent to a relay,
-//!   * decode a relay's `["EVENT", ...]` / `EOSE` / `NOTICE` / `OK` / `CLOSED`
-//!     / `AUTH` text frames, and
-//!   * map a received kind-1 note event onto the host's inbound-message fields.
-//!
-//! It performs no I/O: the `#[cfg(target_family = "wasm")]` component shim in
-//! `lib.rs` owns the host-mediated WebSocket (`ws-client`) and reuses this logic
-//! verbatim, so all the interesting behavior is covered by a plain host
-//! `cargo test`.
-//!
-//! Scope (v0.1.0): **receive-only, plaintext notes**. We subscribe to kind-1
-//! notes (public notes / mentions) and surface them as inbound messages. Two
-//! deliberate deferrals, both because they need secp256k1 (schnorr) + AES that
-//! are too heavy for this pure core: kind-4 (NIP-04) and NIP-17 encrypted DMs
-//! are not decrypted, and outbound `send` (which must schnorr-sign an event) is
-//! not implemented. See the README for the follow-up plan.
+//! Public Nostr feed configuration, signed-event validation and channel-message mapping.
 
+use k256::schnorr::{signature::hazmat::PrehashVerifier, Signature, VerifyingKey};
 use serde::Deserialize;
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 
 /// Default relays, mirroring the native `default_nostr_relays()` so an operator
 /// who omits `relays` still connects to a working set.
@@ -52,13 +35,8 @@ pub struct NostrConfig {
     pub relays: Vec<String>,
     /// Our own public key in 64-char hex, when known. When set we narrow the
     /// subscription to notes that `#p`-tag us (i.e. mentions/replies); when
-    /// absent we sample the relay's recent kind-1 notes. The native channel
-    /// derives this from `private_key`; this pure core cannot (no secp256k1),
-    /// so it is read explicitly and is optional.
+    /// absent we subscribe to recent public notes.
     pub pubkey: Option<String>,
-    /// Private key (hex or nsec). Retained for a future signed `send`; unused in
-    /// this receive-only build.
-    pub private_key: Option<String>,
     /// Event kinds to subscribe to. Defaults to `[1]` (plaintext notes).
     pub kinds: Vec<u64>,
     /// Subscription id used in the `REQ` frame.
@@ -68,6 +46,9 @@ pub struct NostrConfig {
     /// Sender allow-list (hex pubkeys or `"*"`). Empty = allow everyone
     /// (mirrors the sibling Telegram plugin's `allowed_users` semantics).
     pub allowed_pubkeys: Vec<String>,
+    /// Host-configured TLS profile for the relay (a private CA or a client
+    /// certificate). `None` uses the roots the host already trusts.
+    pub tls_profile: Option<String>,
 }
 
 impl Default for NostrConfig {
@@ -75,11 +56,11 @@ impl Default for NostrConfig {
         Self {
             relays: DEFAULT_RELAYS.iter().map(|s| s.to_string()).collect(),
             pubkey: None,
-            private_key: None,
             kinds: vec![KIND_TEXT_NOTE],
             subscription_id: DEFAULT_SUBSCRIPTION_ID.to_string(),
             limit: DEFAULT_LIMIT,
             allowed_pubkeys: Vec::new(),
+            tls_profile: None,
         }
     }
 }
@@ -100,10 +81,6 @@ struct RawConfig {
     #[serde(default)]
     public_key: Option<String>,
     #[serde(default)]
-    private_key: Option<String>,
-    #[serde(default)]
-    secret_key: Option<String>,
-    #[serde(default)]
     kinds: Option<Vec<u64>>,
     #[serde(default)]
     subscription_id: Option<String>,
@@ -111,6 +88,8 @@ struct RawConfig {
     limit: Option<u64>,
     #[serde(default)]
     allowed_pubkeys: Option<Vec<String>>,
+    #[serde(default)]
+    tls_profile: Option<String>,
 }
 
 impl NostrConfig {
@@ -136,12 +115,6 @@ impl NostrConfig {
             .pubkey
             .or(raw.public_key)
             .and_then(|p| normalize_pubkey(&p));
-
-        let private_key = raw
-            .private_key
-            .or(raw.secret_key)
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty());
 
         let kinds = match raw.kinds {
             Some(k) if !k.is_empty() => k,
@@ -178,11 +151,11 @@ impl NostrConfig {
         NostrConfig {
             relays,
             pubkey,
-            private_key,
             kinds,
             subscription_id,
             limit,
             allowed_pubkeys,
+            tls_profile: raw.tls_profile.filter(|p| !p.trim().is_empty()),
         }
     }
 
@@ -196,10 +169,19 @@ impl NostrConfig {
     /// us (mentions/replies); otherwise it samples recent notes of the
     /// configured `kinds`.
     pub fn build_req_frame(&self) -> String {
+        self.build_req_frame_since(None)
+    }
+
+    /// The `REQ` frame, asking only for notes created at or after `since`
+    /// (unix seconds) when a delivery cursor is known.
+    pub fn build_req_frame_since(&self, since: Option<u64>) -> String {
         let mut filter = serde_json::Map::new();
         filter.insert("kinds".to_string(), json!(self.kinds));
         if self.limit > 0 {
             filter.insert("limit".to_string(), json!(self.limit));
+        }
+        if let Some(since) = since {
+            filter.insert("since".to_string(), json!(since));
         }
         if let Some(pk) = &self.pubkey {
             filter.insert("#p".to_string(), json!([pk]));
@@ -212,6 +194,21 @@ impl NostrConfig {
     pub fn is_pubkey_allowed(&self, pubkey_hex: &str) -> bool {
         is_pubkey_allowed(&self.allowed_pubkeys, pubkey_hex)
     }
+}
+
+/// Durable-state key for the delivery cursor: the `created_at` of the newest
+/// note this instance has delivered.
+pub const CURSOR_KEY: &str = "subscription-cursor";
+
+/// Encode a delivery cursor for durable state.
+pub fn encode_cursor(created_at: u64) -> Vec<u8> {
+    created_at.to_string().into_bytes()
+}
+
+/// Decode a stored delivery cursor; `None` for anything malformed, which the
+/// caller treats as "no cursor" rather than as an error.
+pub fn decode_cursor(bytes: &[u8]) -> Option<u64> {
+    std::str::from_utf8(bytes).ok()?.trim().parse().ok()
 }
 
 /// Trim, drop empties, and de-duplicate while preserving first-seen order.
@@ -252,20 +249,40 @@ pub fn is_pubkey_allowed(allowed: &[String], pubkey_hex: &str) -> bool {
     allowed.iter().any(|a| a.eq_ignore_ascii_case(&target))
 }
 
-/// A Nostr event, decoded from an `["EVENT", ...]` frame. Only the fields this
-/// plugin needs are captured; `tags` and other members are ignored.
+/// NIP-01 signed event. Verify both the event ID and its author's signature.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct NostrEvent {
-    #[serde(default)]
     pub id: String,
-    #[serde(default)]
     pub pubkey: String,
-    #[serde(default)]
     pub created_at: u64,
-    #[serde(default)]
     pub kind: u64,
-    #[serde(default)]
     pub content: String,
+    pub tags: Vec<Vec<String>>,
+    pub sig: String,
+}
+
+impl NostrEvent {
+    fn verify(&self) -> Option<()> {
+        if self.id.len() != 64 || self.pubkey.len() != 64 || self.sig.len() != 128 {
+            return None;
+        }
+        let serialized = serde_json::to_vec(&(
+            0,
+            &self.pubkey,
+            self.created_at,
+            self.kind,
+            &self.tags,
+            &self.content,
+        ))
+        .ok()?;
+        let id = Sha256::digest(serialized);
+        if hex::encode(id) != self.id {
+            return None;
+        }
+        let key = VerifyingKey::from_bytes(&hex::decode(&self.pubkey).ok()?).ok()?;
+        let signature = Signature::try_from(hex::decode(&self.sig).ok()?.as_slice()).ok()?;
+        key.verify_prehash(&id, &signature).ok()
+    }
 }
 
 /// A decoded relay → client message (NIP-01 / NIP-42 wire frames).
@@ -308,11 +325,11 @@ pub fn decode_relay_message(text: &str) -> RelayMessage {
     match tag {
         "EVENT" => match arr.get(2).cloned() {
             Some(v) => match serde_json::from_value::<NostrEvent>(v) {
-                Ok(event) => RelayMessage::Event {
+                Ok(event) if event.verify().is_some() => RelayMessage::Event {
                     subscription_id: str_at(1),
                     event,
                 },
-                Err(_) => RelayMessage::Unknown,
+                _ => RelayMessage::Unknown,
             },
             None => RelayMessage::Unknown,
         },
@@ -370,8 +387,8 @@ pub fn should_emit(cfg: &NostrConfig, event: &NostrEvent) -> bool {
     if event.id.trim().is_empty() || event.pubkey.trim().is_empty() {
         return false;
     }
-    if event.kind == KIND_ENCRYPTED_DM {
-        return false; // encrypted DM — can't decrypt in the pure core.
+    if matches!(event.kind, KIND_ENCRYPTED_DM | 13 | 1059) {
+        return false; // Private/sealed events belong to the encrypted-message path.
     }
     if !cfg.kinds.contains(&event.kind) {
         return false;
@@ -380,6 +397,12 @@ pub fn should_emit(cfg: &NostrConfig, event: &NostrEvent) -> bool {
         return false;
     }
     cfg.is_pubkey_allowed(&event.pubkey)
+        && cfg.pubkey.as_ref().is_none_or(|own| {
+            event
+                .tags
+                .iter()
+                .any(|tag| tag.first().is_some_and(|kind| kind == "p") && tag.get(1) == Some(own))
+        })
 }
 
 #[cfg(test)]
@@ -391,6 +414,8 @@ mod tests {
 
     fn note(id: &str, pubkey: &str, kind: u64, content: &str) -> NostrEvent {
         NostrEvent {
+            tags: vec![],
+            sig: String::new(),
             id: id.to_string(),
             pubkey: pubkey.to_string(),
             created_at: 1_700_000_000,
@@ -465,14 +490,6 @@ mod tests {
     }
 
     #[test]
-    fn private_key_and_secret_key_aliases_are_read() {
-        let a = NostrConfig::from_json(r#"{"private_key":" nsec1xyz "}"#);
-        assert_eq!(a.private_key.as_deref(), Some("nsec1xyz"));
-        let b = NostrConfig::from_json(r#"{"secret_key":"deadbeef"}"#);
-        assert_eq!(b.private_key.as_deref(), Some("deadbeef"));
-    }
-
-    #[test]
     fn kinds_and_limit_and_sub_id_overrides() {
         let cfg = NostrConfig::from_json(r#"{"kinds":[1,7],"limit":5,"subscription_id":"mysub"}"#);
         assert_eq!(cfg.kinds, vec![1, 7]);
@@ -529,23 +546,18 @@ mod tests {
     // ── relay message decode ──────────────────────────────────────────────
 
     #[test]
-    fn decode_event_frame() {
-        let raw = format!(
-            r#"["EVENT","sub1",{{"id":"abc","pubkey":"{HEX_A}","created_at":1700000000,"kind":1,"tags":[["p","{HEX_B}"]],"content":"hello","sig":"deadbeef"}}]"#
+    fn reject_event_with_invalid_signature_or_content() {
+        let raw = include_str!("../tests/signed-note.json");
+        let mut frame: Value = serde_json::from_str(raw).unwrap();
+        frame[2]["sig"] = json!("00".repeat(64));
+        assert_eq!(
+            decode_relay_message(&frame.to_string()),
+            RelayMessage::Unknown
         );
-        match decode_relay_message(&raw) {
-            RelayMessage::Event {
-                subscription_id,
-                event,
-            } => {
-                assert_eq!(subscription_id, "sub1");
-                assert_eq!(event.id, "abc");
-                assert_eq!(event.pubkey, HEX_A);
-                assert_eq!(event.kind, 1);
-                assert_eq!(event.content, "hello");
-            }
-            other => panic!("expected Event, got {other:?}"),
-        }
+        assert_eq!(
+            decode_relay_message(&raw.replace("gm nostr", "different note")),
+            RelayMessage::Unknown
+        );
     }
 
     #[test]
@@ -622,13 +634,12 @@ mod tests {
     #[test]
     fn drops_encrypted_dm_even_if_kind_configured() {
         let cfg = NostrConfig {
-            kinds: vec![1, 4],
+            kinds: vec![1, KIND_ENCRYPTED_DM, 13, 1059],
             ..NostrConfig::default()
         };
-        assert!(!should_emit(
-            &cfg,
-            &note("i", HEX_A, 4, "ciphertext?iv=...")
-        ));
+        for kind in [KIND_ENCRYPTED_DM, 13, 1059] {
+            assert!(!should_emit(&cfg, &note("i", HEX_A, kind, "ciphertext")));
+        }
     }
 
     #[test]

@@ -1,75 +1,54 @@
-# nostr — ZeroClaw channel plugin
+# Nostr channels
 
-A ZeroClaw WIT **channel** plugin for [Nostr](https://github.com/nostr-protocol/nostr).
-Nostr clients talk to relays over a persistent WebSocket, so this plugin drives
-the relay protocol over the host-mediated **`ws-client`** import (the plugin
-never opens a socket itself — the host dials the relay, performs TLS, and pumps
-frames; the plugin owns the application protocol).
+Subscribe to public notes from a Nostr relay. The plugin verifies the event ID and BIP-340 signature before reporting the author as the inbound sender. The host checks the author against the peer group for this binding.
 
-It mirrors the built-in `nostr` channel: it declares `provides = "nostr"` and
-reads the same `[channels.nostr.<alias>]` config, so on a host with the
-`provides` feature it is a drop-in for the native channel (native wins when
-both are present).
+## Install and configure
 
-## Scope (v0.1.0): receive-only, plaintext notes
-
-This build proves the WebSocket round-trip: **subscribe to a relay and surface
-each received plaintext note (kind 1) as an inbound message.** The pure core
-does the protocol work — build the `["REQ", …]` frame, decode `["EVENT", …]` /
-`EOSE` / `NOTICE` / `OK` / `CLOSED` / `AUTH` frames, and map a note onto the
-host's inbound fields (`sender`/`reply_target` = author hex pubkey,
-`content` = note text, `timestamp` = created_at in ms).
-
-Two features are deliberately **deferred** — both need secp256k1 (schnorr) and
-AES, which are too heavy for the dependency-free pure core:
-
-- **Encrypted DMs are not read.** Kind-4 (NIP-04) and NIP-17 gift-wrapped DMs
-  require secp256k1 ECDH + AES to decrypt, so they are filtered out. We
-  subscribe to **kind 1** (public notes / mentions) instead.
-- **Outbound `send` is not implemented.** Publishing a note means schnorr-signing
-  an event with your private key (BIP-340 over secp256k1). Until that lands,
-  `send` returns an explicit error rather than silently dropping the reply.
-
-The follow-up is to pull in a pure-Rust schnorr/secp256k1 implementation
-(e.g. `k256` with the `schnorr` feature) so the plugin can sign events (enabling
-`send`) and do NIP-04/NIP-17 decrypt (enabling encrypted DMs), plus `bech32` to
-accept `npub…`/`nsec…` keys.
-
-## Config — `[channels.nostr.<alias>]`
-
-Mirrors the native channel, plus a few plugin conveniences:
-
-- `relays` (array of `wss://` URLs) — the plugin connects to the **first** one
-  (single-relay in v0.1.0; fan-out is a follow-up). Defaults to the same public
-  relay set as the native channel when omitted.
-- `relay_url` / `relay` (string) — convenience aliases appended to `relays`.
-- `pubkey` / `public_key` (64-char hex) — **optional but recommended.** When
-  set, the subscription narrows to notes that `#p`-tag you (mentions/replies)
-  and it is reported as the bot's self-handle so the runtime drops your own
-  notes. When absent, the plugin samples the relay's recent kind-1 notes.
-  (The native channel derives this from `private_key`; the pure core can't, so
-  it is supplied explicitly. `npub…` is not yet accepted — use hex.)
-- `private_key` / `secret_key` (hex or nsec) — read and retained for the future
-  signed `send`; unused in this receive-only build.
-- `allowed_pubkeys` (array of hex pubkeys, or `["*"]`) — sender allow-list.
-  Empty = allow everyone; non-empty gates by author.
-- `kinds` (array of ints) — event kinds to subscribe to (default `[1]`).
-- `subscription_id` (string, default `"sub1"`) and `limit` (int, default `20`).
-
-## Capabilities & permissions
-
-- `get_channel_capabilities()` = `HEALTH_CHECK | SELF_HANDLE` (no
-  `WEBHOOK_INGRESS` — this is a WebSocket, not a webhook, channel).
-- Permissions: `websocket_client` (host-mediated relay socket) and `config_read`.
-
-## Build & test
+Build the source-only package from its directory and bind the channel on ZeroClaw v0.9.0.
 
 ```sh
-# pure core, host:
-cargo test --lib
+cargo build --locked --release --target wasm32-wasip2
+cp target/wasm32-wasip2/release/nostr.wasm .
+zeroclaw plugin install "$PWD"
+zeroclaw plugin bind nostr --channel-alias relay --egress none
+zeroclaw plugin info nostr
+```
 
-# wasm component:
-rustup target add wasm32-wasip2
-cargo build --target wasm32-wasip2 --release
-# → target/wasm32-wasip2/release/nostr.wasm  (copy next to manifest.toml)
+Copy the config entry key printed by `plugin info` into the shell variable `key`. The commands for secrets prompt without echo. Grant the host of the selected relay. Public notes require no private key.
+
+```sh
+zeroclaw config set "plugins.entries.$key.egress_hosts" 'relay.example.com'
+zeroclaw config set "plugins.entries.$key.config.relays" '["wss://relay.example.com"]'
+```
+
+Enable `plugins.enabled`, route `plugin.relay` to an enabled agent, and authorize senders in the alias’s peer group.
+
+## Feed settings
+
+The plugin opens the first configured relay. Set `pubkey` to your own lowercase hexadecimal public key for mentions, `allowed_pubkeys` for an additional author filter, and `kinds` for the public event kinds to receive (default 1). Set `limit` to control the initial backlog. The public feed excludes encrypted direct messages, seals and gift wraps (kinds 4, 13 and 1059).
+
+The instance stores its last delivered timestamp using the state resource. Resubscription starts at that second so distinct notes with the same timestamp can still arrive. The current instance suppresses duplicate IDs. A restart can replay notes in the boundary second.
+
+This public feed is receive-only. For a relay using a private CA, select an instance TLS profile with `tls_profile` and reference the `tls_ca` secret in the profile. The plugin does not read private keys for public subscriptions.
+
+## Private messages
+
+Set `mode` to `direct_messages` to receive and reply to NIP-04 and NIP-17 private messages. Public notes remain the default, including on an existing binding that has a private key configured. In direct-message mode the plugin requests the `private_key` secret from the host and uses the `relays` array for publish and subscribe. The key can be a 64-character hex scalar or an `nsec` key. Peer entries use the sender’s lowercase hex public key, and outbound recipients accept hex or `npub`.
+
+```sh
+zeroclaw config set "plugins.entries.$key.config.mode" 'direct_messages'
+zeroclaw config set "plugins.entries.$key.config.private_key"
+zeroclaw config set "plugins.entries.$key.config.relays" '["wss://relay.example.com"]'
+zeroclaw config set "plugins.entries.$key.egress_hosts" 'relay.example.com'
+```
+
+A private-message binding verifies the outer signature and the NIP-17 seal and rumor before delivery. It remembers how each sender last contacted it and replies using the same protocol. New conversations use NIP-17. It fans out to the configured relays, answers NIP-42 challenges and tracks acknowledgements within the running instance. A successful send means at least one host WebSocket accepted the frame. Configure an explicit empty relay list to disable networking in this mode. An omitted relay list uses the core defaults and still requires an egress grant for each destination.
+
+Private messages support text. Attachments, group fan-out, durable outbound queues and preferred-relay discovery are outside this implementation.
+
+## Validation
+
+```sh
+cargo test --locked
+cargo build --locked --target wasm32-wasip2 --release
 ```
