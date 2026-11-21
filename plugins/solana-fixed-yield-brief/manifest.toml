@@ -1,0 +1,9 @@
+name = "solana-fixed-yield-brief"
+version = "0.1.0"
+description = "Compare live normalized-SOL fixed-yield PT router quotes with a cost-aware staking hurdle; read-only and keyless"
+author = "sheawinkler"
+wasm_path = "solana_fixed_yield_brief.wasm"
+capabilities = ["tool"]
+# The component reads fixed, official Exponent market and quote endpoints.
+# It accepts no caller-controlled URL and never reads wallet keys or signs.
+permissions = ["http_client"]
